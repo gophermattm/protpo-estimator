@@ -13,6 +13,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:ui' as ui;
 import 'package:intl/intl.dart';
 import '../theme/app_theme.dart';
 import '../services/zone_width_lookup.dart';
@@ -1915,7 +1916,7 @@ class _ShapeDiagramPainter extends CustomPainter {
       {bool center = false, bool right = false}) {
     final tp = TextPainter(
       text: TextSpan(text: text, style: style),
-      textDirection: TextDirection.ltr,
+      textDirection: ui.TextDirection.ltr,
     )..layout();
     double dx = pos.dx;
     double dy = pos.dy - tp.height / 2;
