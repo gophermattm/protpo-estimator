@@ -175,23 +175,21 @@ const Map<String, ShapeTemplate> kShapeTemplates = {
   //   E4 ← (top-left span)       after: turn L (↓)
   //   E5 ↓ (left full height)    [closes]
   'L-Shape': ShapeTemplate(
-    turns: [1, 1, -1, 1, 1, 1],
+    turns: [1, 1, -1, 1, 1],   // 5 turns for 6 edges; R after E3 (inward notch)
     edgeLabels: [
-      'E1 – Bottom full width (ft)',
-      'E2 – Right side / short height (ft)',
-      'E3 – Top-right overhang (ft)',
-      'E4 – Step down / notch height (ft)',
-      'E5 – Top-left span (ft)',
-      'E6 – Left side / full height (ft)',
+      'E1 – Bottom, full width (ft)',
+      'E2 – Right side, full height (ft)',
+      'E3 – Top of notch bump (ft)',
+      'E4 – Left side of notch bump (ft)',
+      'E5 – Horizontal step (ft)',
+      'E6 – Left side, short height (ft)',
     ],
     diagram:
-        '┌──E5──┐\n'
-        'E6     E4\n'
-        '│   ┌──E3\n'
-        '│   E4  │\n'
-        '│   │  E2\n'
-        '└──E1───┘\n'
-        '(notch top-right)',
+        '  ┌──────┬──E3──┐\n'
+        '  │      E4     E2\n'
+        '  │   ┌──E5─────┘\n'
+        '  E6  │\n'
+        '  └───E1──────────┘',
   ),
   // T-Shape: two notches — bottom-left and bottom-right
   // Stem projects down from center of top bar.
@@ -214,7 +212,7 @@ const Map<String, ShapeTemplate> kShapeTemplates = {
   //
   // Turns: after E0=L, E1=R, E2=L, E3=L, E4=L, E5=R, E6=L, E7=(close)
   'T-Shape': ShapeTemplate(
-    turns: [1, -1, 1, 1, 1, -1, 1, 1],
+    turns: [1, 1, -1, 1, 1, -1, 1], // 7 turns for 8 edges; R after E3 and E6 (notch corners)
     edgeLabels: [
       'E1 – Stem bottom width (ft)',
       'E2 – Stem right height (ft)',
@@ -278,7 +276,7 @@ const Map<String, ShapeTemplate> kShapeTemplates = {
   //
   //  Turns: L, L, L, L, R, L, L, L
   'U-Shape': ShapeTemplate(
-    turns: [1, 1, 1, 1, -1, 1, 1, 1],
+    turns: [1, 1, 1, -1, -1, 1, 1], // 7 turns for 8 edges; R at both notch corners
     edgeLabels: [
       'E1 – Left arm bottom width (ft)',
       'E2 – Left arm outer height (ft)',
@@ -601,4 +599,35 @@ class RoofGeometry {
       Object.hashAll(shapes), buildingHeight, roofSlope, customSlope,
       Object.hashAll(drainLocations), totalPerimeterOverride, totalAreaOverride,
       perimeterCorners, insideCorners, outsideCorners, windZones);
+}
+
+// ─── POLYGON BUILDER (shared by left_panel.dart and roof_renderer.dart) ──────
+
+/// Builds the polygon vertex list by walking the perimeter edge-by-edge.
+/// Start at (0,0) facing East; turn left (CCW) at each corner.
+/// Screen-Y convention: up = negative Y (matches Flutter canvas).
+/// Returns null if edges are fewer than 4 or all zero.
+List<PolygonPoint>? buildPolygonPoints(List<double> edges,
+    {String shapeType = 'Rectangle'}) {
+  if (edges.length < 4) return null;
+  if (edges.every((e) => e <= 0)) return null;
+  final template = kShapeTemplates[shapeType];
+  final turns = template?.turns ?? List.filled(edges.length, 1);
+  const ddx = [1.0, 0.0, -1.0, 0.0];
+  const ddy = [0.0, -1.0, 0.0, 1.0];
+  final pts = <PolygonPoint>[const PolygonPoint(0, 0)];
+  var x = 0.0, y = 0.0, dir = 0;
+  for (int i = 0; i < edges.length; i++) {
+    x += ddx[dir % 4] * edges[i];
+    y += ddy[dir % 4] * edges[i];
+    pts.add(PolygonPoint(x, y));
+    if (i < turns.length) dir = (dir + (turns[i] == 1 ? 1 : 3)) % 4;
+  }
+  pts.removeLast();
+  return pts;
+}
+
+class PolygonPoint {
+  final double x, y;
+  const PolygonPoint(this.x, this.y);
 }
