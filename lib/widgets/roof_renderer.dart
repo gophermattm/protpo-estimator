@@ -12,6 +12,7 @@
 
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_theme.dart';
 import '../models/roof_geometry.dart';
@@ -78,6 +79,23 @@ class _RendererBody extends ConsumerStatefulWidget {
 
 class _RendererBodyState extends ConsumerState<_RendererBody> {
   bool _showDrainHint = true;
+  final TransformationController _xfCtrl = TransformationController();
+  double _zoom = 1.0;
+
+  @override
+  void dispose() {
+    _xfCtrl.dispose();
+    super.dispose();
+  }
+
+  void _zoomIn()  => _setZoom((_zoom + 0.25).clamp(0.5, 4.0));
+  void _zoomOut() => _setZoom((_zoom - 0.25).clamp(0.5, 4.0));
+  void _zoomReset() => _setZoom(1.0);
+
+  void _setZoom(double z) {
+    setState(() => _zoom = z);
+    _xfCtrl.value = Matrix4.identity()..scale(z);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -114,28 +132,67 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
         _zoneLegend(geo),
         const SizedBox(height: 8),
 
-        GestureDetector(
-          onTapUp: (d) =>
-              _onTap(d.localPosition, bounds, scale, labelPad, geo),
-          child: Container(
-            width: availWidth,
-            height: canvasH,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: AppTheme.border),
+        // ── Zoom controls ──────────────────────────────────────────
+        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          _zoomBtn(Icons.zoom_out,   _zoomOut,  _zoom <= 0.5),
+          const SizedBox(width: 4),
+          GestureDetector(
+            onTap: _zoomReset,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceAlt,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Text('${(_zoom * 100).round()}%',
+                  style: TextStyle(fontSize: 11, color: AppTheme.textSecondary,
+                      fontWeight: FontWeight.w600)),
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: CustomPaint(
-                size: Size(availWidth, canvasH),
-                painter: _RoofPainter(
-                  polygons:  polygons,
-                  bounds:    bounds,
-                  scale:     scale,
-                  offset:    Offset(labelPad, labelPad),
-                  windZones: geo.windZones,
-                  drains:    geo.drainLocations,
+          ),
+          const SizedBox(width: 4),
+          _zoomBtn(Icons.zoom_in,    _zoomIn,   _zoom >= 4.0),
+          const SizedBox(width: 4),
+          _zoomBtn(Icons.fit_screen, _zoomReset, false),
+        ]),
+        const SizedBox(height: 6),
+
+        // ── Roof plan with pinch-zoom + pan ────────────────────────
+        SizedBox(
+          width: availWidth,
+          height: canvasH,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: InteractiveViewer(
+                transformationController: _xfCtrl,
+                minScale: 0.5,
+                maxScale: 4.0,
+                onInteractionEnd: (d) =>
+                    setState(() => _zoom = _xfCtrl.value.getMaxScaleOnAxis()),
+                child: GestureDetector(
+                  onTapUp: (d) {
+                    // Adjust tap for current zoom/pan transform
+                    final Matrix4 inv = Matrix4.inverted(_xfCtrl.value);
+                    final tf = MatrixUtils.transformPoint(inv, d.localPosition);
+                    _onTap(tf, bounds, scale, labelPad, geo);
+                  },
+                  child: CustomPaint(
+                    size: Size(availWidth, canvasH),
+                    painter: _RoofPainter(
+                      polygons:  polygons,
+                      bounds:    bounds,
+                      scale:     scale,
+                      offset:    Offset(labelPad, labelPad),
+                      windZones: geo.windZones,
+                      drains:    geo.drainLocations,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -167,6 +224,23 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
         if (geo.windZones.perimeterZoneWidth > 0) _zoneSummary(geo),
       ]);
     });
+  }
+
+  Widget _zoomBtn(IconData icon, VoidCallback onPressed, bool disabled) {
+    return InkWell(
+      onTap: disabled ? null : onPressed,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.all(5),
+        decoration: BoxDecoration(
+          color: disabled ? AppTheme.surfaceAlt : Colors.white,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: Icon(icon, size: 16,
+            color: disabled ? AppTheme.textMuted : AppTheme.textSecondary),
+      ),
+    );
   }
 
   void _onTap(Offset tapPos, Rect bounds, double scale,
@@ -571,7 +645,7 @@ const _kDirs = [
 const _kTurns = <String, List<int>>{
   'Rectangle': [1, 1, 1, 1],
   'Square':    [1, 1, 1, 1],
-  'L-Shape':   [1, 1, 1, -1, 1],   // R after E4 (inside notch corner, notch top-right)
+  'L-Shape':   [1, 1, -1, 1, 1],   // R after E4 (inside notch corner, notch top-right)
   'T-Shape':   [1, 1, -1, 1, 1, -1, 1], // R after E3 and E6 (both notch corners)
   'U-Shape':   [1, 1, 1, -1, -1, 1, 1], // R after E4 and E5 (both notch corners)
 };
