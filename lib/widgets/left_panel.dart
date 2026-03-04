@@ -85,7 +85,7 @@ class _ShapeEntry {
     if (e.length < 4 || e.every((v) => v <= 0)) return 0;
     const _t = <String,List<int>>{
       'Rectangle': [1,1,1,1], 'Square': [1,1,1,1],
-      'L-Shape':  [1,1,1,-1,1],
+      'L-Shape':  [1,1,-1,1,1],
       'T-Shape':  [1,1,-1,1,1,-1,1],
       'U-Shape':  [1,1,1,-1,-1,1,1],
     };
@@ -1081,7 +1081,8 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         Icon(Icons.info_outline, size: 13, color: AppTheme.primary),
         const SizedBox(width: 6),
         Expanded(child: Text(hint, style: TextStyle(fontSize: 10,
-            color: AppTheme.primary.withOpacity(0.85), height: 1.4))),
+            color: AppTheme.primary.withOpacity(0.85), height: 1.4,
+            fontFamily: 'monospace'))),
       ]),
     );
   }
