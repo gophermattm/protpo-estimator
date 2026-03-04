@@ -1801,52 +1801,56 @@ class _ShapeDiagramPainter extends CustomPainter {
 
     switch (shapeType) {
       case 'Rectangle':
-      case 'Square':
-        // Simple rectangle
         final r = Rect.fromLTWH(4, 4, w - 8, h - 8);
         canvas.drawRect(r, paint);
-        _label(canvas, labelStyle, 'E1', Offset(w * 0.5, h - 2), center: true);
+        _label(canvas, labelStyle, 'E1', Offset(w * 0.5, h - 2),  center: true);
         _label(canvas, labelStyle, 'E2', Offset(w - 2,   h * 0.5), center: true);
-        _label(canvas, labelStyle, 'E3', Offset(w * 0.5, 4),       center: true);
+        _label(canvas, labelStyle, 'E3', Offset(w * 0.5, 4),        center: true);
         _label(canvas, labelStyle, 'E4', Offset(2,        h * 0.5), center: true);
+        break;
+      case 'Square':
+        // Draw as actual square centered in the available space
+        final double sq = (h - 8).clamp(0, w - 8);
+        final double sqX = (w - sq) / 2;
+        final sRect = Rect.fromLTWH(sqX, 4, sq, sq);
+        canvas.drawRect(sRect, paint);
+        _label(canvas, labelStyle, 'E1', Offset(sqX + sq * 0.5, 4 + sq + 1), center: true);
+        _label(canvas, labelStyle, 'E2', Offset(sqX + sq + 1,   4 + sq * 0.5), center: false);
+        _label(canvas, labelStyle, 'E3', Offset(sqX + sq * 0.5, 3),            center: true);
+        _label(canvas, labelStyle, 'E4', Offset(sqX - 1,         4 + sq * 0.5), center: false, right: true);
         break;
 
       case 'L-Shape':
-        // Notch at top-right. Points (origin = bottom-left):
-        // E1=bottom, E2=right full height, E3=notch top, E4=notch left wall,
-        // E5=horizontal step, E6=left side
-        //
+        // Notch at top-right.
         //        ┌──E3──┐
         //        E4     E2
         //  ┌─E5──┘       │
         //  E6             │
         //  └─────E1───────┘
-        //
-        // Proportions: notch occupies right 35% of width, top 45% of height
-        final double nW = w * 0.35;  // notch width
-        final double nH = h * 0.45;  // notch height (step up)
-        final double bL = 4.0;       // border left
-        final double bB = h - 4;     // border bottom
-        final double bR = w - 4;     // border right
+        final double nW = w * 0.38;  // notch width (right portion)
+        final double nH = h * 0.48;  // notch height
+        final double bL = 4.0;
+        final double bB = h - 4;
+        final double bR = w - 4;
+        final double stepX = bR - nW; // x where E4/E5 meet
 
         final path = Path()
-          ..moveTo(bL, bB)                        // bottom-left
-          ..lineTo(bR, bB)                        // E1: bottom →
-          ..lineTo(bR, 4)                         // E2: right side ↑
-          ..lineTo(bR - nW, 4)                    // E3: notch top ←
-          ..lineTo(bR - nW, 4 + nH)              // E4: notch left wall ↓
-          ..lineTo(bL + (w - nW) * 0.35, 4 + nH)// E5: step ←
-          ..lineTo(bL, bB)                        // E6: left side ↓ (closes)
+          ..moveTo(bL, bB)           // bottom-left
+          ..lineTo(bR, bB)           // E1: bottom → (full width)
+          ..lineTo(bR, 4)            // E2: right side ↑ (full height)
+          ..lineTo(stepX, 4)         // E3: notch top ←
+          ..lineTo(stepX, 4 + nH)   // E4: notch left wall ↓
+          ..lineTo(bL, 4 + nH)      // E5: step ← (all the way to left edge)
+          ..lineTo(bL, bB)           // E6: left side ↓ (vertical, closes)
           ..close();
         canvas.drawPath(path, paint);
 
-        // Labels
-        _label(canvas, labelStyle, 'E1', Offset(w * 0.4,  bB - 1),       center: true);
-        _label(canvas, labelStyle, 'E2', Offset(bR + 1,   h * 0.35),     center: false);
-        _label(canvas, labelStyle, 'E3', Offset(bR - nW * 0.5, 3),       center: true);
-        _label(canvas, labelStyle, 'E4', Offset(bR - nW - 1, 4 + nH * 0.5), center: false, right: true);
-        _label(canvas, labelStyle, 'E5', Offset(bL + (w - nW) * 0.15, 4 + nH - 1), center: true);
-        _label(canvas, labelStyle, 'E6', Offset(bL + 1,  h * 0.75),      center: false);
+        _label(canvas, labelStyle, 'E1', Offset(w * 0.4,   bB - 1),           center: true);
+        _label(canvas, labelStyle, 'E2', Offset(bR + 1,    h * 0.3),          center: false);
+        _label(canvas, labelStyle, 'E3', Offset(stepX + nW * 0.5, 3),         center: true);
+        _label(canvas, labelStyle, 'E4', Offset(stepX - 1, 4 + nH * 0.5),     center: false, right: true);
+        _label(canvas, labelStyle, 'E5', Offset(bL + (stepX - bL) * 0.5, 4 + nH - 1), center: true);
+        _label(canvas, labelStyle, 'E6', Offset(bL + 1,    bB - (bB - 4 - nH) * 0.5), center: false);
         break;
 
       case 'T-Shape':
