@@ -131,6 +131,8 @@ class LeftPanel extends ConsumerStatefulWidget {
 
 class _LeftPanelState extends ConsumerState<LeftPanel> {
   int _expandedSection = 0;
+  final ScrollController _leftScroll = ScrollController();
+  final List<GlobalKey> _secKeys = List.generate(9, (_) => GlobalKey());
 
   // ── Project Info ─────────────────────────────────────────────────────────────
   final _cProjectName    = TextEditingController();
@@ -271,6 +273,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
   @override
   void dispose() {
+    _leftScroll.dispose();
     for (final c in [
       _cProjectName, _cProjectAddress, _cZipCode, _cCustomerName, _cEstimatorName,
       _cBuildingHeight, _cDrainCount, _cPerimeterWidth, _cCornerCount, _cExistingLayers,
@@ -550,17 +553,17 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         ]),
       ),
       Expanded(
-        child: ListView(padding: const EdgeInsets.symmetric(vertical: 8), children: [
+        child: ListView(controller: _leftScroll, padding: const EdgeInsets.symmetric(vertical: 8), children: [
           InputProgressBar(complete: _completeSectionCount, total: 8),
-          _sec(0, Icons.assignment,         'Project Info',              _buildProjectInfo(),    dot: _statusProjectInfo()),
-          _sec(1, Icons.square_foot,        'Project Geometry',          _buildGeometry(),       dot: _statusGeometry()),
-          _sec(2, Icons.layers,             'System Specs',              _buildSystemSpecs(),    dot: _statusSystemSpecs()),
-          _sec(3, Icons.view_in_ar,         'Insulation & Cover Board',  _buildInsulation(),     dot: _statusInsulation()),
-          _sec(4, Icons.texture,            'Membrane',                  _buildMembrane(),       dot: _statusMembrane()),
-          _sec(5, Icons.border_style,       'Perimeters & Penetrations', _buildPenetrations(),   dot: _statusPenetrations()),
-          _sec(6, Icons.vertical_align_top, 'Parapet Walls',             _buildParapet(),        dot: _statusParapet()),
-          _sec(7, Icons.view_day,           'Metal Scope',               _buildMetalScope(),     dot: _statusMetal()),
-          _sec(8, Icons.recycling,          'Waste Settings',            _buildWasteSettings()),
+          _sec(0, Icons.assignment,         'Project Info',              _buildProjectInfo(),    dot: _statusProjectInfo(),   key: _secKeys[0]),
+          _sec(1, Icons.square_foot,        'Project Geometry',          _buildGeometry(),       dot: _statusGeometry(),      key: _secKeys[1]),
+          _sec(2, Icons.layers,             'System Specs',              _buildSystemSpecs(),    dot: _statusSystemSpecs(),   key: _secKeys[2]),
+          _sec(3, Icons.view_in_ar,         'Insulation & Cover Board',  _buildInsulation(),     dot: _statusInsulation(),    key: _secKeys[3]),
+          _sec(4, Icons.texture,            'Membrane',                  _buildMembrane(),       dot: _statusMembrane(),      key: _secKeys[4]),
+          _sec(5, Icons.border_style,       'Perimeters & Penetrations', _buildPenetrations(),   dot: _statusPenetrations(),  key: _secKeys[5]),
+          _sec(6, Icons.vertical_align_top, 'Parapet Walls',             _buildParapet(),        dot: _statusParapet(),       key: _secKeys[6]),
+          _sec(7, Icons.view_day,           'Metal Scope',               _buildMetalScope(),     dot: _statusMetal(),         key: _secKeys[7]),
+          _sec(8, Icons.recycling,          'Waste Settings',            _buildWasteSettings(),                               key: _secKeys[8]),
         ]),
       ),
     ]);
@@ -653,9 +656,10 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   }
 
   Widget _sec(int idx, IconData icon, String title, Widget child,
-      {DotStatus dot = DotStatus.empty}) {
+      {DotStatus dot = DotStatus.empty, GlobalKey? key}) {
     final open = _expandedSection == idx;
     return Container(
+      key: key,
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
         color: open ? AppTheme.primary.withOpacity(0.02) : Colors.transparent,
@@ -664,7 +668,22 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       ),
       child: Column(children: [
         InkWell(
-          onTap: () => setState(() => _expandedSection = open ? -1 : idx),
+          onTap: () {
+            setState(() => _expandedSection = open ? -1 : idx);
+            if (!open) {
+              // Scroll section into view after it expands
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (key?.currentContext != null) {
+                  Scrollable.ensureVisible(
+                    key!.currentContext!,
+                    duration: const Duration(milliseconds: 350),
+                    curve: Curves.easeInOut,
+                    alignment: 0.0,
+                  );
+                }
+              });
+            }
+          },
           borderRadius: BorderRadius.circular(8),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
