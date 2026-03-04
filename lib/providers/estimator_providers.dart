@@ -479,6 +479,11 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
             membraneSystem: b.membraneSystem.copyWith(rollWidth: width)),
       );
 
+  void updatePerimRollWidth(String width) => _updateActive(
+        (b) => b.copyWith(
+            membraneSystem: b.membraneSystem.copyWith(perimeterRollWidth: width)),
+      );
+
   void updateSeamType(String seamType) => _updateActive(
         (b) => b.copyWith(
             membraneSystem: b.membraneSystem.copyWith(seamType: seamType)),

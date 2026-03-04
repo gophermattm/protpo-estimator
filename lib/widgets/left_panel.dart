@@ -387,6 +387,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _memColor        = mem.color;
       _fieldAttach     = mem.fieldAttachment;
       _rollWidth       = mem.rollWidth;
+      _perimRollWidth  = mem.perimeterRollWidth;
       _seamType        = mem.seamType;
       _drainType       = pen.drainType;
       _hasParapet      = par.hasParapetWalls;
@@ -1387,9 +1388,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
           // Perimeter / flashing roll — default 6'×100' per Versico spec, user-overridable
           _lbl('PERIMETER / FLASHING ROLL'), _sp4,
-          _dd('Perimeter Roll Width', membrane.perimeterRollWidth,
+          _dd('Perimeter Roll Width', _perimRollWidth,
               ["5'", "6'", "10'", "12'"],
-              (v) { if (v != null) n.updateMembraneSystem(membrane.copyWith(perimeterRollWidth: v)); }),
+              (v) { if (v != null) { setState(() => _perimRollWidth = v); n.updatePerimRollWidth(v); } }),
           _sp4,
           Text('Default 6\'×100\' (600 sf) per Versico spec — used for parapet flashing, detail work',
               style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
