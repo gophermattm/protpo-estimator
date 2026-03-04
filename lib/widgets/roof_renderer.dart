@@ -118,7 +118,7 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
       final bounds = _computeBounds(allPts);
       if (bounds.width <= 0 || bounds.height <= 0) return const SizedBox.shrink();
 
-      const labelPad = 50.0;
+      const labelPad = 70.0;
       const minHeight = 220.0;
       final drawW   = availWidth - labelPad * 2;
       final scale   = drawW / bounds.width;
@@ -509,12 +509,18 @@ class _RoofPainter extends CustomPainter {
       final edges = shape.edgeLengths;
       final n     = pts.length;
 
+      // Compute polygon centroid in SCREEN coords for outward-normal check
+      final screenPts = List.generate(n, (i) => _pt(pts[i]));
+      final cx = screenPts.fold(0.0, (s, p) => s + p.dx) / n;
+      final cy = screenPts.fold(0.0, (s, p) => s + p.dy) / n;
+      final centroid = Offset(cx, cy);
+
       for (int i = 0; i < n && i < edges.length; i++) {
         final len = edges[i];
         if (len <= 0) continue;
 
-        final a   = _pt(pts[i]);
-        final b   = _pt(pts[(i + 1) % n]);
+        final a   = screenPts[i];
+        final b   = screenPts[(i + 1) % n];
         final mid = (a + b) / 2;
 
         final edgeType = (i < shape.edgeTypes.length)
@@ -525,8 +531,18 @@ class _RoofPainter extends CustomPainter {
         final dir  = b - a;
         final dist = dir.distance;
         if (dist < 1) continue;
-        final norm = Offset(-dir.dy, dir.dx) / dist;
-        final lo   = norm * 18;
+
+        // Left-of-travel normal
+        Offset norm = Offset(-dir.dy, dir.dx) / dist;
+
+        // If this normal points TOWARD the centroid (inward), flip it outward.
+        // dot(norm, mid→centroid) > 0 means norm aims toward interior → flip.
+        final toCentroid = centroid - mid;
+        if ((norm.dx * toCentroid.dx + norm.dy * toCentroid.dy) > 0) {
+          norm = -norm;
+        }
+
+        final lo = norm * 22;
 
         final lenStr = "${len.toStringAsFixed(
             len == len.roundToDouble() ? 0 : 1)}'";
@@ -645,7 +661,7 @@ const _kDirs = [
 const _kTurns = <String, List<int>>{
   'Rectangle': [1, 1, 1, 1],
   'Square':    [1, 1, 1, 1],
-  'L-Shape':   [1, 1, -1, 1, 1],   // R after E4 (inside notch corner, notch top-right)
+  'L-Shape':   [1, 1, 1, -1, 1],   // R after E4 (inside notch corner, notch top-right)
   'T-Shape':   [1, 1, -1, 1, 1, -1, 1], // R after E3 and E6 (both notch corners)
   'U-Shape':   [1, 1, 1, -1, -1, 1, 1], // R after E4 and E5 (both notch corners)
 };
