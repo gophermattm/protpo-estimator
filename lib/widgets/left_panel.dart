@@ -1082,7 +1082,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         const SizedBox(width: 6),
         Expanded(child: Text(hint, style: TextStyle(fontSize: 10,
             color: AppTheme.primary.withOpacity(0.85), height: 1.4,
-            fontFamily: 'monospace'))),
+            fontFamily: 'Courier New'))),
       ]),
     );
   }
