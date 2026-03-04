@@ -3,8 +3,6 @@ name: Build & Deploy to Firebase Hosting
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 jobs:
   build_and_deploy:
@@ -17,7 +15,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.0'
+          flutter-version: '3.38.5'
           channel: 'stable'
 
       - name: Install dependencies
