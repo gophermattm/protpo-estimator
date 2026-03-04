@@ -1067,9 +1067,6 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   }
 
   Widget _shapeDiagramHint(String shapeType) {
-    // Diagram from kShapeTemplates — single source of truth
-    final hint = kShapeTemplates[shapeType]?.diagram ??
-        'Walk starts bottom-left, turns left at each corner.';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
@@ -1080,9 +1077,10 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Icon(Icons.info_outline, size: 13, color: AppTheme.primary),
         const SizedBox(width: 6),
-        Expanded(child: Text(hint, style: TextStyle(fontSize: 10,
-            color: AppTheme.primary.withOpacity(0.85), height: 1.4,
-            fontFamily: 'Courier New'))),
+        Expanded(child: SizedBox(
+          height: 80,
+          child: CustomPaint(painter: _ShapeDiagramPainter(shapeType)),
+        )),
       ]),
     );
   }
@@ -1776,4 +1774,156 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
           fontWeight: FontWeight.w600, color: AppTheme.textPrimary))),
     ]),
   );
+}
+
+// ─── Shape diagram painter ────────────────────────────────────────────────────
+class _ShapeDiagramPainter extends CustomPainter {
+  final String shapeType;
+  const _ShapeDiagramPainter(this.shapeType);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF2563EB).withOpacity(0.7)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final labelStyle = TextStyle(
+      fontSize: 9,
+      fontWeight: FontWeight.w600,
+      color: const Color(0xFF2563EB).withOpacity(0.85),
+    );
+
+    final w = size.width;
+    final h = size.height;
+
+    switch (shapeType) {
+      case 'Rectangle':
+      case 'Square':
+        // Simple rectangle
+        final r = Rect.fromLTWH(4, 4, w - 8, h - 8);
+        canvas.drawRect(r, paint);
+        _label(canvas, labelStyle, 'E1', Offset(w * 0.5, h - 2), center: true);
+        _label(canvas, labelStyle, 'E2', Offset(w - 2,   h * 0.5), center: true);
+        _label(canvas, labelStyle, 'E3', Offset(w * 0.5, 4),       center: true);
+        _label(canvas, labelStyle, 'E4', Offset(2,        h * 0.5), center: true);
+        break;
+
+      case 'L-Shape':
+        // Notch at top-right. Points (origin = bottom-left):
+        // E1=bottom, E2=right full height, E3=notch top, E4=notch left wall,
+        // E5=horizontal step, E6=left side
+        //
+        //        ┌──E3──┐
+        //        E4     E2
+        //  ┌─E5──┘       │
+        //  E6             │
+        //  └─────E1───────┘
+        //
+        // Proportions: notch occupies right 35% of width, top 45% of height
+        final double nW = w * 0.35;  // notch width
+        final double nH = h * 0.45;  // notch height (step up)
+        final double bL = 4.0;       // border left
+        final double bB = h - 4;     // border bottom
+        final double bR = w - 4;     // border right
+
+        final path = Path()
+          ..moveTo(bL, bB)                        // bottom-left
+          ..lineTo(bR, bB)                        // E1: bottom →
+          ..lineTo(bR, 4)                         // E2: right side ↑
+          ..lineTo(bR - nW, 4)                    // E3: notch top ←
+          ..lineTo(bR - nW, 4 + nH)              // E4: notch left wall ↓
+          ..lineTo(bL + (w - nW) * 0.35, 4 + nH)// E5: step ←
+          ..lineTo(bL, bB)                        // E6: left side ↓ (closes)
+          ..close();
+        canvas.drawPath(path, paint);
+
+        // Labels
+        _label(canvas, labelStyle, 'E1', Offset(w * 0.4,  bB - 1),       center: true);
+        _label(canvas, labelStyle, 'E2', Offset(bR + 1,   h * 0.35),     center: false);
+        _label(canvas, labelStyle, 'E3', Offset(bR - nW * 0.5, 3),       center: true);
+        _label(canvas, labelStyle, 'E4', Offset(bR - nW - 1, 4 + nH * 0.5), center: false, right: true);
+        _label(canvas, labelStyle, 'E5', Offset(bL + (w - nW) * 0.15, 4 + nH - 1), center: true);
+        _label(canvas, labelStyle, 'E6', Offset(bL + 1,  h * 0.75),      center: false);
+        break;
+
+      case 'T-Shape':
+        // Stem at bottom, bar across top
+        final double sW = w * 0.3;   // stem width
+        final double sX = (w - sW) / 2; // stem left x
+        final double barH = h * 0.45;
+
+        final path = Path()
+          ..moveTo(sX + sW * 0.5 - sW * 0.5, h - 4)  // stem bottom-left
+          ..lineTo(sX + sW, h - 4)                     // E1 bottom
+          ..lineTo(sX + sW, 4 + barH)                  // E2 stem right
+          ..lineTo(w - 4,   4 + barH)                  // E3 right step
+          ..lineTo(w - 4,   4)                          // E4 bar right
+          ..lineTo(4,       4)                          // E5 bar top
+          ..lineTo(4,       4 + barH)                  // E6 bar left
+          ..lineTo(sX,      4 + barH)                  // E7 left step
+          ..lineTo(sX,      h - 4)                     // E8 stem left
+          ..close();
+        canvas.drawPath(path, paint);
+
+        _label(canvas, labelStyle, 'E1', Offset(w * 0.5, h - 2),         center: true);
+        _label(canvas, labelStyle, 'E2', Offset(sX + sW + 1, h * 0.75), center: false);
+        _label(canvas, labelStyle, 'E3', Offset(w * 0.8, 4 + barH - 1), center: true);
+        _label(canvas, labelStyle, 'E4', Offset(w - 3,   h * 0.2),       center: false, right: true);
+        _label(canvas, labelStyle, 'E5', Offset(w * 0.5, 3),             center: true);
+        _label(canvas, labelStyle, 'E6', Offset(5,        h * 0.2),      center: false);
+        _label(canvas, labelStyle, 'E7', Offset(w * 0.2, 4 + barH - 1), center: true);
+        _label(canvas, labelStyle, 'E8', Offset(sX - 1,  h * 0.75),     center: false, right: true);
+        break;
+
+      case 'U-Shape':
+        // Open at bottom-center
+        final double uW = w * 0.3;
+        final double uX = (w - uW) / 2;
+        final double uH = h * 0.5;
+
+        final path = Path()
+          ..moveTo(4, h - 4)
+          ..lineTo(uX, h - 4)                  // E1 bottom-left
+          ..lineTo(uX, 4 + uH)                 // E2 inner-left up
+          ..lineTo(uX + uW, 4 + uH)            // ... inner bottom
+          ..lineTo(uX + uW, h - 4)             // E3
+          ..lineTo(w - 4, h - 4)               // E4
+          ..lineTo(w - 4, 4)                   // E5 right
+          ..lineTo(4, 4)                        // E6 top
+          ..lineTo(4, h - 4)                    // E7 left
+          ..close();
+        canvas.drawPath(path, paint);
+
+        _label(canvas, labelStyle, 'E1', Offset(uX * 0.5, h - 2),        center: true);
+        _label(canvas, labelStyle, 'E2', Offset(uX + 1,   h * 0.75),     center: false);
+        _label(canvas, labelStyle, 'E3', Offset(uX + uW * 0.5, 4 + uH - 1), center: true);
+        _label(canvas, labelStyle, 'E4', Offset((uX + uW + w) * 0.5, h - 2), center: true);
+        _label(canvas, labelStyle, 'E5', Offset(w - 3,   h * 0.5),       center: false, right: true);
+        _label(canvas, labelStyle, 'E6', Offset(w * 0.5, 3),             center: true);
+        _label(canvas, labelStyle, 'E7', Offset(5,        h * 0.5),      center: false);
+        _label(canvas, labelStyle, 'E8', Offset(uX + uW + 1, h * 0.75), center: false);
+        break;
+
+      default:
+        canvas.drawRect(Rect.fromLTWH(4, 4, w - 8, h - 8), paint);
+    }
+  }
+
+  void _label(Canvas canvas, TextStyle style, String text, Offset pos,
+      {bool center = false, bool right = false}) {
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    double dx = pos.dx;
+    double dy = pos.dy - tp.height / 2;
+    if (center) dx -= tp.width / 2;
+    if (right)  dx -= tp.width;
+    tp.paint(canvas, Offset(dx, dy));
+  }
+
+  @override
+  bool shouldRepaint(_ShapeDiagramPainter old) => old.shapeType != shapeType;
 }
