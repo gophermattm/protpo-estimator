@@ -86,7 +86,7 @@ class _ShapeEntry {
     if (e.length < 4 || e.every((v) => v <= 0)) return 0;
     const _t = <String,List<int>>{
       'Rectangle': [1,1,1,1], 'Square': [1,1,1,1],
-      'L-Shape':  [1,1,-1,1,1],
+      'L-Shape':  [1,1,1,-1,1],
       'T-Shape':  [1,1,-1,1,1,-1,1],
       'U-Shape':  [1,1,1,-1,-1,1,1],
     };
@@ -1840,37 +1840,42 @@ class _ShapeDiagramPainter extends CustomPainter {
         break;
 
       case 'L-Shape':
-        // Notch at top-right.
-        //        ┌──E3──┐
-        //        E4     E2
-        //  ┌─E5──┘       │
-        //  E6             │
-        //  └─────E1───────┘
-        final double nW = w * 0.38;  // notch width (right portion)
-        final double nH = h * 0.48;  // notch height
-        final double bL = 4.0;
-        final double bB = h - 4;
-        final double bR = w - 4;
-        final double stepX = bR - nW; // x where E4/E5 meet
+        // turns [1,1,1,-1,1]: E1→ E2↑ E3← E4↓ E5← E6↓
+        // Notch cut from TOP-RIGHT corner.
+        //           ┌──E3──┐
+        //           │      E2
+        //  ┌──E5────┘      │
+        //  E6              │
+        //  └──────E1───────┘
+        final double nW   = w * 0.38;        // notch width (right portion)
+        final double nH   = h * 0.48;        // notch height
+        final double bL   = 4.0;
+        final double bB   = h - 4.0;
+        final double bR   = w - 4.0;
+        final double sX   = bR - nW;         // notch left wall x
+        final double sY   = 4.0 + nH;        // notch bottom y
 
-        final path = Path()
-          ..moveTo(bL, bB)           // bottom-left
-          ..lineTo(bR, bB)           // E1: bottom → (full width)
-          ..lineTo(bR, 4)            // E2: right side ↑ (full height)
-          ..lineTo(stepX, 4)         // E3: notch top ←
-          ..lineTo(stepX, 4 + nH)   // E4: notch left wall ↓
-          ..lineTo(bL, 4 + nH)      // E5: step ← (all the way to left edge)
-          ..lineTo(bL, bB)           // E6: left side ↓ (vertical, closes)
-          ..close();
-        canvas.drawPath(path, paint);
+        canvas.drawPath(
+          Path()
+            ..moveTo(bL, bB)        // bottom-left
+            ..lineTo(bR, bB)        // E1 bottom
+            ..lineTo(bR, 4)         // E2 right side (full height)
+            ..lineTo(sX, 4)         // E3 notch top (short)
+            ..lineTo(sX, sY)        // E4 notch wall (drop)
+            ..lineTo(bL, sY)        // E5 step left
+            ..lineTo(bL, bB)        // E6 left side (short)
+            ..close(),
+          paint,
+        );
 
-        _label(canvas, labelStyle, 'E1', Offset(w * 0.4,   bB - 1),           center: true);
-        _label(canvas, labelStyle, 'E2', Offset(bR + 1,    h * 0.3),          center: false);
-        _label(canvas, labelStyle, 'E3', Offset(stepX + nW * 0.5, 3),         center: true);
-        _label(canvas, labelStyle, 'E4', Offset(stepX - 1, 4 + nH * 0.5),     center: false, right: true);
-        _label(canvas, labelStyle, 'E5', Offset(bL + (stepX - bL) * 0.5, 4 + nH - 1), center: true);
-        _label(canvas, labelStyle, 'E6', Offset(bL + 1,    bB - (bB - 4 - nH) * 0.5), center: false);
-        break;
+        // Edge labels
+        _label(canvas, labelStyle, 'E1', Offset(w * 0.4,      bB - 1),              center: true);
+        _label(canvas, labelStyle, 'E2', Offset(bR + 2,       (4 + bB) * 0.5),      center: false);
+        _label(canvas, labelStyle, 'E3', Offset(sX + nW * 0.5, 3),                  center: true);
+        _label(canvas, labelStyle, 'E4', Offset(sX - 2,       (4 + sY) * 0.5),      center: false, right: true);
+        _label(canvas, labelStyle, 'E5', Offset((bL + sX) * 0.5, sY - 1),           center: true);
+        _label(canvas, labelStyle, 'E6', Offset(bL + 2,       (sY + bB) * 0.5),     center: false);
+        break;break;
 
       case 'T-Shape':
         // Stem at bottom, bar across top

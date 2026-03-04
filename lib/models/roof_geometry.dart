@@ -175,21 +175,21 @@ const Map<String, ShapeTemplate> kShapeTemplates = {
   //   E4 ← (top-left span)       after: turn L (↓)
   //   E5 ↓ (left full height)    [closes]
   'L-Shape': ShapeTemplate(
-    turns: [1, 1, -1, 1, 1],   // 5 turns for 6 edges; R after E3 (inward notch)
+    turns: [1, 1, 1, -1, 1],   // 5 turns for 6 edges; R after E4 (inward notch)
     edgeLabels: [
-      'E1 – Bottom, full width (ft)',
-      'E2 – Right side, full height (ft)',
-      'E3 – Top of notch (ft)',
-      'E4 – Left wall of notch, step down (ft)',
-      'E5 – Horizontal step going left (ft)',
-      'E6 – Left side, short height (ft)',
+      'E1 – Bottom (full width)',
+      'E2 – Right side (tall, full height)',
+      'E3 – Notch top (short segment, top-right)',
+      'E4 – Notch wall down (E2 minus E6)',
+      'E5 – Step left (horizontal)',
+      'E6 – Left side (short, E2 minus E4)',
     ],
     diagram:
-        '           ┌──E3──┐\n'
-        '           E4     E2\n'
-        '  ┌──E5────┘       │\n'
-        '  E6               │\n'
-        '  └──────E1────────┘',
+        '          ┌──E3──┐\n'
+        '          │      E2\n'
+        '  ┌──E5───┘      │\n'
+        '  E6             │\n'
+        '  └─────E1───────┘',
   ),
   // T-Shape: two notches — bottom-left and bottom-right
   // Stem projects down from center of top bar.
