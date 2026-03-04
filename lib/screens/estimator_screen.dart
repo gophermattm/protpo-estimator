@@ -8,6 +8,9 @@
 ///   button at the end. Tapping a tab calls setActiveBuilding(index).
 ///   Double-tapping a tab name lets the user rename it inline.
 
+import 'dart:typed_data';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_theme.dart';
@@ -34,6 +37,24 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
   int? _lastSavedState; // hashCode of EstimatorState at last save
   bool _isSaving = false;
   bool _saveSuccess = false;
+
+  /// Picks an image file from disk and stores bytes in companyLogoProvider.
+  Future<void> _pickLogo() async {
+    final input = html.FileUploadInputElement()
+      ..accept = 'image/*'
+      ..click();
+    await input.onChange.first;
+    final file = input.files?.first;
+    if (file == null) return;
+    final reader = html.FileReader();
+    reader.readAsArrayBuffer(file);
+    await reader.onLoad.first;
+    final bytes = reader.result as List<int>;
+    ref.read(companyLogoProvider.notifier).state = bytes;
+  }
+
+  void _clearLogo() =>
+      ref.read(companyLogoProvider.notifier).state = null;
 
   Future<void> _saveProject() async {
     if (_isSaving) return;
@@ -75,7 +96,8 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
       if (format == 'csv') {
         await ExportService.downloadCsv(state, bom);
       } else {
-        await ExportService.downloadPdf(state, bom, rValue: rValue);
+        final logo = ref.read(companyLogoProvider);
+        await ExportService.downloadPdf(state, bom, rValue: rValue, logoBytes: logo);
       }
     } catch (e) {
       if (mounted) {
@@ -131,39 +153,22 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
               color: AppTheme.primary.withOpacity(0.1),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Icon(
-              Icons.roofing,
-              color: AppTheme.primary,
-              size: 24,
-            ),
+            child: const Icon(Icons.roofing, color: AppTheme.primary, size: 24),
           ),
           const SizedBox(width: 12),
-          Text(
-            'ProTPO',
-            style: TextStyle(
-              color: AppTheme.textPrimary,
-              fontWeight: FontWeight.w700,
-              fontSize: 20,
-            ),
-          ),
+          Text('ProTPO', style: TextStyle(color: AppTheme.textPrimary,
+              fontWeight: FontWeight.w700, fontSize: 20)),
           UnsavedDot(visible: _hasUnsavedChanges && _currentProjectId != null),
           const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: AppTheme.accent.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              'ESTIMATOR',
-              style: TextStyle(
-                color: AppTheme.accent,
-                fontWeight: FontWeight.w600,
-                fontSize: 10,
-                letterSpacing: 1,
-              ),
-            ),
+            decoration: BoxDecoration(color: AppTheme.accent.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(4)),
+            child: Text('ESTIMATOR', style: TextStyle(color: AppTheme.accent,
+                fontWeight: FontWeight.w600, fontSize: 10, letterSpacing: 1)),
           ),
+          // ── Company logo (top-center) ──────────────────────────────
+          Expanded(child: _buildLogoWidget()),
         ],
       ),
       actions: [
@@ -231,6 +236,60 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
           ),
         const SizedBox(width: 16),
       ],
+    );
+  }
+
+  Widget _buildLogoWidget() {
+    final logoBytes = ref.watch(companyLogoProvider);
+    if (logoBytes != null) {
+      // Show uploaded logo with remove button
+      return Center(
+        child: Stack(
+          alignment: Alignment.topRight,
+          children: [
+            Container(
+              height: 36,
+              constraints: const BoxConstraints(maxWidth: 160),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                border: Border.all(color: AppTheme.border),
+                borderRadius: BorderRadius.circular(6),
+                color: AppTheme.surfaceAlt,
+              ),
+              child: Image.memory(
+                Uint8List.fromList(logoBytes),
+                fit: BoxFit.contain,
+              ),
+            ),
+            GestureDetector(
+              onTap: _clearLogo,
+              child: Container(
+                width: 16, height: 16,
+                decoration: BoxDecoration(
+                  color: AppTheme.error,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.close, size: 10, color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    // No logo — show upload button
+    return Center(
+      child: TextButton.icon(
+        onPressed: _pickLogo,
+        icon: const Icon(Icons.upload, size: 16),
+        label: const Text('Upload Logo'),
+        style: TextButton.styleFrom(
+          foregroundColor: AppTheme.textSecondary,
+          textStyle: const TextStyle(fontSize: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          side: BorderSide(color: AppTheme.border),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+        ),
+      ),
     );
   }
 

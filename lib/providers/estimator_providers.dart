@@ -798,3 +798,10 @@ class _Contrib {
   final double withWaste;
   const _Contrib(this.building, this.withWaste);
 }
+
+// ─── COMPANY LOGO PROVIDER ────────────────────────────────────────────────────
+// Stores raw image bytes uploaded by the user.
+// Null = no logo uploaded yet.
+
+final companyLogoProvider =
+    StateProvider<List<int>?>((ref) => null);

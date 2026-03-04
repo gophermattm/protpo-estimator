@@ -57,8 +57,9 @@ class ExportService {
     EstimatorState state,
     BomResult bom, {
     RValueResult? rValue,
+    List<int>? logoBytes,
   }) async {
-    final bytes = await _buildPdf(state, bom, rValue: rValue);
+    final bytes = await _buildPdf(state, bom, rValue: rValue, logoBytes: logoBytes);
     final filename = _filename(state, 'pdf');
     _downloadBytes(bytes, filename, 'application/pdf');
   }
@@ -198,11 +199,18 @@ Future<Uint8List> _buildPdf(
   EstimatorState state,
   BomResult bom, {
   RValueResult? rValue,
+  List<int>? logoBytes,
 }) async {
   final doc  = pw.Document(
     title: state.projectInfo.projectName,
     author: state.projectInfo.estimatorName,
   );
+
+  // Decode logo bytes into pw.MemoryImage if provided
+  pw.ImageProvider? logoImg;
+  if (logoBytes != null && logoBytes.isNotEmpty) {
+    logoImg = pw.MemoryImage(Uint8List.fromList(logoBytes));
+  }
 
   // Page format: US Letter
   final fmt = PdfPageFormat.letter;
@@ -211,7 +219,7 @@ Future<Uint8List> _buildPdf(
   doc.addPage(pw.Page(
     pageFormat: fmt,
     margin: const pw.EdgeInsets.all(0),
-    build: (ctx) => _coverPage(state, bom, rValue),
+    build: (ctx) => _coverPage(state, bom, rValue, logoImg),
   ));
 
   // ── Page 2+ — Materials Takeoff ───────────────────────────────────────────
@@ -223,7 +231,7 @@ Future<Uint8List> _buildPdf(
       build: (ctx) => pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
-          _pageHeader('Materials Takeoff', state),
+          _pageHeader('Materials Takeoff', state, logo: logoImg),
           pw.SizedBox(height: 16),
           ...pageContent,
           pw.Spacer(),
@@ -240,7 +248,7 @@ Future<Uint8List> _buildPdf(
     build: (ctx) => pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
-        _pageHeader('Thermal & Scope of Work', state),
+        _pageHeader('Thermal & Scope of Work', state, logo: logoImg),
         pw.SizedBox(height: 16),
         _thermalSection(state, rValue),
         pw.SizedBox(height: 16),
@@ -256,7 +264,7 @@ Future<Uint8List> _buildPdf(
 
 // ─── COVER PAGE ───────────────────────────────────────────────────────────────
 
-pw.Widget _coverPage(EstimatorState state, BomResult bom, RValueResult? rv) {
+pw.Widget _coverPage(EstimatorState state, BomResult bom, RValueResult? rv, pw.ImageProvider? logo) {
   final info = state.projectInfo;
   final totalArea = state.buildings
       .fold(0.0, (s, b) => s + b.roofGeometry.totalArea);
@@ -283,16 +291,30 @@ pw.Widget _coverPage(EstimatorState state, BomResult bom, RValueResult? rv) {
       child: pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
-          // Logo area
+          // Logo area — show uploaded company logo or ProTPO default
           pw.Row(children: [
-            pw.Container(
-              width: 36, height: 36,
-              decoration: pw.BoxDecoration(
-                color: _pdfAlpha(_kWhite, 0.15),
-                borderRadius: pw.BorderRadius.circular(8),
+            if (logo != null) ...[ 
+              pw.Container(
+                height: 44,
+                constraints: const pw.BoxConstraints(maxWidth: 180),
+                padding: const pw.EdgeInsets.all(4),
+                decoration: pw.BoxDecoration(
+                  color: _pdfAlpha(_kWhite, 0.15),
+                  borderRadius: pw.BorderRadius.circular(8),
+                ),
+                child: pw.Image(logo, fit: pw.BoxFit.contain),
               ),
-            ),
-            pw.SizedBox(width: 12),
+              pw.SizedBox(width: 12),
+            ] else ...[
+              pw.Container(
+                width: 36, height: 36,
+                decoration: pw.BoxDecoration(
+                  color: _pdfAlpha(_kWhite, 0.15),
+                  borderRadius: pw.BorderRadius.circular(8),
+                ),
+              ),
+              pw.SizedBox(width: 12),
+            ],
             pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
@@ -772,14 +794,27 @@ pw.Widget _scopeSection(EstimatorState state) {
 
 // ─── SHARED WIDGETS ───────────────────────────────────────────────────────────
 
-pw.Widget _pageHeader(String section, EstimatorState state) => pw.Column(
+pw.Widget _pageHeader(String section, EstimatorState state,
+    {pw.ImageProvider? logo}) =>
+  pw.Column(
   crossAxisAlignment: pw.CrossAxisAlignment.start,
   children: [
     pw.Row(
       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
       children: [
+        // Left: ProTPO label
         pw.Text('ProTPO Estimator',
             style: pw.TextStyle(fontSize: 9, color: _kSlate500)),
+        // Center: Company logo (if uploaded)
+        if (logo != null)
+          pw.Container(
+            height: 28,
+            constraints: const pw.BoxConstraints(maxWidth: 120),
+            child: pw.Image(logo, fit: pw.BoxFit.contain),
+          )
+        else
+          pw.SizedBox(),
+        // Right: Date
         pw.Text(DateFormat('MMM d, yyyy').format(DateTime.now()),
             style: pw.TextStyle(fontSize: 9, color: _kSlate500)),
       ],
