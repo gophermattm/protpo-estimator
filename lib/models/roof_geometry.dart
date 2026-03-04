@@ -179,17 +179,17 @@ const Map<String, ShapeTemplate> kShapeTemplates = {
     edgeLabels: [
       'E1 – Bottom, full width (ft)',
       'E2 – Right side, full height (ft)',
-      'E3 – Top of notch bump (ft)',
-      'E4 – Left side of notch bump (ft)',
-      'E5 – Horizontal step (ft)',
+      'E3 – Top of notch (ft)',
+      'E4 – Left wall of notch, step down (ft)',
+      'E5 – Horizontal step going left (ft)',
       'E6 – Left side, short height (ft)',
     ],
     diagram:
-        '  ┌──────┬──E3──┐\n'
-        '  │      E4     E2\n'
-        '  │   ┌──E5─────┘\n'
-        '  E6  │\n'
-        '  └───E1──────────┘',
+        '           ┌──E3──┐\n'
+        '           E4     E2\n'
+        '  ┌──E5────┘       │\n'
+        '  E6               │\n'
+        '  └──────E1────────┘',
   ),
   // T-Shape: two notches — bottom-left and bottom-right
   // Stem projects down from center of top bar.
