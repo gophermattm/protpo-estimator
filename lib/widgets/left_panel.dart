@@ -183,6 +183,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   String _fieldAttach   = 'Mechanically Attached';
   String _rollWidth     = "10'";
   String _seamType      = 'Hot Air Welded';
+  String _perimRollWidth = "6'";
 
   // ── Penetrations ─────────────────────────────────────────────────────────────
   final _cWallHeight    = TextEditingController(text: '12');
