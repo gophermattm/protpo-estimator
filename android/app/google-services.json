@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "331847071461",
+    "project_id": "tpo-pro-245d1",
+    "storage_bucket": "tpo-pro-245d1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:331847071461:android:9b6e600c2e43c812eb460c",
+        "android_client_info": {
+          "package_name": "com.example.protpo_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDssHLN8dI0i5kNPedZcHSfcIxbwyYrqx0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
