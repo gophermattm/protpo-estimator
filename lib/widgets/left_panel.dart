@@ -1385,25 +1385,13 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
           _sp12,
 
-          // Perimeter / flashing roll — fixed per Versico spec
-          _lbl('PERIMETER / FLASHING ROLL (Versico spec)'), _sp4,
-          Container(
-            height: 40, padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: AppTheme.surfaceAlt, borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppTheme.border),
-            ),
-            child: Row(children: [
-              Icon(Icons.lock_outline, size: 14, color: AppTheme.textMuted),
-              const SizedBox(width: 8),
-              Text("6' × 100' (600 sf)",
-                  style: TextStyle(fontSize: 14, color: AppTheme.textSecondary)),
-              const Spacer(),
-              Text('Fixed', style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
-            ]),
-          ),
+          // Perimeter / flashing roll — default 6'×100' per Versico spec, user-overridable
+          _lbl('PERIMETER / FLASHING ROLL'), _sp4,
+          _dd('Perimeter Roll Width', membrane.perimeterRollWidth,
+              ["5'", "6'", "10'", "12'"],
+              (v) { if (v != null) n.updateMembraneSystem(membrane.copyWith(perimeterRollWidth: v)); }),
           _sp4,
-          Text('Used for: Parapet flashing, perimeter zone, all detail work',
+          Text('Default 6\'×100\' (600 sf) per Versico spec — used for parapet flashing, detail work',
               style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
         ]),
       ),
@@ -1455,12 +1443,11 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   }
 
   // ─── PARAPET ──────────────────────────────────────────────────────────────────
+  // Toggle hidden per design decision — parapet section off by default.
   Widget _buildParapet() {
     final n = ref.read(estimatorProvider.notifier);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _toggle('Parapet Walls Present?', 'Adds flashing area to TPO roll qty',
-          _hasParapet, (v) { setState(() => _hasParapet = v); n.setParapetEnabled(v); },
-          primary: true),
+      // Toggle removed — parapet walls off by default. Re-enable in code if needed.
       if (_hasParapet) ...[
         _sp16,
         Row(children: [

@@ -394,11 +394,13 @@ class _SummarySection extends ConsumerWidget {
     final rWarnings= ref.watch(rValueValidationProvider);
     final bom      = ref.watch(bomProvider);
 
-    final area      = geo.totalArea;
+    final roofArea  = geo.totalArea;
+    final parapetA  = ref.watch(parapetWallsProvider).parapetArea;
+    final area      = roofArea + parapetA;   // material area incl. parapet flashing
     final perim     = geo.totalPerimeter;
     final totalR    = rResult?.totalRValue ?? 0.0;
     final reqR      = info.requiredRValue;
-    final squares   = area > 0 ? area / 100 : 0.0;
+    final squares   = roofArea > 0 ? roofArea / 100 : 0.0;  // squares = roof only
     final bomCount  = bom.activeItems.length;
 
     // ── Compliance logic ────────────────────────────────────────────────────

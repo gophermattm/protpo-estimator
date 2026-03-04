@@ -128,6 +128,8 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
     final geo       = ref.watch(roofGeometryProvider);
     final membrane  = ref.watch(membraneSystemProvider);
     final info      = ref.watch(projectInfoProvider);
+    final parapet   = ref.watch(parapetWallsProvider);
+    final rResult   = ref.watch(rValueResultProvider);
 
     // Clamp if buildings were removed
     final sel = isMulti ? _sel.clamp(-1, allBoms.length - 1) : 0;
@@ -146,10 +148,10 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
       isTotal = false;
     }
 
-    // For summary chips area when showing total: sum all building areas
+    // For summary chips area: include parapet area (adds to material qty)
     final displayArea = isTotal
-        ? buildings.fold(0.0, (s, b) => s + b.roofGeometry.totalArea)
-        : geo.totalArea;
+        ? buildings.fold(0.0, (s, b) => s + b.roofGeometry.totalArea + b.parapetWalls.parapetArea)
+        : geo.totalArea + parapet.parapetArea;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -183,7 +185,7 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
           ],
 
           // ── Summary chips ────────────────────────────────────────────────────
-          _SummaryChips(area: displayArea, membrane: membrane, info: info),
+          _SummaryChips(area: displayArea, membrane: membrane, info: info, totalRValue: rResult?.totalRValue ?? 0.0),
           const SizedBox(height: 20),
 
           // ── Roof renderer (individual building only) ────────────────────────
@@ -650,8 +652,9 @@ class _SummaryChips extends StatelessWidget {
   final double area;
   final MembraneSystem membrane;
   final ProjectInfo info;
+  final double totalRValue;
 
-  const _SummaryChips({required this.area, required this.membrane, required this.info});
+  const _SummaryChips({required this.area, required this.membrane, required this.info, required this.totalRValue});
 
   @override
   Widget build(BuildContext context) {
@@ -666,15 +669,15 @@ class _SummaryChips extends StatelessWidget {
         border: Border.all(color: AppTheme.primary.withOpacity(0.15)),
       ),
       child: Row(children: [
-        _chip('Total Area',   '$aStr sf',           Icons.crop_square),
+        _chip('Total Area',   '$aStr sf',                                Icons.crop_square),
         _vDivider(),
-        _chip('Squares',      sq,                   Icons.grid_4x4),
+        _chip('Squares',      sq,                                        Icons.grid_4x4),
         _vDivider(),
-        _chip('Field Roll',   membrane.rollWidth, Icons.texture),
+        _chip('Membrane',     '${membrane.thickness} ${membrane.membraneType}', Icons.texture),
         _vDivider(),
-        _chip('Mat. Waste',   '${_pct(info.wasteMaterial)}%', Icons.recycling),
+        _chip('Attachment',   membrane.fieldAttachment == 'Mechanically Attached' ? 'Mech. Att.' : membrane.fieldAttachment == 'Fully Adhered' ? 'Fully Adh.' : 'Rhinobond', Icons.link),
         _vDivider(),
-        _chip('Metal Waste',  '${_pct(info.wasteMetal)}%',    Icons.view_day),
+        _chip('R-Value',      totalRValue > 0 ? 'R-${totalRValue.toStringAsFixed(0)}' : '—', Icons.thermostat),
       ]),
     );
   }
