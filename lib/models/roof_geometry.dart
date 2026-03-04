@@ -347,47 +347,34 @@ class RoofShape {
 
   int get edgeCount => kEdgeCountByShape[shapeType] ?? 4;
 
+  /// Shoelace (Gauss) formula — exact for any rectilinear polygon.
+  /// Uses the same turn sequence as kShapeTemplates so it always matches
+  /// the rendered shape and left_panel's local area display.
   double get calculatedArea {
-    if (edgeLengths.isEmpty) return 0.0;
-    switch (shapeType) {
-      case 'Rectangle':
-      case 'Square':
-        return edgeLengths.length >= 2 ? edgeLengths[0] * edgeLengths[1] : 0;
-      case 'L-Shape':
-        if (edgeLengths.length >= 6) {
-          // E0×E5 (full bounding box) minus E2×E3 (notch)
-          final fullW = edgeLengths[0];
-          final fullH = edgeLengths[5];
-          final notchW = edgeLengths[2];
-          final notchH = edgeLengths[3];
-          return (fullW * fullH - notchW * notchH).clamp(0.0, double.infinity);
-        }
-        return 0.0;
-      case 'T-Shape':
-        if (edgeLengths.length >= 8) {
-          // Stem: E0 × E1.  Bar: E4 × (E3 + E1 + E7) ... approximate
-          // Better: bar area + stem area
-          final stemW  = edgeLengths[0];
-          final stemH  = edgeLengths[1];  // right stem height (approx)
-          final barW   = edgeLengths[4];  // top full width
-          final barH   = edgeLengths[3];  // bar height
-          return (stemW * stemH + barW * barH).clamp(0.0, double.infinity);
-        }
-        return 0.0;
-      case 'U-Shape':
-        if (edgeLengths.length >= 8) {
-          // Two arms + bar minus open gap
-          final armW   = edgeLengths[0];  // left arm bottom
-          final armH   = edgeLengths[1];  // full height
-          final barW   = edgeLengths[2];  // total width
-          final gapW   = edgeLengths[6];  // inner gap
-          final gapH   = edgeLengths[7];  // inner height
-          return (barW * armH - gapW * gapH).clamp(0.0, double.infinity);
-        }
-        return 0.0;
-      default:
-        return 0.0;
+    final e = edgeLengths;
+    if (e.length < 4 || e.every((v) => v <= 0)) return 0.0;
+    final tmpl = kShapeTemplates[shapeType];
+    if (tmpl == null) return 0.0;
+    final turns = tmpl.turns;
+    const ddx = [1.0, 0.0, -1.0, 0.0];
+    const ddy = [0.0, -1.0, 0.0, 1.0];
+    final xs = <double>[0.0];
+    final ys = <double>[0.0];
+    var px = 0.0, py = 0.0, dir = 0;
+    for (int i = 0; i < e.length; i++) {
+      px += ddx[dir % 4] * e[i];
+      py += ddy[dir % 4] * e[i];
+      xs.add(px); ys.add(py);
+      if (i < turns.length) dir = (dir + (turns[i] == 1 ? 1 : 3)) % 4;
     }
+    xs.removeLast(); ys.removeLast();
+    double a = 0.0;
+    final n = xs.length;
+    for (int i = 0; i < n; i++) {
+      final j = (i + 1) % n;
+      a += xs[i] * ys[j] - xs[j] * ys[i];
+    }
+    return (a / 2).abs();
   }
 
   double get calculatedPerimeter =>
