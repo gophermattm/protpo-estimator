@@ -1468,7 +1468,10 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   Widget _buildParapet() {
     final n = ref.read(estimatorProvider.notifier);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // Toggle removed — parapet walls off by default. Re-enable in code if needed.
+      _toggle('Has Parapet Walls', 'Wall flashing, termination bar', _hasParapet, (v) {
+        setState(() => _hasParapet = v);
+        n.updateHasParapetWalls(v);
+      }),
       if (_hasParapet) ...[
         _sp16,
         Row(children: [
