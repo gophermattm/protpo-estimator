@@ -1470,7 +1470,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _toggle('Has Parapet Walls', 'Wall flashing, termination bar', _hasParapet, (v) {
         setState(() => _hasParapet = v);
-        n.updateHasParapetWalls(v);
+        n.setParapetEnabled(v);
       }),
       if (_hasParapet) ...[
         _sp16,
