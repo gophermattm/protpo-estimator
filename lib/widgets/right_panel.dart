@@ -285,7 +285,7 @@ ${jsonEncode(snapshot)}
 
     try {
       final response = await http.post(
-        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askAssist'),
+        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'data': {'mode': 'audit', 'prompt': prompt}}),
       ).timeout(const Duration(seconds: 30));
@@ -383,7 +383,7 @@ User request: "$userText"
 
     try {
       final response = await http.post(
-        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askAssist'),
+        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'data': {'mode': 'nl', 'prompt': prompt}}),
       ).timeout(const Duration(seconds: 15));

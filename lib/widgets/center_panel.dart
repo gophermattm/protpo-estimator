@@ -1713,7 +1713,7 @@ class _SowEditSheetState extends State<_SowEditSheet> {
 
     try {
       final response = await http.post(
-        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askAssist'),
+        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'data': {
           'mode': 'sow',
