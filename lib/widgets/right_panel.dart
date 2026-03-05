@@ -161,7 +161,7 @@ class _RightPanelState extends ConsumerState<RightPanel> {
         'numberOfDrains': geo.numberOfDrains,
         'shapes': geo.shapes.map((s) => {
           'type':      s.shapeType,
-          'area':      s.area,
+          'area':      s.calculatedArea,
           'edges':     s.edgeLengths,
         }).toList(),
       },
@@ -202,7 +202,7 @@ class _RightPanelState extends ConsumerState<RightPanel> {
       },
       'penetrations': {
         'rtuTotalLF':       pen.rtuTotalLF,
-        'drainCount':       pen.drainCount,
+        'drainCount':       geo.numberOfDrains,
         'smallPipes':       pen.smallPipeCount,
         'largePipes':       pen.largePipeCount,
         'skylights':        pen.skylightCount,
