@@ -285,24 +285,19 @@ ${jsonEncode(snapshot)}
 
     try {
       final response = await http.post(
-        Uri.parse('https://api.anthropic.com/v1/messages'),
+        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askAssist'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'model': 'claude-sonnet-4-20250514',
-          'max_tokens': 1000,
-          'messages': [
-            {'role': 'user', 'content': prompt}
-          ],
-        }),
+        body: jsonEncode({'data': {'mode': 'audit', 'prompt': prompt}}),
       ).timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
-        final data    = jsonDecode(response.body);
-        final content = (data['content'] as List).firstWhere(
-            (c) => c['type'] == 'text', orElse: () => null);
-        if (content == null) { _addError('Empty response from AI.'); return; }
+        final data = jsonDecode(response.body);
+        final raw2 = data['result']?['result'] as String?
+            ?? (data['result'] as Map?)?.values.first as String?
+            ?? '';
+        if (raw2.isEmpty) { _addError('Empty response from AI.'); return; }
 
-        final raw = (content['text'] as String).trim();
+        final raw = raw2.trim();
         // Strip possible markdown fences
         final clean = raw.replaceAll(RegExp(r'```json|```'), '').trim();
         final List<dynamic> items = jsonDecode(clean);
@@ -388,15 +383,9 @@ User request: "$userText"
 
     try {
       final response = await http.post(
-        Uri.parse('https://api.anthropic.com/v1/messages'),
+        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askAssist'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'model': 'claude-sonnet-4-20250514',
-          'max_tokens': 200,
-          'messages': [
-            {'role': 'user', 'content': prompt}
-          ],
-        }),
+        body: jsonEncode({'data': {'mode': 'nl', 'prompt': prompt}}),
       ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode != 200) {
@@ -404,12 +393,8 @@ User request: "$userText"
         return;
       }
 
-      final data    = jsonDecode(response.body);
-      final content = (data['content'] as List).firstWhere(
-          (c) => c['type'] == 'text', orElse: () => null);
-      if (content == null) { _addError('Empty AI response.'); return; }
-
-      final raw   = (content['text'] as String).trim();
+      final data  = jsonDecode(response.body);
+      final raw   = (data['result']?['result'] as String? ?? '').trim();
       final clean = raw.replaceAll(RegExp(r'```json|```'), '').trim();
       final Map<String, dynamic> parsed = jsonDecode(clean);
 

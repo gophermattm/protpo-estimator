@@ -1713,25 +1713,20 @@ class _SowEditSheetState extends State<_SowEditSheet> {
 
     try {
       final response = await http.post(
-        Uri.parse('https://api.anthropic.com/v1/messages'),
+        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askAssist'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'model': 'claude-sonnet-4-20250514',
-          'max_tokens': 300,
+        body: jsonEncode({'data': {
+          'mode': 'sow',
           'system': systemMsg,
-          'messages': [{'role': 'user', 'content': userMsg}],
-        }),
+          'prompt': userMsg,
+        }}),
       ).timeout(const Duration(seconds: 20));
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final content = (data['content'] as List)
-            .firstWhere((c) => c['type'] == 'text', orElse: () => null);
-        if (content != null) {
-          setState(() {
-            _textCtrl.text = (content['text'] as String).trim();
-            _promptCtrl.clear();
-          });
+        final data    = jsonDecode(response.body);
+        final newText = (data['result']?['result'] as String? ?? '').trim();
+        if (newText.isNotEmpty) {
+          setState(() { _textCtrl.text = newText; _promptCtrl.clear(); });
         } else {
           setState(() => _error = 'Empty response. Try again.');
         }
