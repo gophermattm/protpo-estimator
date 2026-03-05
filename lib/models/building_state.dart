@@ -37,6 +37,11 @@ class BuildingState {
   final Penetrations penetrations;
   final MetalScope metalScope;
 
+  /// AI / user overrides for individual SOW sections.
+  /// Key = section name (e.g. "general", "membrane"), value = overridden text.
+  /// When null for a key, the auto-generated text is used.
+  final Map<String, String> sowOverrides;
+
   const BuildingState({
     required this.id,
     required this.buildingName,
@@ -47,6 +52,7 @@ class BuildingState {
     required this.parapetWalls,
     required this.penetrations,
     required this.metalScope,
+    this.sowOverrides = const {},
   });
 
   /// Creates a blank building with a generated ID and a default display name.
@@ -60,6 +66,7 @@ class BuildingState {
         parapetWalls: ParapetWalls.initial(),
         penetrations: Penetrations.initial(),
         metalScope: MetalScope.initial(),
+        sowOverrides: const {},
       );
 
   BuildingState copyWith({
@@ -72,6 +79,7 @@ class BuildingState {
     ParapetWalls? parapetWalls,
     Penetrations? penetrations,
     MetalScope? metalScope,
+    Map<String, String>? sowOverrides,
   }) {
     return BuildingState(
       id: id ?? this.id,
@@ -83,6 +91,7 @@ class BuildingState {
       parapetWalls: parapetWalls ?? this.parapetWalls,
       penetrations: penetrations ?? this.penetrations,
       metalScope: metalScope ?? this.metalScope,
+      sowOverrides: sowOverrides ?? this.sowOverrides,
     );
   }
 

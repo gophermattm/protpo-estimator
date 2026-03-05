@@ -105,6 +105,7 @@ Map<String, dynamic> _buildingStateToJson(BuildingState b) => {
   'parapetWalls':     _parapetWallsToJson(b.parapetWalls),
   'penetrations':     _penetrationsToJson(b.penetrations),
   'metalScope':       _metalScopeToJson(b.metalScope),
+  'sowOverrides':     b.sowOverrides,
 };
 
 BuildingState _buildingStateFromJson(Map<String, dynamic> j) => BuildingState(
@@ -117,6 +118,7 @@ BuildingState _buildingStateFromJson(Map<String, dynamic> j) => BuildingState(
   parapetWalls:     _parapetWallsFromJson(j['parapetWalls'] as Map? ?? {}),
   penetrations:     _penetrationsFromJson(j['penetrations'] as Map? ?? {}),
   metalScope:       _metalScopeFromJson(j['metalScope'] as Map? ?? {}),
+  sowOverrides:     Map<String, String>.from(j['sowOverrides'] as Map? ?? {}),
 );
 
 // ─── ROOF GEOMETRY ────────────────────────────────────────────────────────────

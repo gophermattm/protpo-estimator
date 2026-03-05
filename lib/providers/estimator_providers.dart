@@ -92,6 +92,10 @@ final metalScopeProvider = Provider<MetalScope>(
       ref.watch(estimatorProvider.select((s) => s.activeBuilding.metalScope)),
 );
 
+
+// ── SOW overrides provider ─────────────────────────────────────────────────────
+final sowOverridesProvider = Provider<Map<String, String>>((ref) =>
+    ref.watch(activeBuildingProvider).sowOverrides);
 // ─── CALCULATION PROVIDERS ────────────────────────────────────────────────────
 
 /// R-value result for the active building.
@@ -612,6 +616,24 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
         (b) =>
             b.copyWith(metalScope: b.metalScope.copyWith(gutterLF: lf)),
       );
+
+
+  // ── SOW overrides ────────────────────────────────────────────────────────────
+
+  /// Set an AI or user-edited override for a specific SOW section.
+  void updateSowSection(String key, String text) => _updateActive(
+        (b) => b.copyWith(
+            sowOverrides: Map<String, String>.from(b.sowOverrides)..[key] = text));
+
+  /// Remove the override for a specific section (reverts to auto-generated).
+  void clearSowSection(String key) => _updateActive((b) {
+        final updated = Map<String, String>.from(b.sowOverrides)..remove(key);
+        return b.copyWith(sowOverrides: updated);
+      });
+
+  /// Remove all SOW overrides (revert entire SOW to auto-generated).
+  void clearAllSowOverrides() =>
+      _updateActive((b) => b.copyWith(sowOverrides: const {}));
 
   void updateDownspoutCount(int count) => _updateActive(
         (b) => b.copyWith(

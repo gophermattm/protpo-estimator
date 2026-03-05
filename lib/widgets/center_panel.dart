@@ -10,6 +10,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../theme/app_theme.dart';
 import 'ui_polish.dart';
 import '../models/building_state.dart';
@@ -1244,11 +1246,31 @@ class _ThermalCodeTab extends ConsumerWidget {
 // SCOPE OF WORK TAB
 // ══════════════════════════════════════════════════════════════════════════════
 
-class _ScopeOfWorkTab extends ConsumerWidget {
+class _ScopeOfWorkTab extends ConsumerStatefulWidget {
   const _ScopeOfWorkTab();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_ScopeOfWorkTab> createState() => _ScopeOfWorkTabState();
+}
+
+class _ScopeOfWorkTabState extends ConsumerState<_ScopeOfWorkTab> {
+  static const List<(String, String)> _sections = [
+    ('general',     'General'),
+    ('tearoff',     'Tear-Off'),
+    ('recover',     'Existing Roof Preparation'),
+    ('deck',        'Deck Preparation'),
+    ('insulation',  'Insulation'),
+    ('membrane',    'Membrane'),
+    ('parapet',     'Parapet Wall Flashings'),
+    ('penetration', 'Penetration Flashings'),
+    ('metal',       'Sheet Metal'),
+    ('drainage',    'Drainage'),
+    ('cleanup',     'Cleanup & Protection'),
+    ('warranty',    'Warranty'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
     final geo      = ref.watch(roofGeometryProvider);
     final specs    = ref.watch(systemSpecsProvider);
     final insul    = ref.watch(insulationSystemProvider);
@@ -1257,30 +1279,64 @@ class _ScopeOfWorkTab extends ConsumerWidget {
     final metal    = ref.watch(metalScopeProvider);
     final info     = ref.watch(projectInfoProvider);
     final pen      = ref.watch(penetrationsProvider);
+    final overrides = ref.watch(sowOverridesProvider);
 
     final area      = geo.totalArea;
     final perimeter = geo.totalPerimeter;
     final drains    = geo.numberOfDrains;
 
-    // ── Derived display values ─────────────────────────────────────────────────
-    final projectTitle  = info.projectName.isNotEmpty ? info.projectName : 'SCOPE OF WORK';
-    final projectSub    = specs.projectType.isNotEmpty ? specs.projectType : 'Commercial Roof Work';
-    final dateStr       = '${info.estimateDate.month}/${info.estimateDate.day}/${info.estimateDate.year}';
-    final hasHeader     = info.projectName.isNotEmpty || info.projectAddress.isNotEmpty
-                          || info.customerName.isNotEmpty;
+    final projectTitle = info.projectName.isNotEmpty ? info.projectName : 'SCOPE OF WORK';
+    final projectSub   = specs.projectType.isNotEmpty ? specs.projectType : 'Commercial Roof Work';
+    final dateStr      = '${info.estimateDate.month}/${info.estimateDate.day}/${info.estimateDate.year}';
+    final hasHeader    = info.projectName.isNotEmpty || info.projectAddress.isNotEmpty
+                         || info.customerName.isNotEmpty;
+
+    final Map<String, String> autoText = _buildAutoText(
+        geo, specs, insul, membrane, parapet, metal, info, pen, area, perimeter, drains);
+    final hasAnyOverride = overrides.isNotEmpty;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _sectionHeader('Scope of Work', Icons.description),
+
+        Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          _sectionHeader('Scope of Work', Icons.description),
+          const Spacer(),
+          if (hasAnyOverride)
+            TextButton.icon(
+              onPressed: () => ref.read(estimatorProvider.notifier).clearAllSowOverrides(),
+              icon: const Icon(Icons.refresh, size: 14),
+              label: const Text('Reset All', style: TextStyle(fontSize: 12)),
+              style: TextButton.styleFrom(
+                  foregroundColor: AppTheme.textSecondary,
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
+            ),
+        ]),
+
+        if (hasAnyOverride) ...[
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+                color: const Color(0xFF7C3AED).withOpacity(0.06),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFF7C3AED).withOpacity(0.2))),
+            child: Row(children: [
+              const Icon(Icons.auto_awesome, size: 13, color: Color(0xFF7C3AED)),
+              const SizedBox(width: 6),
+              Text('${overrides.length} section${overrides.length > 1 ? "s" : ""} edited by AI',
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF7C3AED),
+                      fontWeight: FontWeight.w600)),
+            ]),
+          ),
+        ],
+
         const SizedBox(height: 20),
 
-        // ── Document header ──────────────────────────────────────────────────
         _card(child: Padding(
           padding: const EdgeInsets.all(8),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
-            // Project title block
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(projectTitle.toUpperCase(),
@@ -1290,7 +1346,6 @@ class _ScopeOfWorkTab extends ConsumerWidget {
                 Text(projectSub,
                     style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
               ])),
-              // Date / estimator block (right-aligned)
               Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                 Text('Date: $dateStr',
                     style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
@@ -1300,7 +1355,6 @@ class _ScopeOfWorkTab extends ConsumerWidget {
               ]),
             ]),
 
-            // Customer / address block
             if (hasHeader) ...[
               const SizedBox(height: 12),
               Container(
@@ -1313,9 +1367,10 @@ class _ScopeOfWorkTab extends ConsumerWidget {
                   if (info.projectAddress.isNotEmpty)
                     _headerRow('Address', info.projectAddress),
                   if (info.zipCode.isNotEmpty)
-                    _headerRow('Location', '${info.zipCode}'
-                        '${info.climateZone != null ? "  ·  ${info.climateZone}" : ""}'
-                        '${info.designWindSpeed != null ? "  ·  ${info.designWindSpeed}" : ""}'),
+                    _headerRow('Location',
+                        info.zipCode +
+                        (info.climateZone != null ? '  ·  ${info.climateZone}' : '') +
+                        (info.designWindSpeed != null ? '  ·  ${info.designWindSpeed}' : '')),
                 ]),
               ),
             ],
@@ -1324,90 +1379,209 @@ class _ScopeOfWorkTab extends ConsumerWidget {
             const Divider(),
             const SizedBox(height: 16),
 
-            // ── Scope sections ─────────────────────────────────────────────
-            _scope('General',
-                'Furnish all labor, materials, equipment, and supervision necessary to complete '
-                'the roofing work as specified herein.'
-                '${area > 0 ? ' Work area approximately ${area.toStringAsFixed(0)} square feet'
-                    '${perimeter > 0 ? ', ${perimeter.toStringAsFixed(0)} LF perimeter' : ''}.' : ''}'),
-
-            if (specs.projectType == 'Tear-off & Replace')
-              _scope('Tear-Off',
-                  'Remove and dispose of existing'
-                  '${specs.existingRoofType.isNotEmpty ? ' ${specs.existingRoofType}' : ''}'
-                  '${specs.existingLayers > 0 ? ' roof system (${specs.existingLayers} layer(s))' : ' roof system'}'
-                  ' down to the structural deck. Dispose of all debris in accordance with local '
-                  'regulations. Inspect structural deck for deterioration, deflection, or damage; '
-                  'report findings and obtain written approval before proceeding.'),
-
-            if (specs.projectType == 'Recover')
-              _scope('Existing Roof Preparation',
-                  'Prepare existing'
-                  '${specs.existingRoofType.isNotEmpty ? ' ${specs.existingRoofType}' : ''}'
-                  ' surface to receive recover system. Perform electronic or nuclear moisture survey. '
-                  'Remove and replace all wet or deteriorated insulation. Address all blisters, '
-                  'ridges, and surface deficiencies prior to new membrane installation.'),
-
-            _scope('Deck Preparation',
-                'Clean and prepare ${specs.deckType.isNotEmpty ? '${specs.deckType.toLowerCase()} structural deck' : 'structural deck'} '
-                'to receive new roofing system.'
-                '${specs.vaporRetarder != 'None' && specs.vaporRetarder.isNotEmpty ? ' Install ${specs.vaporRetarder.toLowerCase()} vapor retarder per Versico specifications.' : ''}'),
-
-            _scope('Insulation', _insulationScope(insul)),
-
-            _scope('Membrane',
-                'Install Versico ${membrane.thickness.isNotEmpty ? membrane.thickness : ''} '
-                '${membrane.membraneType.isNotEmpty ? membrane.membraneType : 'TPO'} membrane, '
-                '${_attachmentDesc(membrane.fieldAttachment)}. '
-                '${membrane.seamType == 'Tape' ? 'Seams sealed with factory-applied seam tape.' : 'All field seams hot-air welded, minimum 1.5" width.'} '
-                'Membrane color: ${membrane.color.isNotEmpty ? membrane.color : 'white'}.'),
-
-            if (parapet.hasParapetWalls)
-              _scope('Parapet Wall Flashings',
-                  'Install TPO membrane wall flashings at all '
-                  '${parapet.wallType.isNotEmpty ? parapet.wallType.toLowerCase() : ''}'
-                  ' parapet walls (${parapet.parapetTotalLF > 0 ? '${parapet.parapetTotalLF.toStringAsFixed(0)} LF' : 'see drawings'}). '
-                  'Flashing height: ${parapet.parapetHeight > 0 ? '${parapet.parapetHeight.toStringAsFixed(0)}"' : 'minimum 8"'} above finished membrane surface. '
-                  'Secure at termination with ${parapet.terminationType.isNotEmpty ? parapet.terminationType.toLowerCase() : 'termination bar'} '
-                  'and ${parapet.anchorType.isNotEmpty ? parapet.anchorType.toLowerCase() : 'appropriate anchors'}.'),
-
-            _scope('Penetration Flashings', _penetrationScope(pen, drains)),
-
-            if (metal.copingLF > 0 || metal.edgeMetalLF > 0 || metal.gutterLF > 0)
-              _scope('Sheet Metal',
-                  _metalScope(metal)),
-
-            if (metal.gutterLF > 0)
-              _scope('Drainage',
-                  '${metal.gutterLF.toStringAsFixed(0)} LF of ${metal.gutterSize.isNotEmpty ? metal.gutterSize : ''} gutters'
-                  '${metal.downspoutCount > 0 ? ' with ${metal.downspoutCount} downspout${metal.downspoutCount > 1 ? 's' : ''}' : ''}. '
-                  'All drainage components to be installed per manufacturer specifications.'),
-
-            _scope('Cleanup & Protection',
-                'Contractor shall maintain a clean and orderly work area throughout the project. '
-                'Protect all rooftop equipment, walls, and adjacent surfaces from damage. '
-                'Remove all debris, equipment, and surplus materials upon completion.'),
-
-            _scope('Warranty',
-                'Upon satisfactory completion and final inspection, contractor shall provide: '
-                '(1) Versico ${info.warrantyYears > 0 ? '${info.warrantyYears}-year' : 'manufacturer'} '
-                'NDL roofing system warranty'
-                '${info.climateZone != null ? ', climate ${info.climateZone}' : ''}'
-                '${info.designWindSpeed != null ? ', design wind ${info.designWindSpeed}' : ''}; '
-                '(2) Contractor 2-year workmanship warranty covering defects in materials and labor.'),
+            for (final section in _sections) ...[
+              if (autoText.containsKey(section.$1))
+                _scopeSection(
+                  context:     context,
+                  sectionKey:  section.$1,
+                  title:       section.$2,
+                  autoText:    autoText[section.$1]!,
+                  overrideText: overrides[section.$1],
+                  autoContext: autoText,
+                  info:        info,
+                  specs:       specs,
+                ),
+            ],
           ]),
         )),
       ]),
     );
   }
 
-  // ── Helpers ──────────────────────────────────────────────────────────────────
+  // ── Auto-generated text ───────────────────────────────────────────────────
+
+  Map<String, String> _buildAutoText(geo, specs, insul, membrane, parapet,
+      metal, info, pen, double area, double perimeter, int drains) {
+    final map = <String, String>{};
+
+    map['general'] = 'Furnish all labor, materials, equipment, and supervision necessary '
+        'to complete the roofing work as specified herein.'
+        '${area > 0 ? ' Work area approximately ${area.toStringAsFixed(0)} square feet'
+            '${perimeter > 0 ? ', ${perimeter.toStringAsFixed(0)} LF perimeter' : ''}.' : ''}';
+
+    if (specs.projectType == 'Tear-off & Replace')
+      map['tearoff'] = 'Remove and dispose of existing'
+          '${specs.existingRoofType.isNotEmpty ? ' ${specs.existingRoofType}' : ''}'
+          '${specs.existingLayers > 0 ? ' roof system (${specs.existingLayers} layer(s))' : ' roof system'}'
+          ' down to the structural deck. Dispose of all debris in accordance with local '
+          'regulations. Inspect structural deck for deterioration, deflection, or damage; '
+          'report findings and obtain written approval before proceeding.';
+
+    if (specs.projectType == 'Recover')
+      map['recover'] = 'Prepare existing'
+          '${specs.existingRoofType.isNotEmpty ? ' ${specs.existingRoofType}' : ''}'
+          ' surface to receive recover system. Perform electronic or nuclear moisture survey. '
+          'Remove and replace all wet or deteriorated insulation. Address all blisters, '
+          'ridges, and surface deficiencies prior to new membrane installation.';
+
+    map['deck'] = 'Clean and prepare '
+        '${specs.deckType.isNotEmpty ? '${specs.deckType.toLowerCase()} structural deck' : 'structural deck'}'
+        ' to receive new roofing system.'
+        '${specs.vaporRetarder != 'None' && specs.vaporRetarder.isNotEmpty ? ' Install ${specs.vaporRetarder.toLowerCase()} vapor retarder per Versico specifications.' : ''}';
+
+    map['insulation'] = _insulationScope(insul);
+
+    map['membrane'] = 'Install Versico '
+        '${membrane.thickness.isNotEmpty ? membrane.thickness : ''} '
+        '${membrane.membraneType.isNotEmpty ? membrane.membraneType : 'TPO'} membrane, '
+        '${_attachmentDesc(membrane.fieldAttachment)}. '
+        '${membrane.seamType == 'Tape' ? 'Seams sealed with factory-applied seam tape.' : 'All field seams hot-air welded, minimum 1.5" width.'} '
+        'Membrane color: ${membrane.color.isNotEmpty ? membrane.color : 'white'}.';
+
+    if (parapet.hasParapetWalls)
+      map['parapet'] = 'Install TPO membrane wall flashings at all '
+          '${parapet.wallType.isNotEmpty ? parapet.wallType.toLowerCase() : ''}'
+          ' parapet walls (${parapet.parapetTotalLF > 0 ? '${parapet.parapetTotalLF.toStringAsFixed(0)} LF' : 'see drawings'}). '
+          'Flashing height: ${parapet.parapetHeight > 0 ? '${parapet.parapetHeight.toStringAsFixed(0)}"' : 'minimum 8"'} above finished membrane surface. '
+          'Secure at termination with ${parapet.terminationType.isNotEmpty ? parapet.terminationType.toLowerCase() : 'termination bar'} '
+          'and ${parapet.anchorType.isNotEmpty ? parapet.anchorType.toLowerCase() : 'appropriate anchors'}.';
+
+    map['penetration'] = _penetrationScope(pen, drains);
+
+    if (metal.copingLF > 0 || metal.edgeMetalLF > 0 || metal.gutterLF > 0)
+      map['metal'] = _metalScope(metal);
+
+    if (metal.gutterLF > 0)
+      map['drainage'] = '${metal.gutterLF.toStringAsFixed(0)} LF of '
+          '${metal.gutterSize.isNotEmpty ? metal.gutterSize : ''} gutters'
+          '${metal.downspoutCount > 0 ? ' with ${metal.downspoutCount} downspout${metal.downspoutCount > 1 ? 's' : ''}' : ''}. '
+          'All drainage components to be installed per manufacturer specifications.';
+
+    map['cleanup'] = 'Contractor shall maintain a clean and orderly work area throughout '
+        'the project. Protect all rooftop equipment, walls, and adjacent surfaces from damage. '
+        'Remove all debris, equipment, and surplus materials upon completion.';
+
+    map['warranty'] = 'Upon satisfactory completion and final inspection, contractor shall provide: '
+        '(1) Versico ${info.warrantyYears > 0 ? '${info.warrantyYears}-year' : 'manufacturer'} '
+        'NDL roofing system warranty'
+        '${info.climateZone != null ? ', climate ${info.climateZone}' : ''}'
+        '${info.designWindSpeed != null ? ', design wind ${info.designWindSpeed}' : ''}; '
+        '(2) Contractor 2-year workmanship warranty covering defects in materials and labor.';
+
+    return map;
+  }
+
+  // ── Editable scope section ────────────────────────────────────────────────
+
+  Widget _scopeSection({
+    required BuildContext context,
+    required String sectionKey,
+    required String title,
+    required String autoText,
+    String? overrideText,
+    required Map<String, String> autoContext,
+    required info,
+    required specs,
+  }) {
+    final isEdited    = overrideText != null;
+    final displayText = overrideText ?? autoText;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+        Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          Expanded(child: Row(children: [
+            Text(title.toUpperCase(),
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11,
+                    color: isEdited ? const Color(0xFF7C3AED) : AppTheme.primary,
+                    letterSpacing: 1)),
+            if (isEdited) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                    color: const Color(0xFF7C3AED).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(4)),
+                child: const Text('AI EDITED',
+                    style: TextStyle(fontSize: 8, fontWeight: FontWeight.w700,
+                        color: Color(0xFF7C3AED), letterSpacing: 0.5)),
+              ),
+            ],
+          ])),
+
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            if (isEdited)
+              GestureDetector(
+                onTap: () => ref.read(estimatorProvider.notifier).clearSowSection(sectionKey),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  margin: const EdgeInsets.only(right: 4),
+                  decoration: BoxDecoration(
+                      color: AppTheme.surfaceAlt,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: AppTheme.border)),
+                  child: Text('Reset',
+                      style: TextStyle(fontSize: 9, color: AppTheme.textSecondary,
+                          fontWeight: FontWeight.w600)),
+                ),
+              ),
+            GestureDetector(
+              onTap: () => _openEditSheet(
+                  context, sectionKey, title, displayText, autoText, autoContext, info, specs),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                    color: const Color(0xFF7C3AED).withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: const Color(0xFF7C3AED).withOpacity(0.25))),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.auto_awesome, size: 9, color: Color(0xFF7C3AED)),
+                  SizedBox(width: 3),
+                  Text('Edit with AI',
+                      style: TextStyle(fontSize: 9, color: Color(0xFF7C3AED),
+                          fontWeight: FontWeight.w600)),
+                ]),
+              ),
+            ),
+          ]),
+        ]),
+
+        const SizedBox(height: 6),
+        Text(displayText,
+            style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary, height: 1.6)),
+      ]),
+    );
+  }
+
+  void _openEditSheet(BuildContext context, String key, String title,
+      String currentText, String autoText, Map<String, String> allSections,
+      info, specs) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) => _SowEditSheet(
+        sectionKey:   key,
+        sectionTitle: title,
+        currentText:  currentText,
+        autoText:     autoText,
+        allSections:  allSections,
+        onSave: (newText) =>
+            ref.read(estimatorProvider.notifier).updateSowSection(key, newText),
+      ),
+    );
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
   Widget _headerRow(String label, String value) => Padding(
     padding: const EdgeInsets.only(bottom: 4),
     child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      SizedBox(width: 80,
-          child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+      SizedBox(width: 80, child: Text(label,
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
               color: AppTheme.textSecondary))),
       Expanded(child: Text(value,
           style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary))),
@@ -1417,65 +1591,45 @@ class _ScopeOfWorkTab extends ConsumerWidget {
   String _attachmentDesc(String method) {
     switch (method) {
       case 'Mechanically Attached': return 'mechanically attached per Versico fastening schedule';
-      case 'Fully Adhered':         return 'fully adhered with Versico-approved bonding adhesive';
-      case 'Rhinobond (Induction Welded)':
-        return 'attached via Versico Rhinobond induction weld system';
+      case 'Fully Adhered': return 'fully adhered with Versico-approved bonding adhesive';
+      case 'Rhinobond (Induction Welded)': return 'attached via Versico Rhinobond induction weld system';
       default: return method.toLowerCase();
     }
   }
 
   String _penetrationScope(pen, int drains) {
     final parts = <String>[];
-
-    if (pen.rtuTotalLF > 0)
-      parts.add('RTU curbs (${pen.rtuTotalLF.toStringAsFixed(0)} LF curb perimeter)');
-    if (drains > 0)
-      parts.add('$drains roof drain${drains > 1 ? 's' : ''} (${pen.drainType.isNotEmpty ? pen.drainType.toLowerCase() : 'standard'})');
-    if (pen.smallPipeCount > 0)
-      parts.add('${pen.smallPipeCount} small pipe${pen.smallPipeCount > 1 ? 's' : ''} (1–4" dia.)');
-    if (pen.largePipeCount > 0)
-      parts.add('${pen.largePipeCount} large pipe${pen.largePipeCount > 1 ? 's' : ''} (4–12" dia.)');
-    if (pen.skylightCount > 0)
-      parts.add('${pen.skylightCount} skylight${pen.skylightCount > 1 ? 's' : ''}');
-    if (pen.scupperCount > 0)
-      parts.add('${pen.scupperCount} scupper${pen.scupperCount > 1 ? 's' : ''}');
-    if (pen.expansionJointLF > 0)
-      parts.add('expansion joints (${pen.expansionJointLF.toStringAsFixed(0)} LF)');
-    if (pen.pitchPanCount > 0)
-      parts.add('${pen.pitchPanCount} pitch pan${pen.pitchPanCount > 1 ? 's' : ''}');
-
-    if (parts.isEmpty)
-      return 'Install TPO membrane flashings at all penetrations per Versico specifications.';
-
-    return 'Install Versico TPO flashings at all penetrations including: '
-        '${parts.join(', ')}. All flashings per Versico installation specifications.';
+    if (pen.rtuTotalLF > 0) parts.add('RTU curbs (${pen.rtuTotalLF.toStringAsFixed(0)} LF)');
+    if (drains > 0) parts.add('$drains roof drain${drains > 1 ? 's' : ''}');
+    if (pen.smallPipeCount > 0) parts.add('${pen.smallPipeCount} small pipe${pen.smallPipeCount > 1 ? 's' : ''} (1-4" dia.)');
+    if (pen.largePipeCount > 0) parts.add('${pen.largePipeCount} large pipe${pen.largePipeCount > 1 ? 's' : ''} (4-12" dia.)');
+    if (pen.skylightCount > 0) parts.add('${pen.skylightCount} skylight${pen.skylightCount > 1 ? 's' : ''}');
+    if (pen.scupperCount > 0) parts.add('${pen.scupperCount} scupper${pen.scupperCount > 1 ? 's' : ''}');
+    if (pen.expansionJointLF > 0) parts.add('expansion joints (${pen.expansionJointLF.toStringAsFixed(0)} LF)');
+    if (pen.pitchPanCount > 0) parts.add('${pen.pitchPanCount} pitch pan${pen.pitchPanCount > 1 ? 's' : ''}');
+    if (parts.isEmpty) return 'Install TPO membrane flashings at all penetrations per Versico specifications.';
+    return 'Install Versico TPO flashings at all penetrations including: ${parts.join(', ')}. All flashings per Versico installation specifications.';
   }
 
   String _metalScope(metal) {
     final parts = <String>[];
-    if (metal.copingLF > 0)
-      parts.add('${metal.copingLF.toStringAsFixed(0)} LF of ${metal.copingWidth.isNotEmpty ? metal.copingWidth : ''} coping cap');
-    if (metal.edgeMetalLF > 0)
-      parts.add('${metal.edgeMetalLF.toStringAsFixed(0)} LF of ${metal.edgeMetalType.isNotEmpty ? metal.edgeMetalType : ''} edge metal');
+    if (metal.copingLF > 0) parts.add('${metal.copingLF.toStringAsFixed(0)} LF of ${metal.copingWidth} coping cap');
+    if (metal.edgeMetalLF > 0) parts.add('${metal.edgeMetalLF.toStringAsFixed(0)} LF of ${metal.edgeMetalType} edge metal');
     if (parts.isEmpty) return '';
-    return 'Install prefinished ${parts.join(' and ')}. All sheet metal 24-gauge minimum, '
-        'lapped and sealed per SMACNA standards.';
+    return 'Install prefinished ${parts.join(' and ')}. All sheet metal 24-gauge minimum, lapped and sealed per SMACNA standards.';
   }
 
   String _insulationScope(insul) {
     final parts = <String>[];
     final l1 = insul.layer1;
-    if (l1.thickness > 0) {
-      parts.add('${l1.thickness}" ${l1.type} insulation, Layer 1, '
-          '${l1.attachmentMethod.toLowerCase()}');
-    }
+    if (l1.thickness > 0)
+      parts.add('${l1.thickness}" ${l1.type} insulation, Layer 1, ${l1.attachmentMethod.toLowerCase()}');
     if (insul.numberOfLayers == 2 && insul.layer2 != null) {
       final l2 = insul.layer2!;
       if (l2.thickness > 0)
         parts.add('${l2.thickness}" ${l2.type}, Layer 2, ${l2.attachmentMethod.toLowerCase()}');
     }
-    if (insul.hasTaperedInsulation)
-      parts.add('tapered insulation system (slope-to-drain, min 1/4":12")');
+    if (insul.hasTaperedInsulation) parts.add('tapered insulation system (slope-to-drain)');
     if (insul.hasCoverBoard && insul.coverBoard != null) {
       final cb = insul.coverBoard!;
       parts.add('${cb.thickness}" ${cb.type} cover board, ${cb.attachmentMethod.toLowerCase()}');
@@ -1483,17 +1637,281 @@ class _ScopeOfWorkTab extends ConsumerWidget {
     if (parts.isEmpty) return 'Install insulation system per manufacturer specifications.';
     return 'Install: ${parts.join('; ')}.';
   }
-
-  Widget _scope(String title, String content) => Padding(
-    padding: const EdgeInsets.only(bottom: 18),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(title.toUpperCase(), style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11,
-          color: AppTheme.primary, letterSpacing: 1)),
-      const SizedBox(height: 6),
-      Text(content, style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary, height: 1.6)),
-    ]),
-  );
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SOW EDIT BOTTOM SHEET
+// ══════════════════════════════════════════════════════════════════════════════
+
+class _SowEditSheet extends StatefulWidget {
+  final String sectionKey;
+  final String sectionTitle;
+  final String currentText;
+  final String autoText;
+  final Map<String, String> allSections;
+  final void Function(String) onSave;
+
+  const _SowEditSheet({
+    required this.sectionKey,
+    required this.sectionTitle,
+    required this.currentText,
+    required this.autoText,
+    required this.allSections,
+    required this.onSave,
+  });
+
+  @override
+  State<_SowEditSheet> createState() => _SowEditSheetState();
+}
+
+class _SowEditSheetState extends State<_SowEditSheet> {
+  late TextEditingController _textCtrl;
+  late TextEditingController _promptCtrl;
+  bool   _isLoading = false;
+  String? _error;
+
+  static const _quickPrompts = [
+    'Make more formal',
+    'Make more concise',
+    'Add safety language',
+    'Add fire stopping note',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _textCtrl   = TextEditingController(text: widget.currentText);
+    _promptCtrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _textCtrl.dispose();
+    _promptCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _rewriteWithAI(String instruction) async {
+    if (instruction.trim().isEmpty) return;
+    setState(() { _isLoading = true; _error = null; });
+
+    final otherContext = widget.allSections.entries
+        .where((e) => e.key != widget.sectionKey)
+        .take(3)
+        .map((e) => '${e.key}: ${e.value.substring(0, e.value.length.clamp(0, 100))}')
+        .join('\n');
+
+    final systemMsg = 'You are a professional commercial roofing contractor writing a Scope of Work. '
+        'Rewrite the given SOW section based on the instruction. '
+        'Keep it concise (1-3 sentences), professional contractor language, no headers or bullet points. '
+        'Return ONLY the rewritten text.';
+
+    final userMsg = 'Section: "${widget.sectionTitle}"\n\n'
+        'Current text:\n"${_textCtrl.text}"\n\n'
+        'Instruction: "${instruction}"\n\n'
+        'Other sections for context:\n$otherContext';
+
+    try {
+      final response = await http.post(
+        Uri.parse('https://api.anthropic.com/v1/messages'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'model': 'claude-sonnet-4-20250514',
+          'max_tokens': 300,
+          'system': systemMsg,
+          'messages': [{'role': 'user', 'content': userMsg}],
+        }),
+      ).timeout(const Duration(seconds: 20));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final content = (data['content'] as List)
+            .firstWhere((c) => c['type'] == 'text', orElse: () => null);
+        if (content != null) {
+          setState(() {
+            _textCtrl.text = (content['text'] as String).trim();
+            _promptCtrl.clear();
+          });
+        } else {
+          setState(() => _error = 'Empty response. Try again.');
+        }
+      } else {
+        setState(() => _error = 'AI error (${response.statusCode}).');
+      }
+    } catch (e) {
+      setState(() => _error = 'Connection error.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottom),
+      child: Column(mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+        // Header
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+                color: const Color(0xFF7C3AED).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(6)),
+            child: const Icon(Icons.auto_awesome, size: 16, color: Color(0xFF7C3AED)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Edit: ${widget.sectionTitle}',
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+            const Text('AI rewrite or edit manually below',
+                style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+          ])),
+          IconButton(
+              onPressed: () => Navigator.pop(context),
+              icon: const Icon(Icons.close, size: 20)),
+        ]),
+
+        const SizedBox(height: 16),
+
+        // AI prompt area
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+              color: const Color(0xFFF5F3FF),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF7C3AED).withOpacity(0.2))),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('AI Instruction',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                    color: Color(0xFF7C3AED))),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: _promptCtrl,
+                  enabled: !_isLoading,
+                  decoration: const InputDecoration(
+                    hintText: 'e.g. "make it more formal", "add note about fire stopping"',
+                    hintStyle: TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(8))),
+                    filled: true, fillColor: Colors.white,
+                  ),
+                  style: const TextStyle(fontSize: 13),
+                  onSubmitted: (v) => _rewriteWithAI(v),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                        colors: [Color(0xFF7C3AED), Color(0xFF4F46E5)]),
+                    borderRadius: BorderRadius.circular(8)),
+                child: _isLoading
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(width: 18, height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white)))
+                    : IconButton(
+                        onPressed: () => _rewriteWithAI(_promptCtrl.text),
+                        icon: const Icon(Icons.auto_awesome,
+                            color: Colors.white, size: 18),
+                        padding: const EdgeInsets.all(10),
+                        constraints: const BoxConstraints()),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            Wrap(spacing: 6, runSpacing: 6, children: [
+              for (final q in _quickPrompts)
+                GestureDetector(
+                  onTap: () { _promptCtrl.text = q; _rewriteWithAI(q); },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: const Color(0xFF7C3AED).withOpacity(0.3))),
+                    child: Text(q,
+                        style: const TextStyle(fontSize: 10,
+                            color: Color(0xFF7C3AED), fontWeight: FontWeight.w500)),
+                  ),
+                ),
+              GestureDetector(
+                onTap: () => setState(() => _textCtrl.text = widget.autoText),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppTheme.border)),
+                  child: Text('Reset to auto',
+                      style: TextStyle(fontSize: 10, color: AppTheme.textSecondary,
+                          fontWeight: FontWeight.w500)),
+                ),
+              ),
+            ]),
+          ]),
+        ),
+
+        if (_error != null) ...[
+          const SizedBox(height: 8),
+          Text(_error!, style: const TextStyle(fontSize: 11, color: Color(0xFFEF4444))),
+        ],
+
+        const SizedBox(height: 14),
+
+        const Text('Section Text',
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                color: Color(0xFF64748B))),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _textCtrl,
+          maxLines: 5,
+          decoration: InputDecoration(
+            contentPadding: const EdgeInsets.all(12),
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: AppTheme.border)),
+            filled: true, fillColor: Colors.white,
+          ),
+          style: const TextStyle(fontSize: 13, height: 1.5),
+        ),
+
+        const SizedBox(height: 16),
+
+        Row(children: [
+          Expanded(child: OutlinedButton(
+            onPressed: () => Navigator.pop(context),
+            style: OutlinedButton.styleFrom(
+                side: BorderSide(color: AppTheme.border),
+                padding: const EdgeInsets.symmetric(vertical: 12)),
+            child: const Text('Cancel'),
+          )),
+          const SizedBox(width: 12),
+          Expanded(child: ElevatedButton(
+            onPressed: () {
+              widget.onSave(_textCtrl.text.trim());
+              Navigator.pop(context);
+            },
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF7C3AED),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                elevation: 0),
+            child: const Text('Save Section'),
+          )),
+        ]),
+      ]),
+    );
+  }
+}
+
+
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SHARED HELPERS (file-level)
