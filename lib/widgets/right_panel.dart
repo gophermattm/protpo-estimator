@@ -288,7 +288,7 @@ ${jsonEncode(snapshot)}
         Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'data': {'mode': 'audit', 'prompt': prompt}}),
-      ).timeout(const Duration(seconds: 30));
+      ).timeout(const Duration(seconds: 55));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
