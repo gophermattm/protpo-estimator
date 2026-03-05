@@ -292,9 +292,7 @@ ${jsonEncode(snapshot)}
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final raw2 = data['result']?['result'] as String?
-            ?? (data['result'] as Map?)?.values.first as String?
-            ?? '';
+        final raw2 = data['result']?['result']?.toString() ?? data['result']?.toString() ?? '';
         if (raw2.isEmpty) { _addError('Empty response from AI.'); return; }
 
         final raw = raw2.trim();
@@ -303,9 +301,9 @@ ${jsonEncode(snapshot)}
         final List<dynamic> items = jsonDecode(clean);
 
         final auditItems = items.map((item) => _AuditItem(
-          item['severity'] ?? 'WARNING',
-          item['category'] ?? 'General',
-          item['message']  ?? '',
+          (item['severity'] ?? 'WARNING').toString(),
+          (item['category'] ?? 'General').toString(),
+          (item['message']  ?? '').toString(),
         )).toList();
 
         setState(() {
@@ -394,11 +392,11 @@ User request: "$userText"
       }
 
       final data  = jsonDecode(response.body);
-      final raw   = (data['result']?['result'] as String? ?? '').trim();
+      final raw   = (data['result']?['result']?.toString() ?? '').trim();
       final clean = raw.replaceAll(RegExp(r'```json|```'), '').trim();
       final Map<String, dynamic> parsed = jsonDecode(clean);
 
-      final action = parsed['action'] as String? ?? 'unknown';
+      final action = parsed['action']?.toString() ?? 'unknown';
       final value  = parsed['value'];
 
       if (action == 'unknown') {
