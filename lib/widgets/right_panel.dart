@@ -296,8 +296,14 @@ ${jsonEncode(snapshot)}
         if (raw2.isEmpty) { _addError('Empty response from AI.'); return; }
 
         final raw = raw2.trim();
-        // Strip possible markdown fences
-        final clean = raw.replaceAll(RegExp(r'```json|```'), '').trim();
+        String clean = raw.replaceAll(RegExp(r'```json|```'), '').trim();
+        final startIdx = clean.indexOf('[');
+        final endIdx   = clean.lastIndexOf(']');
+        if (startIdx == -1 || endIdx == -1 || endIdx < startIdx) {
+          _addError('AI returned unexpected format. Try again.');
+          return;
+        }
+        clean = clean.substring(startIdx, endIdx + 1);
         final List<dynamic> items = jsonDecode(clean);
 
         final auditItems = items.map((item) => _AuditItem(
