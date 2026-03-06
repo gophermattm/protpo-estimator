@@ -225,6 +225,27 @@ class _RightPanelState extends ConsumerState<RightPanel> {
         'totalLineItems': bom.activeItems.length,
         'blockers': bom.warnings.where((w) => w.startsWith('BLOCKER')).toList(),
         'warnings': bom.warnings.where((w) => w.startsWith('WARNING')).toList(),
+        'items': bom.activeItems.map((item) => {
+          'name':      item.name,
+          'qty':       item.orderQty,
+          'unit':      item.unit,
+          'category':  item.category,
+          'notes':     item.notes,
+        }).toList(),
+        'fasteners': bom.activeItems
+            .where((item) => item.category == 'Fasteners & Plates' ||
+                             item.name.toLowerCase().contains('fastener') ||
+                             item.name.toLowerCase().contains('screw'))
+            .map((item) => {'name': item.name, 'qty': item.orderQty, 'unit': item.unit})
+            .toList(),
+        'windZones': {
+          'fieldDensity':     bom.activeItems
+              .where((i) => i.name.contains('Field Zone')).map((i) => i.notes).firstOrNull,
+          'perimeterDensity': bom.activeItems
+              .where((i) => i.name.contains('Perimeter Zone')).map((i) => i.notes).firstOrNull,
+          'cornerDensity':    bom.activeItems
+              .where((i) => i.name.contains('Corner Zone')).map((i) => i.notes).firstOrNull,
+        },
       },
     };
   }
@@ -276,18 +297,19 @@ class _RightPanelState extends ConsumerState<RightPanel> {
 
     final snapshot = _projectSnapshot();
     final prompt = '''
-You are ProTPO, an expert commercial roofing estimator AI. Audit the following project data and return a JSON array of issues. Each issue has:
-- severity: "BLOCKER" | "WARNING" | "OK"  
-- category: short label e.g. "Insulation", "Membrane", "Geometry"
-- message: one clear sentence describing the issue or confirming compliance
+You are ProTPO, a commercial TPO roofing estimator AI. Audit the following complete project snapshot and return a JSON array. Each item has:
+- severity: "BLOCKER" | "WARNING" | "OK"
+- category: short label e.g. "Insulation", "Fasteners", "Wind Resistance", "Membrane"
+- message: one clear actionable sentence. For WARNING/BLOCKER, state SPECIFICALLY what the issue is and what the correct value should be based on the data provided. Do NOT just say "verify" — say what you found and what is required.
 
 Rules:
-- BLOCKER = will definitely cause a bad estimate or code violation.
-- WARNING = potential issue that the estimator should verify.
-- OK = explicitly confirm key items that ARE correct (max 3 OKs).
-- Focus on: R-value vs code requirement, deck/fastener compatibility, missing required fields, MA membrane with no deck type, parapet area impact on material qty, drain count vs tapered insulation, wind zone logic.
-
-Return ONLY a valid JSON array. No markdown, no explanation.
+1. The BOM already contains calculated fastener quantities per wind zone (field/perimeter/corner). If fasteners are in the BOM items list, acknowledge them as OK — do NOT warn that fastening patterns need verification unless the BOM is empty.
+2. If you see a wind speed + deck + attachment combination that has specific Versico fastener requirements, cross-check against the BOM fastener items. Only flag a WARNING if the BOM items are MISSING or if the qty appears inadequate given the inputs.
+3. R-value: compare bom.totalRValue vs projectInfo.requiredRValue. State both numbers.
+4. Deck/fastener compatibility: check BOM fastener names match the deck type per Versico specs.
+5. Missing fields: only flag as BLOCKER if a required field is empty/zero that would break calculations.
+6. Max 3 OKs. Be specific — include numbers.
+7. Return ONLY valid JSON array. No markdown, no explanation.
 
 Project data:
 ${jsonEncode(snapshot)}
@@ -908,7 +930,7 @@ User request: "$userText"
                         blurRadius: 4,
                         offset: const Offset(0, 2))],
                   ),
-                  child: Text(msg.text,
+                  child: SelectableText(msg.text,
                       style: TextStyle(
                           color: msg.isUser
                               ? Colors.white
@@ -1050,7 +1072,7 @@ User request: "$userText"
                 style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
                     color: color, letterSpacing: 0.3)),
             const SizedBox(height: 2),
-            Text(item.message,
+            SelectableText(item.message,
                 style: TextStyle(fontSize: 12, color: AppTheme.textPrimary,
                     height: 1.3)),
           ],

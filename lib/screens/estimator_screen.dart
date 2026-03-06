@@ -49,29 +49,32 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
             'You have unsaved changes. Are you sure you want to leave?';
       }
     });
-    // Auto-save first draft 30s after opening, if user has entered data
-    Future.delayed(const Duration(seconds: 30), _autosaveInitial);
   }
 
-  /// Silent auto-draft: saves once if project has data and no projectId yet.
-  Future<void> _autosaveInitial() async {
-    if (!mounted || _currentProjectId != null || _autoSaveDone) return;
-    final state = ref.read(estimatorProvider);
+  /// Called by ref.listen whenever state changes — triggers autosave
+  /// after first meaningful edit if project has not been saved yet.
+  Future<void> _maybeAutosave(EstimatorState state) async {
+    if (!mounted || _autoSaveDone) return;
+    // Only autosave if there's something worth saving
     final hasData = state.projectInfo.projectName.isNotEmpty ||
-        state.buildings.first.roofGeometry.totalArea > 0;
+        (state.buildings.isNotEmpty &&
+         state.buildings.first.roofGeometry.totalArea > 0);
     if (!hasData) return;
+    _autoSaveDone = true; // prevent repeat attempts
     try {
-      final id = await FirestoreService.instance.save(state);
+      final id = await FirestoreService.instance.save(
+          state, projectId: _currentProjectId);
       if (mounted) {
         setState(() {
-          _currentProjectId = id;
-          _autoSaveDone     = true;
+          _currentProjectId  = id;
           _hasUnsavedChanges = false;
-          _lastSavedState   = state.hashCode;
+          _lastSavedState    = state.hashCode;
         });
-        AppSnackbar.info(context, 'Auto-draft saved — tap Save to keep it.');
+        AppSnackbar.info(context, 'Auto-draft saved — tap Save anytime to keep it.');
       }
-    } catch (_) {} // silent fail — user can always save manually
+    } catch (e) {
+      _autoSaveDone = false; // allow retry on next change
+    }
   }
 
   /// Picks an image file from disk and stores bytes in companyLogoProvider.
@@ -153,6 +156,10 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
     ref.listen(estimatorProvider, (prev, next) {
       if (_lastSavedState != null && next.hashCode != _lastSavedState) {
         if (mounted && !_hasUnsavedChanges) setState(() => _hasUnsavedChanges = true);
+      }
+      // Auto-save draft on first meaningful change
+      if (prev != next && _currentProjectId == null) {
+        _maybeAutosave(next);
       }
     });
 

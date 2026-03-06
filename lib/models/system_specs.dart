@@ -68,12 +68,12 @@ class SystemSpecs {
   final bool moistureScanRequired; // defaults to true for recover/tear-off
 
   const SystemSpecs({
-    this.projectType = 'New Construction',
+    this.projectType = 'Tear-off & Replace',
     this.deckType = 'Metal',
     this.vaporRetarder = 'None',
     this.existingRoofType = 'BUR',
     this.existingLayers = 1,
-    this.moistureScanRequired = false,
+    this.moistureScanRequired = true,  // true by default since default is Tear-off
   });
 
   factory SystemSpecs.initial() => const SystemSpecs();

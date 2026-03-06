@@ -404,7 +404,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
           ? 'R-${info.requiredRValue!.toStringAsFixed(0)} (req)' : null;
       _roofSlope       = geo.roofSlope;
       _zonesOverridden = geo.windZones.perimeterZoneWidth > 0;
-      _projectType     = specs.projectType.isNotEmpty ? specs.projectType : 'Tear-off & Replace';
+      _projectType     = specs.projectType.isNotEmpty ? specs.projectType : 'Tear-off & Replace'; // model default is now Tear-off
       _deckType        = specs.deckType.isNotEmpty    ? specs.deckType    : 'Metal';
       _vaporRetarder   = specs.vaporRetarder.isNotEmpty ? specs.vaporRetarder : 'None';
       _existingRoofType = specs.existingRoofType.isNotEmpty ? specs.existingRoofType : 'BUR';
@@ -512,28 +512,24 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   }
 
   void _syncEdgeTypeTotals() {
-    double wallFlashingLF = 0, dripEdgeLF = 0, parapetLF = 0, headwallLF = 0;
+    double headwallLF = 0, parapetLF = 0, dripEdgeLF = 0;
     int corners = 0;
-    // Wall flashing: Parapet and Headwall only (vertical surfaces needing flashing)
-    const wallTypes = {'Parapet', 'Headwall'};
-    // Drip edge: all horizontal/sloped exposed edges
-    const dripTypes = {'Eave', 'Flat Drip Edge', 'Rake Edge', 'Hip', 'Valley', 'Ridge', 'Clerestory'};
+    // Wall Flashing LF (Metal Scope) = Headwall edges only.
+    // Parapet LF comes from parapet section inputs - avoid double-counting.
     for (final s in _shapes) {
       final edges = s.edgeLengths;
       final types = s.edgeTypes;
       corners += edges.length;
       for (int i = 0; i < edges.length; i++) {
         final len = edges[i].abs();
-        // If edgeTypes shorter than edges, treat missing as 'Eave' (drip)
-        final t = (i < types.length) ? types[i] : 'Eave';
-        if (wallTypes.contains(t)) { wallFlashingLF += len; }
-        else { dripEdgeLF += len; } // everything else = drip
-        if (t == 'Headwall') headwallLF += len;
-        if (t == 'Parapet')  parapetLF  += len;
+        final t   = (i < types.length) ? types[i] : 'Eave';
+        if (t == 'Headwall')  { headwallLF += len; }
+        else if (t == 'Parapet') { parapetLF += len; }
+        else                  { dripEdgeLF += len; }
       }
     }
     if (corners > 0) {
-      _set(_cCornerCount, '\$corners');
+      _set(_cCornerCount, '$corners');
       ref.read(estimatorProvider.notifier).updateOutsideCorners(corners);
     }
     final n = ref.read(estimatorProvider.notifier);
@@ -543,14 +539,13 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       n.updateParapetTotalLF(parapetLF);
       if (!_termBarOverride) _set(_cTermBarLF, parapetLF.toStringAsFixed(1));
     }
-    // Auto-fill metal scope from geometry edge types
-    _set(_cWallFlashingLF, wallFlashingLF.toStringAsFixed(1));
-    _set(_cDripEdgeLF,     dripEdgeLF.toStringAsFixed(1));
+    // Metal Scope: Wall Flashing = headwall only; Drip Edge = all non-wall edges
+    final wallFlashingLF = headwallLF;
+    _set(_cWallFlashingLF, wallFlashingLF > 0 ? wallFlashingLF.toStringAsFixed(1) : '');
+    _set(_cDripEdgeLF,     dripEdgeLF > 0     ? dripEdgeLF.toStringAsFixed(1)     : '');
     n.updateWallFlashingLF(wallFlashingLF);
     n.updateDripEdgeLF(dripEdgeLF);
-  }
-
-  void _pushShape(int i) {
+  }void _pushShape(int i) {
     final s = _shapes[i];
     final notifier = ref.read(estimatorProvider.notifier);
     final geo = ref.read(estimatorProvider).activeBuilding.roofGeometry;
