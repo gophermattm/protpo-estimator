@@ -236,12 +236,18 @@ class _RightPanelState extends ConsumerState<RightPanel> {
         Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'data': {'question': question}}),
-      ).timeout(const Duration(seconds: 20));
+      ).timeout(const Duration(seconds: 45));
 
-      if (response.statusCode == 200) {
-        final data    = jsonDecode(response.body);
+      final body = response.body.trim();
+      if (response.statusCode == 200 && body.isNotEmpty) {
+        final data = jsonDecode(body);
+        // Firebase on_call wraps errors as {"error": {...}} — check first
+        if (data['error'] != null) {
+          _addError('VersiBot error: ${data['error']['message'] ?? 'Unknown error'}');
+          return;
+        }
         final result  = data['result'] ?? data;
-        final answer  = result['answer'] ?? 'Sorry, I could not process that.';
+        final answer  = result['answer']?.toString() ?? 'Sorry, I could not process that.';
         final sources = List<String>.from(result['sources'] ?? []);
         setState(() {
           _messages.add(_ChatMessage(text: answer, isUser: false, sources: sources));
@@ -250,8 +256,10 @@ class _RightPanelState extends ConsumerState<RightPanel> {
       } else {
         _addError('Server error (${response.statusCode}). Try again.');
       }
+    } on TimeoutException {
+      _addError('VersiBot timed out — Firebase may be cold-starting. Try again.');
     } catch (e) {
-      _addError('Connection error. Check your internet connection.');
+      _addError('Connection error: ${e.toString().split("\n").first}');
     }
   }
 
@@ -292,13 +300,27 @@ ${jsonEncode(snapshot)}
       ).timeout(const Duration(seconds: 55));
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
+        final body = response.body.trim();
+        if (body.isEmpty) { _addError('Empty response from AI.'); return; }
+        final data = jsonDecode(body);
+        // Check for Firebase error envelope
+        if (data['error'] != null) {
+          _addError('AI Assist error: ${data['error']['message'] ?? 'Server error'}');
+          return;
+        }
         final raw2 = data['result']?['result']?.toString() ?? data['result']?.toString() ?? '';
-        if (raw2.isEmpty) { _addError('Empty response from AI.'); return; }
+        if (raw2.isEmpty) { _addError('Empty response from AI. Try again.'); return; }
 
         final raw = raw2.trim();
-        // Strip possible markdown fences
-        final clean = raw.replaceAll(RegExp(r'```json|```'), '').trim();
+        // Aggressively strip markdown fences and extract JSON array
+        var clean = raw.replaceAll(RegExp(r'```json|```'), '').trim();
+        final startIdx = clean.indexOf('[');
+        final endIdx   = clean.lastIndexOf(']');
+        if (startIdx == -1 || endIdx == -1 || endIdx <= startIdx) {
+          _addError('AI returned unexpected format. Try again.');
+          return;
+        }
+        clean = clean.substring(startIdx, endIdx + 1);
         final List<dynamic> items = jsonDecode(clean);
 
         final auditItems = items.map((item) => _AuditItem(
@@ -392,9 +414,18 @@ User request: "$userText"
         return;
       }
 
-      final data  = jsonDecode(response.body);
-      final raw   = (data['result']?['result']?.toString() ?? '').trim();
-      final clean = raw.replaceAll(RegExp(r'```json|```'), '').trim();
+      final body = response.body.trim();
+      final data = jsonDecode(body);
+      if (data['error'] != null) {
+        _addError('AI error: ${data['error']['message'] ?? 'Server error'}');
+        return;
+      }
+      final raw = (data['result']?['result']?.toString() ?? '').trim();
+      var clean = raw.replaceAll(RegExp(r'```json|```'), '').trim();
+      // Extract JSON object
+      final si = clean.indexOf('{');
+      final ei = clean.lastIndexOf('}');
+      if (si != -1 && ei > si) clean = clean.substring(si, ei + 1);
       final Map<String, dynamic> parsed = jsonDecode(clean);
 
       final action = parsed['action']?.toString() ?? 'unknown';

@@ -337,7 +337,7 @@ class Penetrations {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const List<String> kCopingWidths = ['8"', '10"', '12"', '14"', '16"'];
-const List<String> kEdgeMetalTypes = ['ES-1', 'Gravel Stop', 'Drip Edge'];
+const List<String> kEdgeMetalTypes = ['ES-1 (Low Profile)', 'ES-2 (High Profile)', 'Gravel Stop', 'Drip Edge', 'Fascia', 'Counter Flashing'];
 const List<String> kGutterSizes = ['5"', '6"', '7"', '8"'];
 
 // Edge type → metal bucket mapping
@@ -370,7 +370,7 @@ class MetalScope {
     this.wallFlashingLF = 0.0,
     this.dripEdgeLF = 0.0,
     this.otherEdgeMetalLF = 0.0,
-    this.edgeMetalType = 'ES-1',
+    this.edgeMetalType = 'ES-1 (Low Profile)',
     this.gutterSize = '6"',
     this.gutterLF = 0.0,
     this.downspoutCount = 0,

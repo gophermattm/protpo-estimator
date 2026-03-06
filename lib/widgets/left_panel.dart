@@ -214,7 +214,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   // ── Metal Scope ──────────────────────────────────────────────────────────────
   String _copingWidth  = '12"';
   final _cCopingLF        = TextEditingController();
-  String _edgeMetalType   = 'ES-1';
+  String _edgeMetalType   = 'ES-1 (Low Profile)';
   final _cWallFlashingLF  = TextEditingController();
   final _cDripEdgeLF      = TextEditingController();
   final _cOtherEdgeLF     = TextEditingController();
@@ -514,18 +514,20 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   void _syncEdgeTypeTotals() {
     double wallFlashingLF = 0, dripEdgeLF = 0, parapetLF = 0, headwallLF = 0;
     int corners = 0;
-    // Wall flashing bucket: Parapet, Headwall, Clerestory
-    const wallTypes = {'Parapet', 'Headwall', 'Clerestory'};
-    // Drip edge bucket: Eave, Flat Drip Edge, Rake Edge, Hip, Valley, Ridge
-    const dripTypes = {'Eave', 'Flat Drip Edge', 'Rake Edge', 'Hip', 'Valley', 'Ridge'};
+    // Wall flashing: Parapet and Headwall only (vertical surfaces needing flashing)
+    const wallTypes = {'Parapet', 'Headwall'};
+    // Drip edge: all horizontal/sloped exposed edges
+    const dripTypes = {'Eave', 'Flat Drip Edge', 'Rake Edge', 'Hip', 'Valley', 'Ridge', 'Clerestory'};
     for (final s in _shapes) {
-      final edges = s.edgeLengths; final types = s.edgeTypes;
-      corners += s.edgeLengths.length;
-      for (int i = 0; i < edges.length && i < types.length; i++) {
+      final edges = s.edgeLengths;
+      final types = s.edgeTypes;
+      corners += edges.length;
+      for (int i = 0; i < edges.length; i++) {
         final len = edges[i].abs();
-        final t   = types[i];
+        // If edgeTypes shorter than edges, treat missing as 'Eave' (drip)
+        final t = (i < types.length) ? types[i] : 'Eave';
         if (wallTypes.contains(t)) { wallFlashingLF += len; }
-        else if (dripTypes.contains(t)) { dripEdgeLF += len; }
+        else { dripEdgeLF += len; } // everything else = drip
         if (t == 'Headwall') headwallLF += len;
         if (t == 'Parapet')  parapetLF  += len;
       }

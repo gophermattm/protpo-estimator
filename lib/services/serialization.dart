@@ -379,7 +379,7 @@ MetalScope _metalScopeFromJson(Map j) => MetalScope(
   wallFlashingLF:   _d(j['wallFlashingLF'], 0.0),
   dripEdgeLF:       _d(j['dripEdgeLF'] ?? j['edgeMetalLF'], 0.0),
   otherEdgeMetalLF: _d(j['otherEdgeMetalLF'], 0.0),
-  edgeMetalType:    _s(j['edgeMetalType'], 'ES-1'),
+  edgeMetalType:    _s(j['edgeMetalType'], 'ES-1 (Low Profile)'),
   gutterSize:       _s(j['gutterSize'], '6"'),
   gutterLF:         _d(j['gutterLF'], 0.0),
   downspoutCount:   _i(j['downspoutCount'], 0),

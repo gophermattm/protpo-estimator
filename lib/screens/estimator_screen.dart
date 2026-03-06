@@ -37,6 +37,42 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
   int? _lastSavedState; // hashCode of EstimatorState at last save
   bool _isSaving = false;
   bool _saveSuccess = false;
+  bool _autoSaveDone = false; // true once first auto-draft saved
+
+  @override
+  void initState() {
+    super.initState();
+    // Warn browser before tab close if there are unsaved changes
+    html.window.onBeforeUnload.listen((event) {
+      if (_hasUnsavedChanges) {
+        (event as html.BeforeUnloadEvent).returnValue =
+            'You have unsaved changes. Are you sure you want to leave?';
+      }
+    });
+    // Auto-save first draft 30s after opening, if user has entered data
+    Future.delayed(const Duration(seconds: 30), _autosaveInitial);
+  }
+
+  /// Silent auto-draft: saves once if project has data and no projectId yet.
+  Future<void> _autosaveInitial() async {
+    if (!mounted || _currentProjectId != null || _autoSaveDone) return;
+    final state = ref.read(estimatorProvider);
+    final hasData = state.projectInfo.projectName.isNotEmpty ||
+        state.buildings.first.roofGeometry.totalArea > 0;
+    if (!hasData) return;
+    try {
+      final id = await FirestoreService.instance.save(state);
+      if (mounted) {
+        setState(() {
+          _currentProjectId = id;
+          _autoSaveDone     = true;
+          _hasUnsavedChanges = false;
+          _lastSavedState   = state.hashCode;
+        });
+        AppSnackbar.info(context, 'Auto-draft saved — tap Save to keep it.');
+      }
+    } catch (_) {} // silent fail — user can always save manually
+  }
 
   /// Picks an image file from disk and stores bytes in companyLogoProvider.
   Future<void> _pickLogo() async {
