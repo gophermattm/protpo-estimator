@@ -308,7 +308,7 @@ Rules:
 3. R-value: compare bom.totalRValue vs projectInfo.requiredRValue. State both numbers.
 4. Deck/fastener compatibility: check BOM fastener names match the deck type per Versico specs.
 5. Missing fields: only flag as BLOCKER if a required field is empty/zero that would break calculations.
-6. Max 3 OKs. Be specific — include numbers.
+6. Confirm ALL items that are correct with OK — do not limit the number of OKs. Every major category (insulation, fasteners, membrane, R-value, wind zones, deck compatibility, parapet, penetrations) should get an explicit OK if it checks out. Be specific — include numbers.
 7. Return ONLY valid JSON array. No markdown, no explanation.
 
 Project data:
