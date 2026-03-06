@@ -221,6 +221,10 @@ class _RightPanelState extends ConsumerState<RightPanel> {
       },
       'bom': {
         'totalLineItems': bom.activeItems.length,
+        'fasteners': bom.activeItems
+            .where((i) => i.category == 'Fasteners & Plates')
+            .map((i) => i.description)
+            .toList(),
         'blockers': bom.warnings.where((w) => w.startsWith('BLOCKER')).toList(),
         'warnings': bom.warnings.where((w) => w.startsWith('WARNING')).toList(),
       },
@@ -276,6 +280,7 @@ Rules:
 - WARNING = potential issue that the estimator should verify.
 - OK = explicitly confirm key items that ARE correct (max 3 OKs).
 - Focus on: R-value vs code requirement, deck/fastener compatibility, missing required fields, MA membrane with no deck type, parapet area impact on material qty, drain count vs tapered insulation, wind zone logic.
+- For fastener compatibility: the bom.fasteners list shows the ACTUAL fasteners already specified. If deck-compatible fasteners are present in that list, mark fastener compatibility as OK, not a warning.
 
 Return ONLY a valid JSON array. No markdown, no explanation.
 
