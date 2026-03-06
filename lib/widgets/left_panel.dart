@@ -23,6 +23,7 @@ import '../models/insulation_system.dart';
 import '../models/section_models.dart';
 import '../providers/estimator_providers.dart';
 import '../services/zip_lookup.dart';
+import '../services/firestore_service.dart';
 
 // ─── EDGE LABELS ─────────────────────────────────────────────────────────────
 
@@ -316,9 +317,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   }
 
   void _autosave() {
-    final svc   = ref.read(firestoreServiceProvider);
     final state = ref.read(estimatorProvider);
-    svc.save(state).catchError((_) {}); // silent autosave on section switch
+    if (state.projectInfo.projectName.isEmpty) return; // don't autosave unnamed projects
+    FirestoreService.instance.save(state).catchError((_) {}); // silent autosave on section switch
   }
 
   void _syncFromState() {
@@ -1603,7 +1604,6 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         _dd('Termination Type', _terminationType, kTerminationTypes, (v) {
           setState(() => _terminationType = v!); n.updateTerminationType(v!); }),
         if (_parapetArea > 0) ...[_sp16, _parapetBOM()],
-      ],
     ]);
   }
 

@@ -981,7 +981,6 @@ class BomCalculator {
     if (metalScope.otherEdgeMetalLF > 0) {
       items.add(_linearItem('Metal Scope', 'Other Edge Metal',
           metalScope.otherEdgeMetalLF, wMet, "10' sections"));
-    } "10' sections"));
     }
 
     if (metalScope.gutterLF > 0) {
