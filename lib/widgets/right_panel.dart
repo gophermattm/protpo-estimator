@@ -223,7 +223,7 @@ class _RightPanelState extends ConsumerState<RightPanel> {
         'totalLineItems': bom.activeItems.length,
         'fasteners': bom.activeItems
             .where((i) => i.category == 'Fasteners & Plates')
-            .map((i) => i.description)
+            .map((i) => i.name)
             .toList(),
         'blockers': bom.warnings.where((w) => w.startsWith('BLOCKER')).toList(),
         'warnings': bom.warnings.where((w) => w.startsWith('WARNING')).toList(),
