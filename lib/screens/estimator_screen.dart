@@ -19,6 +19,7 @@ import '../widgets/left_panel.dart';
 import '../widgets/center_panel.dart';
 import '../widgets/right_panel.dart';
 import '../providers/estimator_providers.dart';
+import '../models/estimator_state.dart';
 import '../services/firestore_service.dart';
 import 'project_list_screen.dart';
 import '../services/export_service.dart';
