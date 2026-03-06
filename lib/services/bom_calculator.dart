@@ -310,10 +310,10 @@ class BomCalculator {
     final isRhinobond = membrane.fieldAttachment == 'Rhinobond (Induction Welded)';
     final isFA        = membrane.fieldAttachment == 'Fully Adhered';
 
-    if ((isMA || isRhinobond) && totalArea > 0) {
-      // Fastener densities (fasteners per sq ft) by zone.
-      // Driven by warranty tier — higher warranty = stricter Versico table requirements.
-      // Source: Versico MA Fastening Tables (warranty minimums, Risk Cat II).
+    // ── MECHANICALLY ATTACHED (MA) ───────────────────────────────────────────
+    // Through-membrane fasteners + seam stress plates.
+    // Density driven by warranty tier per Versico MA tables.
+    if (isMA && totalArea > 0) {
       final densities     = _fasteningDensities(projectInfo.warrantyYears);
       final fieldDensity  = densities.$1;
       final perimDensity  = densities.$2;
@@ -324,31 +324,29 @@ class BomCalculator {
       final cornerFast = hasZones ? effectiveCornerArea * cornerDensity : 0.0;
       final totalFast  = fieldFast + perimFast + cornerFast;
 
-      const boxSize = 500.0; // fasteners per box
-      final base     = totalFast;
-      final withW    = base * (1 + wAcc);
+      const boxSize = 500.0;
+      final withW    = totalFast * (1 + wAcc);
       final orderQty = (withW / boxSize).ceil().toDouble();
 
-      final fastenerName  = _fastenerName(systemSpecs.deckType);
-      // Stack = all insulation layers + cover board the fastener passes through
-      final memStackIn    = _stackThicknessIn(insulation, 3);
-      final memFastLen    = _selectFastenerLen(systemSpecs.deckType, memStackIn);
+      final fastenerName = _fastenerName(systemSpecs.deckType);
+      final memStackIn   = _stackThicknessIn(insulation, 3);
+      final memFastLen   = _selectFastenerLen(systemSpecs.deckType, memStackIn);
 
       items.add(BomLineItem(
         category: 'Fasteners & Plates',
-        name: '$fastenerName $memFastLen — ${systemSpecs.deckType} Deck (Membrane)',
+        name: '$fastenerName $memFastLen — ${systemSpecs.deckType} Deck (MA Membrane)',
         orderQty: orderQty,
         unit: 'boxes',
         notes: '500/box — field, perimeter & corner zones',
         trace: BomTrace(
           baseDescription: '${totalFast.toStringAsFixed(0)} fasteners ÷ 500/box',
-          baseQty: base,
+          baseQty: totalFast,
           wastePercent: wAcc,
           withWaste: withW,
           packageSize: boxSize,
           orderQty: orderQty,
           breakdown: [
-            _fastenerBreakdown(systemSpecs.deckType, memStackIn, 'Membrane fastener'),
+            _fastenerBreakdown(systemSpecs.deckType, memStackIn, 'MA membrane fastener'),
             if (hasZones) ...[
               'Fastening: ${projectInfo.warrantyYears}-yr warranty → field ${fieldDensity.toStringAsFixed(2)}/sf, perim ${perimDensity.toStringAsFixed(2)}/sf, corner ${cornerDensity.toStringAsFixed(2)}/sf',
               'Field zone:     ${_sf(effectiveFieldArea)} × ${fieldDensity.toStringAsFixed(2)}/sf = ${fieldFast.toStringAsFixed(0)}',
@@ -357,69 +355,125 @@ class BomCalculator {
             ] else
               'Total area (no zones): ${_sf(totalArea)} × ${fieldDensity.toStringAsFixed(2)}/sf = ${fieldFast.toStringAsFixed(0)}',
             'Total fasteners: ${totalFast.toStringAsFixed(0)}',
-            'Waste:           ${_pct(wAcc)}%',
-            'With waste:      ${withW.toStringAsFixed(0)}',
-            'Box size:        500 fasteners/box',
-            'ORDER QTY:       ${orderQty.toInt()} boxes',
+            'Waste: ${_pct(wAcc)}%  →  With waste: ${withW.toStringAsFixed(0)}',
+            'ORDER QTY: ${orderQty.toInt()} boxes (500/box)',
           ],
         ),
       ));
 
-      // Seam / stress plates — one per fastener for MA
-      if (isMA) {
-        const plateBoxSize = 1000.0;
-        final plateBase   = totalFast;
-        final plateWithW  = plateBase * (1 + wAcc);
-        final plateOrder  = (plateWithW / plateBoxSize).ceil().toDouble();
-        items.add(BomLineItem(
-          category: 'Fasteners & Plates',
-          name: '3" Seam Plates',
+      // Seam stress plates — one per MA fastener
+      const plateBoxSize = 1000.0;
+      final plateWithW   = totalFast * (1 + wAcc);
+      final plateOrder   = (plateWithW / plateBoxSize).ceil().toDouble();
+      items.add(BomLineItem(
+        category: 'Fasteners & Plates',
+        name: '3" Seam Stress Plates',
+        orderQty: plateOrder,
+        unit: 'boxes',
+        notes: '1,000/box — one plate per MA fastener',
+        trace: BomTrace(
+          baseDescription: '${totalFast.toStringAsFixed(0)} plates ÷ 1,000/box',
+          baseQty: totalFast,
+          wastePercent: wAcc,
+          withWaste: plateWithW,
+          packageSize: plateBoxSize,
           orderQty: plateOrder,
-          unit: 'boxes',
-          notes: '1,000/box — one plate per fastener',
-          trace: BomTrace(
-            baseDescription: '${plateBase.toStringAsFixed(0)} plates ÷ 1,000/box',
-            baseQty: plateBase,
-            wastePercent: wAcc,
-            withWaste: plateWithW,
-            packageSize: plateBoxSize,
-            orderQty: plateOrder,
-            breakdown: [
-              'One plate per fastener: ${plateBase.toStringAsFixed(0)}',
-              'Waste: ${_pct(wAcc)}%',
-              'ORDER QTY: ${plateOrder.toInt()} boxes (1,000/box)',
-            ],
-          ),
-        ));
-      }
+          breakdown: [
+            'One seam plate per fastener: ${totalFast.toStringAsFixed(0)}',
+            'Waste: ${_pct(wAcc)}%',
+            'ORDER QTY: ${plateOrder.toInt()} boxes (1,000/box)',
+          ],
+        ),
+      ));
+    }
 
-      // Rhinobond plates (induction weld plates — different from seam plates)
-      if (isRhinobond) {
-        const rbPlateBoxSize = 500.0;
-        final rbBase  = totalFast;
-        final rbWithW = rbBase * (1 + wAcc);
-        final rbOrder = (rbWithW / rbPlateBoxSize).ceil().toDouble();
-        items.add(BomLineItem(
-          category: 'Fasteners & Plates',
-          name: 'Rhinobond Induction Weld Plates',
-          orderQty: rbOrder,
-          unit: 'boxes',
-          notes: '500/box — Versico Rhinobond system',
-          trace: BomTrace(
-            baseDescription: '${rbBase.toStringAsFixed(0)} plates ÷ 500/box',
-            baseQty: rbBase,
-            wastePercent: wAcc,
-            withWaste: rbWithW,
-            packageSize: rbPlateBoxSize,
-            orderQty: rbOrder,
-            breakdown: [
-              'Rhinobond plates = fasteners: ${rbBase.toStringAsFixed(0)}',
-              'Waste: ${_pct(wAcc)}%',
-              'ORDER QTY: ${rbOrder.toInt()} boxes (500/box)',
-            ],
-          ),
-        ));
-      }
+    // ── RHINOBOND (INDUCTION WELDED) ──────────────────────────────────────────
+    // Versico Rhinobond: steel plates fastened through insulation to deck,
+    // then membrane inductively welded to plate tops — no through-membrane fasteners.
+    //
+    // BOM has THREE separate line items:
+    //   1. Rhinobond induction weld plates (250/carton)
+    //   2. Fasteners for plates — same sizing logic as MA, one per plate
+    //   3. Insulation fasteners (handled below in insulation section, same as MA)
+    //
+    // Plate density is ~33–50% of MA fastener density (larger bond area per plate).
+    // Source: Versico Rhinobond TPO Installation Guide & FM approval tables.
+    if (isRhinobond && totalArea > 0) {
+      final rbDensities     = _rhinobondDensities(projectInfo.warrantyYears);
+      final rbFieldDensity  = rbDensities.$1;
+      final rbPerimDensity  = rbDensities.$2;
+      final rbCornerDensity = rbDensities.$3;
+
+      final rbFieldPlates  = (hasZones ? effectiveFieldArea  : totalArea) * rbFieldDensity;
+      final rbPerimPlates  = hasZones ? effectivePerimArea  * rbPerimDensity  : 0.0;
+      final rbCornerPlates = hasZones ? effectiveCornerArea * rbCornerDensity : 0.0;
+      final rbTotalPlates  = rbFieldPlates + rbPerimPlates + rbCornerPlates;
+
+      // ── Rhinobond induction weld plates ──────────────────────────────────
+      const rbCartonSize = 250.0; // Versico Rhinobond plates: 250/carton
+      final rbPlateWithW = rbTotalPlates * (1 + wAcc);
+      final rbPlateOrder = (rbPlateWithW / rbCartonSize).ceil().toDouble();
+
+      items.add(BomLineItem(
+        category: 'Fasteners & Plates',
+        name: 'Rhinobond Induction Weld Plates',
+        orderQty: rbPlateOrder,
+        unit: 'cartons',
+        notes: '250/carton — Versico Rhinobond TPO system',
+        trace: BomTrace(
+          baseDescription: '${rbTotalPlates.toStringAsFixed(0)} plates ÷ 250/carton',
+          baseQty: rbTotalPlates,
+          wastePercent: wAcc,
+          withWaste: rbPlateWithW,
+          packageSize: rbCartonSize,
+          orderQty: rbPlateOrder,
+          breakdown: [
+            'Rhinobond plate grid (${projectInfo.warrantyYears}-yr warranty):',
+            '  Field density:   ${rbFieldDensity.toStringAsFixed(3)}/sf  (MA equiv: ${(_fasteningDensities(projectInfo.warrantyYears).$1).toStringAsFixed(2)}/sf)',
+            '  Perim density:   ${rbPerimDensity.toStringAsFixed(3)}/sf',
+            '  Corner density:  ${rbCornerDensity.toStringAsFixed(3)}/sf',
+            if (hasZones) ...[
+              'Field zone:     ${_sf(rbFieldPlates)} plates',
+              'Perimeter zone: ${_sf(rbPerimPlates)} plates',
+              'Corner zone:    ${_sf(rbCornerPlates)} plates',
+            ] else
+              'Total area (no zones): ${_sf(rbTotalPlates)} plates',
+            'Total plates: ${rbTotalPlates.toStringAsFixed(0)}',
+            'Waste: ${_pct(wAcc)}%  →  With waste: ${rbPlateWithW.toStringAsFixed(0)}',
+            'ORDER QTY: ${rbPlateOrder.toInt()} cartons (250/carton)',
+          ],
+        ),
+      ));
+
+      // ── Fasteners for Rhinobond plates (one per plate, through insulation to deck) ─
+      final memStackIn   = _stackThicknessIn(insulation, 3);
+      final rbFastName   = _fastenerName(systemSpecs.deckType);
+      final rbFastLen    = _selectFastenerLen(systemSpecs.deckType, memStackIn);
+      const rbFastBox    = 500.0;
+      final rbFastWithW  = rbTotalPlates * (1 + wAcc);
+      final rbFastOrder  = (rbFastWithW / rbFastBox).ceil().toDouble();
+
+      items.add(BomLineItem(
+        category: 'Fasteners & Plates',
+        name: '$rbFastName $rbFastLen — ${systemSpecs.deckType} Deck (Rhinobond)',
+        orderQty: rbFastOrder,
+        unit: 'boxes',
+        notes: '500/box — one fastener per Rhinobond plate',
+        trace: BomTrace(
+          baseDescription: '${rbTotalPlates.toStringAsFixed(0)} fasteners ÷ 500/box',
+          baseQty: rbTotalPlates,
+          wastePercent: wAcc,
+          withWaste: rbFastWithW,
+          packageSize: rbFastBox,
+          orderQty: rbFastOrder,
+          breakdown: [
+            _fastenerBreakdown(systemSpecs.deckType, memStackIn, 'Rhinobond plate fastener'),
+            'One fastener per plate: ${rbTotalPlates.toStringAsFixed(0)}',
+            'Waste: ${_pct(wAcc)}%',
+            'ORDER QTY: ${rbFastOrder.toInt()} boxes (500/box)',
+          ],
+        ),
+      ));
     }
 
     // Insulation fasteners — one line item per MA layer, each with computed length
@@ -916,9 +970,18 @@ class BomCalculator {
           metalScope.copingLF, wMet, "10' sections"));
     }
 
-    if (metalScope.edgeMetalLF > 0) {
-      items.add(_linearItem('Metal Scope', 'Edge Metal — ${metalScope.edgeMetalType}',
-          metalScope.edgeMetalLF, wMet, "10' sections"));
+    if (metalScope.wallFlashingLF > 0) {
+      items.add(_linearItem('Metal Scope', 'Wall Flashing',
+          metalScope.wallFlashingLF, wMet, "10' sections"));
+    }
+    if (metalScope.dripEdgeLF > 0) {
+      items.add(_linearItem('Metal Scope', 'Drip Edge — ${metalScope.edgeMetalType}',
+          metalScope.dripEdgeLF, wMet, "10' sections"));
+    }
+    if (metalScope.otherEdgeMetalLF > 0) {
+      items.add(_linearItem('Metal Scope', 'Other Edge Metal',
+          metalScope.otherEdgeMetalLF, wMet, "10' sections"));
+    } "10' sections"));
     }
 
     if (metalScope.gutterLF > 0) {
@@ -1010,6 +1073,33 @@ class BomCalculator {
       case 25: return (0.75, 1.49, 2.00);
       case 30: return (1.00, 2.00, 2.99);
       default: return (0.50, 1.00, 1.49); // default to 20-year if unset
+    }
+  }
+
+    // ─── RHINOBOND PLATE DENSITIES ───────────────────────────────────────────────
+
+  /// Returns (fieldDensity, perimDensity, cornerDensity) in plates/sf
+  /// for Versico Rhinobond induction-welded system by warranty tier.
+  ///
+  /// Rhinobond plate density is ~33–50% of MA fastener density because each
+  /// induction-welded plate creates a larger bond zone than a single seam fastener.
+  /// Source: Versico Rhinobond TPO Installation Guide + FM approval tables.
+  ///
+  ///  Warranty │ Field    │ Perim    │ Corner   │ vs MA field
+  /// ──────────┼──────────┼──────────┼──────────┼────────────
+  ///  10-year  │ 0.100/sf │ 0.200/sf │ 0.300/sf │  50% of MA
+  ///  15-year  │ 0.125/sf │ 0.250/sf │ 0.375/sf │  50% of MA
+  ///  20-year  │ 0.167/sf │ 0.333/sf │ 0.500/sf │  33% of MA
+  ///  25-year  │ 0.250/sf │ 0.500/sf │ 0.750/sf │  33% of MA
+  ///  30-year  │ 0.333/sf │ 0.667/sf │ 1.000/sf │  33% of MA
+  static (double, double, double) _rhinobondDensities(int warrantyYears) {
+    switch (warrantyYears) {
+      case 10: return (0.100, 0.200, 0.300);
+      case 15: return (0.125, 0.250, 0.375);
+      case 20: return (0.167, 0.333, 0.500);
+      case 25: return (0.250, 0.500, 0.750);
+      case 30: return (0.333, 0.667, 1.000);
+      default: return (0.167, 0.333, 0.500); // default to 20-year
     }
   }
 

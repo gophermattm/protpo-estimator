@@ -361,23 +361,28 @@ RTUDetail _rtuDetailFromJson(Map<String, dynamic> j) => RTUDetail(
 // ─── METAL SCOPE ─────────────────────────────────────────────────────────────
 
 Map<String, dynamic> _metalScopeToJson(MetalScope m) => {
-  'copingWidth':   m.copingWidth,
-  'copingLF':      m.copingLF,
-  'edgeMetalType': m.edgeMetalType,
-  'edgeMetalLF':   m.edgeMetalLF,
-  'gutterSize':    m.gutterSize,
-  'gutterLF':      m.gutterLF,
-  'downspoutCount':m.downspoutCount,
+  'copingWidth':      m.copingWidth,
+  'copingLF':         m.copingLF,
+  'wallFlashingLF':   m.wallFlashingLF,
+  'dripEdgeLF':       m.dripEdgeLF,
+  'otherEdgeMetalLF': m.otherEdgeMetalLF,
+  'edgeMetalType':    m.edgeMetalType,
+  'gutterSize':       m.gutterSize,
+  'gutterLF':         m.gutterLF,
+  'downspoutCount':   m.downspoutCount,
 };
 
 MetalScope _metalScopeFromJson(Map j) => MetalScope(
-  copingWidth:   _s(j['copingWidth'], '12"'),
-  copingLF:      _d(j['copingLF'], 0.0),
-  edgeMetalType: _s(j['edgeMetalType'], 'ES-1'),
-  edgeMetalLF:   _d(j['edgeMetalLF'], 0.0),
-  gutterSize:    _s(j['gutterSize'], '6"'),
-  gutterLF:      _d(j['gutterLF'], 0.0),
-  downspoutCount:_i(j['downspoutCount'], 0),
+  copingWidth:      _s(j['copingWidth'], '12"'),
+  copingLF:         _d(j['copingLF'], 0.0),
+  // Migrate old single edgeMetalLF into dripEdgeLF if new fields absent
+  wallFlashingLF:   _d(j['wallFlashingLF'], 0.0),
+  dripEdgeLF:       _d(j['dripEdgeLF'] ?? j['edgeMetalLF'], 0.0),
+  otherEdgeMetalLF: _d(j['otherEdgeMetalLF'], 0.0),
+  edgeMetalType:    _s(j['edgeMetalType'], 'ES-1'),
+  gutterSize:       _s(j['gutterSize'], '6"'),
+  gutterLF:         _d(j['gutterLF'], 0.0),
+  downspoutCount:   _i(j['downspoutCount'], 0),
 );
 
 // ─── PRIMITIVE HELPERS ────────────────────────────────────────────────────────

@@ -78,7 +78,8 @@ class _RightPanelState extends ConsumerState<RightPanel> {
   final TextEditingController _chatController   = TextEditingController();
   final ScrollController       _scrollController = ScrollController();
   final List<_ChatMessage>     _messages         = [];
-  bool     _isLoading = false;
+  bool     _isLoading    = false;
+  bool     _chatExpanded = false;
   _BotMode _mode      = _BotMode.spec;
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -221,10 +222,6 @@ class _RightPanelState extends ConsumerState<RightPanel> {
       },
       'bom': {
         'totalLineItems': bom.activeItems.length,
-        'fasteners': bom.activeItems
-            .where((i) => i.category == 'Fasteners & Plates')
-            .map((i) => i.name)
-            .toList(),
         'blockers': bom.warnings.where((w) => w.startsWith('BLOCKER')).toList(),
         'warnings': bom.warnings.where((w) => w.startsWith('WARNING')).toList(),
       },
@@ -280,7 +277,6 @@ Rules:
 - WARNING = potential issue that the estimator should verify.
 - OK = explicitly confirm key items that ARE correct (max 3 OKs).
 - Focus on: R-value vs code requirement, deck/fastener compatibility, missing required fields, MA membrane with no deck type, parapet area impact on material qty, drain count vs tapered insulation, wind zone logic.
-- For fastener compatibility: the bom.fasteners list shows the ACTUAL fasteners already specified. If deck-compatible fasteners are present in that list, mark fastener compatibility as OK, not a warning.
 
 Return ONLY a valid JSON array. No markdown, no explanation.
 
@@ -301,14 +297,8 @@ ${jsonEncode(snapshot)}
         if (raw2.isEmpty) { _addError('Empty response from AI.'); return; }
 
         final raw = raw2.trim();
-        String clean = raw.replaceAll(RegExp(r'```json|```'), '').trim();
-        final startIdx = clean.indexOf('[');
-        final endIdx   = clean.lastIndexOf(']');
-        if (startIdx == -1 || endIdx == -1 || endIdx < startIdx) {
-          _addError('AI returned unexpected format. Try again.');
-          return;
-        }
-        clean = clean.substring(startIdx, endIdx + 1);
+        // Strip possible markdown fences
+        final clean = raw.replaceAll(RegExp(r'```json|```'), '').trim();
         final List<dynamic> items = jsonDecode(clean);
 
         final auditItems = items.map((item) => _AuditItem(
@@ -672,8 +662,10 @@ User request: "$userText"
   @override
   Widget build(BuildContext context) {
     return Column(children: [
-      const _SummarySection(),
-      Divider(height: 1, color: AppTheme.border),
+      if (!_chatExpanded) ...[
+        const _SummarySection(),
+        Divider(height: 1, color: AppTheme.border),
+      ],
       Expanded(child: _buildChatSection()),
     ]);
   }
@@ -745,6 +737,27 @@ User request: "$userText"
             _modeBtn('Spec', _BotMode.spec),
             _modeBtn('Assist', _BotMode.assist),
           ]),
+        ),
+        const SizedBox(width: 6),
+        // Expand / minimize button
+        GestureDetector(
+          onTap: () => setState(() => _chatExpanded = !_chatExpanded),
+          child: Tooltip(
+            message: _chatExpanded ? 'Minimize chat' : 'Expand chat',
+            child: Container(
+              padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(
+                color: _chatExpanded ? AppTheme.primary.withOpacity(0.08) : AppTheme.surfaceAlt,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Icon(
+                _chatExpanded ? Icons.fullscreen_exit : Icons.fullscreen,
+                size: 16,
+                color: _chatExpanded ? AppTheme.primary : AppTheme.textSecondary,
+              ),
+            ),
+          ),
         ),
       ]),
     );

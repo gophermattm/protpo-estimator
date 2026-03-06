@@ -338,27 +338,39 @@ class Penetrations {
 
 const List<String> kCopingWidths = ['8"', '10"', '12"', '14"', '16"'];
 const List<String> kEdgeMetalTypes = ['ES-1', 'Gravel Stop', 'Drip Edge'];
-const List<String> kGutterSizes = ['5"', '6"', '7"'];
+const List<String> kGutterSizes = ['5"', '6"', '7"', '8"'];
+
+// Edge type → metal bucket mapping
+// Wall Flashing: Parapet, Headwall, Clerestory
+// Drip Edge: Eave, Flat Drip Edge, Rake Edge, Hip, Valley, Ridge
+const Set<String> kWallFlashingEdgeTypes = {'Parapet', 'Headwall', 'Clerestory'};
 
 class MetalScope {
   // Coping
   final String copingWidth;  // from kCopingWidths
   final double copingLF;
 
-  // Edge metal
-  final String edgeMetalType; // from kEdgeMetalTypes
-  final double edgeMetalLF;
+  // Edge metal — 3 separate fields
+  final double wallFlashingLF;   // Parapet/Headwall/Clerestory edges
+  final double dripEdgeLF;       // Eave/Flat Drip Edge/Rake/Hip/Valley/Ridge edges
+  final double otherEdgeMetalLF; // Manual entry for anything else
+  final String edgeMetalType;    // kept for BOM labeling (ES-1, Gravel Stop, Drip Edge)
 
   // Gutters
   final String gutterSize;    // from kGutterSizes
   final double gutterLF;
   final int downspoutCount;
 
+  // Convenience: total edge metal
+  double get edgeMetalLF => wallFlashingLF + dripEdgeLF + otherEdgeMetalLF;
+
   const MetalScope({
     this.copingWidth = '12"',
     this.copingLF = 0.0,
+    this.wallFlashingLF = 0.0,
+    this.dripEdgeLF = 0.0,
+    this.otherEdgeMetalLF = 0.0,
     this.edgeMetalType = 'ES-1',
-    this.edgeMetalLF = 0.0,
     this.gutterSize = '6"',
     this.gutterLF = 0.0,
     this.downspoutCount = 0,
@@ -369,8 +381,10 @@ class MetalScope {
   MetalScope copyWith({
     String? copingWidth,
     double? copingLF,
+    double? wallFlashingLF,
+    double? dripEdgeLF,
+    double? otherEdgeMetalLF,
     String? edgeMetalType,
-    double? edgeMetalLF,
     String? gutterSize,
     double? gutterLF,
     int? downspoutCount,
@@ -378,8 +392,10 @@ class MetalScope {
     return MetalScope(
       copingWidth: copingWidth ?? this.copingWidth,
       copingLF: copingLF ?? this.copingLF,
+      wallFlashingLF: wallFlashingLF ?? this.wallFlashingLF,
+      dripEdgeLF: dripEdgeLF ?? this.dripEdgeLF,
+      otherEdgeMetalLF: otherEdgeMetalLF ?? this.otherEdgeMetalLF,
       edgeMetalType: edgeMetalType ?? this.edgeMetalType,
-      edgeMetalLF: edgeMetalLF ?? this.edgeMetalLF,
       gutterSize: gutterSize ?? this.gutterSize,
       gutterLF: gutterLF ?? this.gutterLF,
       downspoutCount: downspoutCount ?? this.downspoutCount,
@@ -392,16 +408,18 @@ class MetalScope {
       other is MetalScope &&
           copingWidth == other.copingWidth &&
           copingLF == other.copingLF &&
+          wallFlashingLF == other.wallFlashingLF &&
+          dripEdgeLF == other.dripEdgeLF &&
+          otherEdgeMetalLF == other.otherEdgeMetalLF &&
           edgeMetalType == other.edgeMetalType &&
-          edgeMetalLF == other.edgeMetalLF &&
           gutterSize == other.gutterSize &&
           gutterLF == other.gutterLF &&
           downspoutCount == other.downspoutCount;
 
   @override
   int get hashCode => Object.hash(
-        copingWidth, copingLF, edgeMetalType, edgeMetalLF,
-        gutterSize, gutterLF, downspoutCount,
+        copingWidth, copingLF, wallFlashingLF, dripEdgeLF,
+        otherEdgeMetalLF, edgeMetalType, gutterSize, gutterLF, downspoutCount,
       );
 }
 

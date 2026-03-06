@@ -602,10 +602,17 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
             metalScope: b.metalScope.copyWith(edgeMetalType: type)),
       );
 
-  void updateEdgeMetalLF(double lf) => _updateActive(
-        (b) =>
-            b.copyWith(metalScope: b.metalScope.copyWith(edgeMetalLF: lf)),
-      );
+  void updateWallFlashingLF(double lf) => _updateActive(
+        (b) => b.copyWith(metalScope: b.metalScope.copyWith(wallFlashingLF: lf)));
+
+  void updateDripEdgeLF(double lf) => _updateActive(
+        (b) => b.copyWith(metalScope: b.metalScope.copyWith(dripEdgeLF: lf)));
+
+  void updateOtherEdgeMetalLF(double lf) => _updateActive(
+        (b) => b.copyWith(metalScope: b.metalScope.copyWith(otherEdgeMetalLF: lf)));
+
+  // Legacy — kept to avoid compile errors in any code still calling it
+  void updateEdgeMetalLF(double lf) => updateDripEdgeLF(lf);
 
   void updateGutterSize(String size) => _updateActive(
         (b) => b.copyWith(

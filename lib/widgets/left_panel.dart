@@ -155,7 +155,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   bool _zonesOverridden   = false;
 
   // ── System Specs ─────────────────────────────────────────────────────────────
-  String _projectType      = 'New Construction';
+  String _projectType      = 'Tear-off & Replace';
   String _deckType         = 'Metal';
   String _vaporRetarder    = 'None';
   String _existingRoofType = 'BUR';
@@ -168,7 +168,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   String _l1Attachment     = 'Mechanically Attached';
   String _l2Type           = 'Polyiso';
   String _l2Thickness      = '2.0';
-  String _l2Attachment     = 'Adhered';
+  String _l2Attachment     = 'Mechanically Attached';
   bool   _hasTapered       = false;
   String _taperSlope       = '1/4:12';
   String _taperMinThick    = '1.0';
@@ -212,9 +212,11 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
   // ── Metal Scope ──────────────────────────────────────────────────────────────
   String _copingWidth  = '12"';
-  final _cCopingLF     = TextEditingController();
-  String _edgeMetalType = 'ES-1';
-  final _cEdgeMetalLF  = TextEditingController();
+  final _cCopingLF        = TextEditingController();
+  String _edgeMetalType   = 'ES-1';
+  final _cWallFlashingLF  = TextEditingController();
+  final _cDripEdgeLF      = TextEditingController();
+  final _cOtherEdgeLF     = TextEditingController();
   String _gutterSize   = '6"';
   final _cGutterLF     = TextEditingController();
   final _cDownspouts   = TextEditingController();
@@ -245,6 +247,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     final lf = double.tryParse(_cParapetLF.text) ?? 0;
     return (h / 12) * lf;
   }
+  double get _parapetHeightVal => double.tryParse(_cParapetHeight.text) ?? 0;
   double get _parapetLFval => double.tryParse(_cParapetLF.text) ?? 0;
   double get _termBarLF    => _termBarOverride
       ? (double.tryParse(_cTermBarLF.text) ?? _parapetLFval)
@@ -281,7 +284,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _cWallHeight, _cWallLF, _cRtuLF, _cDrainCountPen,
       _cSmallPipes, _cLargePipes, _cSkylights, _cScuppers, _cExpJointLF, _cPitchPans,
       _cParapetHeight, _cParapetLF, _cTermBarLF,
-      _cCopingLF, _cEdgeMetalLF, _cGutterLF, _cDownspouts,
+      _cCopingLF, _cWallFlashingLF, _cDripEdgeLF, _cOtherEdgeLF, _cGutterLF, _cDownspouts,
       _cWasteMaterial, _cWasteMetal, _cWasteAccessory,
     ]) c.dispose();
     for (final s in _shapes) s.dispose();
@@ -289,6 +292,35 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   }
 
   // ─── Sync from provider → controllers ────────────────────────────────────────
+  String? _checkPreviousSectionComplete(int idx) {
+    switch (idx) {
+      case 0: // Project Info
+        final info = ref.read(projectInfoProvider);
+        if (info.projectName.isEmpty) return 'Project Info: Project Name is required.';
+        if (info.zipCode.length < 5) return 'Project Info: ZIP Code is required (5 digits).';
+        return null;
+      case 1: // Geometry
+        final geo = ref.read(roofGeometryProvider);
+        if (geo.totalArea <= 0) return 'Geometry: Total Area is 0 — enter edge lengths.';
+        return null;
+      case 2: // System Specs
+        final specs = ref.read(systemSpecsProvider);
+        if (specs.deckType.isEmpty) return 'System Specs: Deck Type is required.';
+        return null;
+      case 3: // Insulation
+        final ins = ref.read(insulationSystemProvider);
+        if (ins.layer1.thickness <= 0) return 'Insulation: Layer 1 thickness is 0.';
+        return null;
+      default: return null;
+    }
+  }
+
+  void _autosave() {
+    final svc   = ref.read(firestoreServiceProvider);
+    final state = ref.read(estimatorProvider);
+    svc.save(state).catchError((_) {}); // silent autosave on section switch
+  }
+
   void _syncFromState() {
     final state = ref.read(estimatorProvider);
     final info  = state.projectInfo;
@@ -357,7 +389,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
     // ── Metal Scope ─────────────────────────────────────────────────
     _set(_cCopingLF,    _nz(met.copingLF));
-    _set(_cEdgeMetalLF, _nz(met.edgeMetalLF));
+    _set(_cWallFlashingLF, _nz(met.wallFlashingLF));
+    _set(_cDripEdgeLF,     _nz(met.dripEdgeLF));
+    _set(_cOtherEdgeLF,    _nz(met.otherEdgeMetalLF));
     _set(_cGutterLF,    _nz(met.gutterLF));
     _set(_cDownspouts,  met.downspoutCount > 0 ? '${met.downspoutCount}' : '');
 
@@ -369,7 +403,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
           ? 'R-${info.requiredRValue!.toStringAsFixed(0)} (req)' : null;
       _roofSlope       = geo.roofSlope;
       _zonesOverridden = geo.windZones.perimeterZoneWidth > 0;
-      _projectType     = specs.projectType.isNotEmpty ? specs.projectType : 'New Construction';
+      _projectType     = specs.projectType.isNotEmpty ? specs.projectType : 'Tear-off & Replace';
       _deckType        = specs.deckType.isNotEmpty    ? specs.deckType    : 'Metal';
       _vaporRetarder   = specs.vaporRetarder.isNotEmpty ? specs.vaporRetarder : 'None';
       _existingRoofType = specs.existingRoofType.isNotEmpty ? specs.existingRoofType : 'BUR';
@@ -379,7 +413,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _l1Attachment    = ins.layer1.attachmentMethod;
       _l2Type          = ins.layer2?.type ?? 'Polyiso';
       _l2Thickness     = (ins.layer2?.thickness ?? 2.0).toString();
-      _l2Attachment    = ins.layer2?.attachmentMethod ?? 'Adhered';
+      _l2Attachment    = ins.layer2?.attachmentMethod ?? 'Mechanically Attached';
       _hasTapered      = ins.hasTaperedInsulation;
       _taperSlope      = ins.tapered?.taperSlope ?? '1/4:12';
       _taperMinThick   = (ins.tapered?.minThicknessAtDrain ?? 1.0).toString();
@@ -477,23 +511,26 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   }
 
   void _syncEdgeTypeTotals() {
-    double eaveLF = 0, headwallLF = 0, parapetLF = 0;
+    double wallFlashingLF = 0, dripEdgeLF = 0, parapetLF = 0, headwallLF = 0;
     int corners = 0;
+    // Wall flashing bucket: Parapet, Headwall, Clerestory
+    const wallTypes = {'Parapet', 'Headwall', 'Clerestory'};
+    // Drip edge bucket: Eave, Flat Drip Edge, Rake Edge, Hip, Valley, Ridge
+    const dripTypes = {'Eave', 'Flat Drip Edge', 'Rake Edge', 'Hip', 'Valley', 'Ridge'};
     for (final s in _shapes) {
       final edges = s.edgeLengths; final types = s.edgeTypes;
-      corners += s.edgeLengths.length;  // use actual edge count, not lookup
+      corners += s.edgeLengths.length;
       for (int i = 0; i < edges.length && i < types.length; i++) {
         final len = edges[i].abs();
-        switch (types[i]) {
-          case 'Eave':     eaveLF    += len; break;
-          case 'Headwall': headwallLF += len; break;
-          case 'Parapet':  parapetLF  += len; break;
-          default: break;
-        }
+        final t   = types[i];
+        if (wallTypes.contains(t)) { wallFlashingLF += len; }
+        else if (dripTypes.contains(t)) { dripEdgeLF += len; }
+        if (t == 'Headwall') headwallLF += len;
+        if (t == 'Parapet')  parapetLF  += len;
       }
     }
     if (corners > 0) {
-      _set(_cCornerCount, '$corners');
+      _set(_cCornerCount, '\$corners');
       ref.read(estimatorProvider.notifier).updateOutsideCorners(corners);
     }
     final n = ref.read(estimatorProvider.notifier);
@@ -503,10 +540,11 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       n.updateParapetTotalLF(parapetLF);
       if (!_termBarOverride) _set(_cTermBarLF, parapetLF.toStringAsFixed(1));
     }
-    if (eaveLF > 0) {
-      _set(_cEdgeMetalLF, eaveLF.toStringAsFixed(1));
-      n.updateEdgeMetalLF(eaveLF);
-    }
+    // Auto-fill metal scope from geometry edge types
+    _set(_cWallFlashingLF, wallFlashingLF.toStringAsFixed(1));
+    _set(_cDripEdgeLF,     dripEdgeLF.toStringAsFixed(1));
+    n.updateWallFlashingLF(wallFlashingLF);
+    n.updateDripEdgeLF(dripEdgeLF);
   }
 
   void _pushShape(int i) {
@@ -669,6 +707,23 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       child: Column(children: [
         InkWell(
           onTap: () {
+            if (_expandedSection != idx && _expandedSection >= 0) {
+              _autosave();
+              final warning = _checkPreviousSectionComplete(_expandedSection);
+              if (warning != null && mounted) {
+                ScaffoldMessenger.of(context).clearSnackBars();
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Row(children: [
+                    const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(warning, style: const TextStyle(fontSize: 13))),
+                  ]),
+                  backgroundColor: AppTheme.warning,
+                  duration: const Duration(seconds: 4),
+                  behavior: SnackBarBehavior.floating,
+                ));
+              }
+            }
             setState(() => _expandedSection = open ? -1 : idx);
             if (!open) {
               // Scroll section into view after it expands
@@ -857,7 +912,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         attachmentMethod: 'Mechanically Attached');
     final defaultL2 = InsulationLayer(
         type: 'Polyiso', thickness: thickness,
-        attachmentMethod: 'Adhered');
+        attachmentMethod: 'Mechanically Attached');
 
     setState(() {
       _insLayers    = layers.toString();
@@ -865,7 +920,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _l2Thickness  = thickness.toString();
       _l1Type = _l2Type = 'Polyiso';
       _l1Attachment = 'Mechanically Attached';
-      _l2Attachment = 'Adhered';
+      _l2Attachment = 'Mechanically Attached';
     });
 
     n.setNumberOfLayers(layers);
@@ -1467,12 +1522,34 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   // Toggle hidden per design decision — parapet section off by default.
   Widget _buildParapet() {
     final n = ref.read(estimatorProvider.notifier);
+    // Parapet auto-expands when height or LF is non-zero; no explicit toggle
+    final hasData = _parapetHeightVal > 0 || _parapetLFval > 0;
+    if (!hasData) {
+      // Show compact prompt row
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _info('Enter Parapet Height or LF below to expand parapet details.',
+            color: AppTheme.textMuted),
+        _sp8,
+        Row(children: [
+          Expanded(child: _tf('Parapet Height', '0', _cParapetHeight, suffix: 'in',
+              kb: TextInputType.number, onChange: (v) {
+                final val = double.tryParse(v) ?? 0;
+                setState(() { _hasParapet = val > 0; });
+                n.updateParapetHeight(val);
+                n.setParapetEnabled(val > 0);
+              })),
+          const SizedBox(width: 8),
+          Expanded(child: _tf('Total LF', '0', _cParapetLF, suffix: 'LF',
+              kb: TextInputType.number, onChange: (v) {
+                final val = double.tryParse(v) ?? 0;
+                setState(() { _hasParapet = val > 0; if (!_termBarOverride) _cTermBarLF.text = v; });
+                n.updateParapetTotalLF(val);
+                n.setParapetEnabled(val > 0);
+              })),
+        ]),
+      ]);
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _toggle('Has Parapet Walls', 'Wall flashing, termination bar', _hasParapet, (v) {
-        setState(() => _hasParapet = v);
-        n.setParapetEnabled(v);
-      }),
-      if (_hasParapet) ...[
         _sp16,
         Row(children: [
           Expanded(child: _tf('Parapet Height *', '0', _cParapetHeight, suffix: 'in',
@@ -1571,8 +1648,25 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _dd('Edge Metal Type', _edgeMetalType, kEdgeMetalTypes, (v) {
         setState(() => _edgeMetalType = v!); n.updateEdgeMetalType(v!); }),
       _sp8,
-      _tf('Edge Metal LF', '0', _cEdgeMetalLF, suffix: 'LF',
-          kb: TextInputType.number, onChange: (v) => n.updateEdgeMetalLF(double.tryParse(v) ?? 0)),
+      _lbl('Wall Flashing LF'), _sp4,
+      _info('Auto-filled from Parapet/Headwall/Clerestory edges in geometry.',
+          color: AppTheme.textMuted),
+      _sp4,
+      _tf('Wall Flashing LF', '0', _cWallFlashingLF, suffix: 'LF',
+          kb: TextInputType.number,
+          onChange: (v) => n.updateWallFlashingLF(double.tryParse(v) ?? 0)),
+      _sp8,
+      _lbl('Drip Edge LF'), _sp4,
+      _info('Auto-filled from Eave/Flat Drip Edge/Rake/Hip/Valley/Ridge edges.',
+          color: AppTheme.textMuted),
+      _sp4,
+      _tf('Drip Edge LF', '0', _cDripEdgeLF, suffix: 'LF',
+          kb: TextInputType.number,
+          onChange: (v) => n.updateDripEdgeLF(double.tryParse(v) ?? 0)),
+      _sp8,
+      _tf('Other Edge Metal LF', '0', _cOtherEdgeLF, suffix: 'LF',
+          kb: TextInputType.number,
+          onChange: (v) => n.updateOtherEdgeMetalLF(double.tryParse(v) ?? 0)),
       _sp12,
       Row(children: [
         Expanded(child: _dd('Gutter Size', _gutterSize, kGutterSizes, (v) {
