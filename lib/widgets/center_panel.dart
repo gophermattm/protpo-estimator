@@ -138,6 +138,14 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
       });
     } catch (e) {
       setState(() => _loadingPrices = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Pricing unavailable: ${e.toString().split('\n').first}'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
     }
   }
 

@@ -8,7 +8,6 @@
 ///   button at the end. Tapping a tab calls setActiveBuilding(index).
 ///   Double-tapping a tab name lets the user rename it inline.
 
-import 'dart:typed_data';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
@@ -78,23 +77,6 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
     }
   }
 
-  /// Picks an image file from disk and stores bytes in companyLogoProvider.
-  Future<void> _pickLogo() async {
-    final input = html.FileUploadInputElement()
-      ..accept = 'image/*'
-      ..click();
-    await input.onChange.first;
-    final file = input.files?.first;
-    if (file == null) return;
-    final reader = html.FileReader();
-    reader.readAsArrayBuffer(file);
-    await reader.onLoad.first;
-    final bytes = reader.result as List<int>;
-    ref.read(companyLogoProvider.notifier).state = bytes;
-  }
-
-  void _clearLogo() =>
-      ref.read(companyLogoProvider.notifier).state = null;
 
   Future<void> _saveProject() async {
     if (_isSaving) return;
@@ -164,9 +146,12 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
       }
     });
 
+    final isMobile = screenWidth <= 768;
+
     return Scaffold(
       backgroundColor: AppTheme.background,
-      appBar: _buildAppBar(),
+      resizeToAvoidBottomInset: true,
+      appBar: _buildAppBar(isMobile),
       body: Column(
         children: [
           // Building tab bar — always visible above the 3-panel layout
@@ -184,11 +169,12 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
     );
   }
 
-  PreferredSizeWidget _buildAppBar() {
+  PreferredSizeWidget _buildAppBar(bool isMobile) {
     return AppBar(
       backgroundColor: Colors.white,
       elevation: 0,
       scrolledUnderElevation: 1,
+      titleSpacing: isMobile ? 8 : null,
       title: Row(
         children: [
           Container(
@@ -197,58 +183,50 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
               color: AppTheme.primary.withOpacity(0.1),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Icon(Icons.roofing, color: AppTheme.primary, size: 24),
+            child: Icon(Icons.roofing, color: AppTheme.primary, size: isMobile ? 20 : 24),
           ),
-          const SizedBox(width: 12),
-          Text('ProTPO', style: TextStyle(color: AppTheme.textPrimary,
-              fontWeight: FontWeight.w700, fontSize: 20)),
-          UnsavedDot(visible: _hasUnsavedChanges && _currentProjectId != null),
           const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(color: AppTheme.accent.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(4)),
-            child: Text('ESTIMATOR', style: TextStyle(color: AppTheme.accent,
-                fontWeight: FontWeight.w600, fontSize: 10, letterSpacing: 1)),
-          ),
-          // ── Company logo (top-center) ──────────────────────────────
-          Expanded(child: _buildLogoWidget()),
+          Text('ProTPO', style: TextStyle(color: AppTheme.textPrimary,
+              fontWeight: FontWeight.w700, fontSize: isMobile ? 16 : 20)),
+          UnsavedDot(visible: _hasUnsavedChanges && _currentProjectId != null),
+          if (!isMobile) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(color: AppTheme.accent.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(4)),
+              child: Text('ESTIMATOR', style: TextStyle(color: AppTheme.accent,
+                  fontWeight: FontWeight.w600, fontSize: 10, letterSpacing: 1)),
+            ),
+          ],
         ],
       ),
       actions: [
-        // Open project
-        TextButton.icon(
-          onPressed: _openProject,
-          icon: const Icon(Icons.folder_open, size: 18),
-          label: const Text('Open'),
-          style: TextButton.styleFrom(foregroundColor: AppTheme.textSecondary),
-        ),
-        const SizedBox(width: 4),
-        // Save project
-        if (_isSaving)
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: SizedBox(width: 18, height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2)),
-          )
-        else
-          TextButton.icon(
-            onPressed: _saveProject,
-            icon: Icon(_saveSuccess ? Icons.check_circle : Icons.save_outlined, size: 18,
-                color: _saveSuccess ? AppTheme.accent : null),
-            label: Text(_saveSuccess ? 'Saved!' : 'Save',
-                style: TextStyle(color: _saveSuccess ? AppTheme.accent : null)),
+        if (isMobile) ...[
+          // Compact icon-only buttons on mobile
+          IconButton(
+            onPressed: _openProject,
+            icon: const Icon(Icons.folder_open, size: 20),
+            color: AppTheme.textSecondary,
+            tooltip: 'Open Project',
           ),
-        const SizedBox(width: 8),
-        if (_isExporting)
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            child: SizedBox(width: 18, height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
-          )
-        else
+          if (_isSaving)
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: SizedBox(width: 18, height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2)),
+            )
+          else
+            IconButton(
+              onPressed: _saveProject,
+              icon: Icon(_saveSuccess ? Icons.check_circle : Icons.save_outlined, size: 20,
+                  color: _saveSuccess ? AppTheme.accent : AppTheme.textSecondary),
+              tooltip: _saveSuccess ? 'Saved!' : 'Save',
+            ),
           PopupMenuButton<String>(
             onSelected: _export,
+            icon: Icon(Icons.download, size: 20, color: AppTheme.primary),
+            tooltip: 'Export',
             itemBuilder: (_) => [
               const PopupMenuItem(value: 'pdf',
                   child: Row(children: [
@@ -261,81 +239,75 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
                     SizedBox(width: 10), Text('Download CSV'),
                   ])),
             ],
-            child: Container(
-              margin: const EdgeInsets.only(right: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppTheme.primary,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Row(children: [
-                Icon(Icons.download, size: 16, color: Colors.white),
-                SizedBox(width: 6),
-                Text('Export', style: TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
-                SizedBox(width: 4),
-                Icon(Icons.arrow_drop_down, size: 16, color: Colors.white),
-              ]),
-            ),
           ),
-        const SizedBox(width: 16),
+        ] else ...[
+          // Full labels on desktop/tablet
+          TextButton.icon(
+            onPressed: _openProject,
+            icon: const Icon(Icons.folder_open, size: 18),
+            label: const Text('Open'),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.textSecondary),
+          ),
+          const SizedBox(width: 4),
+          if (_isSaving)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: SizedBox(width: 18, height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2)),
+            )
+          else
+            TextButton.icon(
+              onPressed: _saveProject,
+              icon: Icon(_saveSuccess ? Icons.check_circle : Icons.save_outlined, size: 18,
+                  color: _saveSuccess ? AppTheme.accent : null),
+              label: Text(_saveSuccess ? 'Saved!' : 'Save',
+                  style: TextStyle(color: _saveSuccess ? AppTheme.accent : null)),
+            ),
+          const SizedBox(width: 8),
+          if (_isExporting)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              child: SizedBox(width: 18, height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+            )
+          else
+            PopupMenuButton<String>(
+              onSelected: _export,
+              itemBuilder: (_) => [
+                const PopupMenuItem(value: 'pdf',
+                    child: Row(children: [
+                      Icon(Icons.picture_as_pdf, size: 16, color: Color(0xFFEF4444)),
+                      SizedBox(width: 10), Text('Download PDF'),
+                    ])),
+                const PopupMenuItem(value: 'csv',
+                    child: Row(children: [
+                      Icon(Icons.table_chart, size: 16, color: Color(0xFF10B981)),
+                      SizedBox(width: 10), Text('Download CSV'),
+                    ])),
+              ],
+              child: Container(
+                margin: const EdgeInsets.only(right: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppTheme.primary,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Row(children: [
+                  Icon(Icons.download, size: 16, color: Colors.white),
+                  SizedBox(width: 6),
+                  Text('Export', style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+                  SizedBox(width: 4),
+                  Icon(Icons.arrow_drop_down, size: 16, color: Colors.white),
+                ]),
+              ),
+            ),
+          const SizedBox(width: 16),
+        ],
       ],
     );
   }
 
-  Widget _buildLogoWidget() {
-    final logoBytes = ref.watch(companyLogoProvider);
-    if (logoBytes != null) {
-      // Show uploaded logo with remove button
-      return Center(
-        child: Stack(
-          alignment: Alignment.topRight,
-          children: [
-            Container(
-              height: 36,
-              constraints: const BoxConstraints(maxWidth: 160),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                border: Border.all(color: AppTheme.border),
-                borderRadius: BorderRadius.circular(6),
-                color: AppTheme.surfaceAlt,
-              ),
-              child: Image.memory(
-                Uint8List.fromList(logoBytes),
-                fit: BoxFit.contain,
-              ),
-            ),
-            GestureDetector(
-              onTap: _clearLogo,
-              child: Container(
-                width: 16, height: 16,
-                decoration: BoxDecoration(
-                  color: AppTheme.error,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.close, size: 10, color: Colors.white),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    // No logo — show upload button
-    return Center(
-      child: TextButton.icon(
-        onPressed: _pickLogo,
-        icon: const Icon(Icons.upload, size: 16),
-        label: const Text('Upload Logo'),
-        style: TextButton.styleFrom(
-          foregroundColor: AppTheme.textSecondary,
-          textStyle: const TextStyle(fontSize: 12),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          side: BorderSide(color: AppTheme.border),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-        ),
-      ),
-    );
-  }
 
   Widget _buildDesktopLayout() {
     return Row(
@@ -388,15 +360,22 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
       length: 3,
       child: Column(
         children: [
-          TabBar(
-            labelColor: AppTheme.primary,
-            unselectedLabelColor: AppTheme.textSecondary,
-            indicatorColor: AppTheme.primary,
-            tabs: const [
-              Tab(text: 'Inputs'),
-              Tab(text: 'Estimate'),
-              Tab(text: 'Summary'),
-            ],
+          Material(
+            color: Colors.white,
+            child: TabBar(
+              labelColor: AppTheme.primary,
+              unselectedLabelColor: AppTheme.textSecondary,
+              indicatorColor: AppTheme.primary,
+              indicatorWeight: 3,
+              isScrollable: false,
+              labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+              labelPadding: const EdgeInsets.symmetric(horizontal: 16),
+              tabs: const [
+                Tab(height: 44, text: 'Inputs'),
+                Tab(height: 44, text: 'Estimate'),
+                Tab(height: 44, text: 'Summary'),
+              ],
+            ),
           ),
           const Expanded(
             child: TabBarView(

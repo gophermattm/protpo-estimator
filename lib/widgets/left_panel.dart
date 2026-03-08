@@ -566,6 +566,35 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     _syncEdgeTypeTotals();
   }
 
+  /// Available width from LayoutBuilder, updated each build.
+  double _panelWidth = 400;
+
+  /// Whether the panel is narrow enough to stack side-by-side fields vertically.
+  /// On mobile (full-width panel), check if screen < 400px.
+  /// On desktop/tablet the panel is 280-320px — always narrow enough to show rows.
+  bool get _isNarrow => _panelWidth < 360;
+
+  /// Builds either a Row or Column depending on available width.
+  Widget _responsiveRow(List<Widget> children, {double spacing = 8}) {
+    if (_isNarrow) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (int i = 0; i < children.length; i++) ...[
+            if (i > 0) SizedBox(height: spacing),
+            children[i],
+          ],
+        ],
+      );
+    }
+    return Row(children: [
+      for (int i = 0; i < children.length; i++) ...[
+        if (i > 0) SizedBox(width: spacing),
+        Expanded(child: children[i]),
+      ],
+    ]);
+  }
+
   // ─── BUILD ───────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
@@ -578,6 +607,8 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       }
     });
 
+    return LayoutBuilder(builder: (context, constraints) {
+    _panelWidth = constraints.maxWidth;
     return Column(children: [
       Container(
         padding: const EdgeInsets.all(16),
@@ -585,7 +616,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         child: Row(children: [
           Icon(Icons.input, color: AppTheme.primary, size: 20),
           const SizedBox(width: 8),
-          Text('Project Inputs', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16, color: AppTheme.textPrimary)),
+          Expanded(child: Text('Project Inputs', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16, color: AppTheme.textPrimary))),
         ]),
       ),
       Expanded(
@@ -603,6 +634,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         ]),
       ),
     ]);
+    });
   }
 
 
@@ -773,7 +805,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
           onChange: (v) => n.updateProjectAddress(v)),
       _sp12,
       _lbl('ZIP Code *'), _sp4,
-      SizedBox(height: 40, child: TextField(
+      SizedBox(height: 44, child: TextField(
         controller: _cZipCode, keyboardType: TextInputType.number, maxLength: 5,
         onChanged: (v) { n.updateZipCode(v); _onZipChange(v); },
         decoration: _dec('00000', counterText: '',
@@ -804,7 +836,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _tf('Estimator Name', 'Optional', _cEstimatorName, onChange: (v) => n.updateEstimatorName(v)),
       _sp12,
       _lbl('Estimate Date'), _sp4,
-      SizedBox(height: 40, child: TextField(enabled: false,
+      SizedBox(height: 44, child: TextField(enabled: false,
           controller: TextEditingController(text: _estimateDate),
           decoration: _dec('', suffix: Icon(Icons.calendar_today, size: 16, color: AppTheme.textMuted), disabled: true),
           style: const TextStyle(fontSize: 14))),
@@ -930,19 +962,18 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   Widget _buildGeometry() {
     final n = ref.read(estimatorProvider.notifier);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Expanded(child: _tf('Building Height *', '0', _cBuildingHeight, suffix: 'ft',
+      _responsiveRow([
+        _tf('Building Height *', '0', _cBuildingHeight, suffix: 'ft',
             kb: TextInputType.number, onChange: (v) {
               final h = double.tryParse(v) ?? 0;
               n.updateBuildingHeight(h);
               _autoZoneWidth(height: h);
-            })),
-        const SizedBox(width: 8),
-        Expanded(child: _dd('Roof Slope', _roofSlope,
+            }),
+        _dd('Roof Slope', _roofSlope,
             ['Flat','1/4:12','1/2:12','1:12','2:12','Custom'], (v) {
           setState(() => _roofSlope = v!);
           n.updateRoofSlope(v!);
-        })),
+        }),
       ]),
       _sp16,
 
@@ -973,10 +1004,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
       // Totals
       _lbl('Calculated Totals'), _sp8,
-      Row(children: [
-        Expanded(child: _calcBox('Total Area', _totalArea > 0 ? '${_totalArea.toStringAsFixed(0)} sq ft' : '—', Icons.crop_square)),
-        const SizedBox(width: 8),
-        Expanded(child: _calcBox('Perimeter', _totalPerimeter > 0 ? '${_totalPerimeter.toStringAsFixed(0)} LF' : '—', Icons.border_outer)),
+      _responsiveRow([
+        _calcBox('Total Area', _totalArea > 0 ? '${_totalArea.toStringAsFixed(0)} sq ft' : '—', Icons.crop_square),
+        _calcBox('Perimeter', _totalPerimeter > 0 ? '${_totalPerimeter.toStringAsFixed(0)} LF' : '—', Icons.border_outer),
       ]),
       _sp16,
 
@@ -990,20 +1020,19 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _sp4,
       _info('Corner = # outside corners × width². Perimeter = (perim LF × width) − corners. Field = total − both.', color: AppTheme.primary),
       _sp8,
-      Row(children: [
-        Expanded(child: _tfHelper('Perimeter Zone Width', 'Auto', _cPerimeterWidth,
+      _responsiveRow([
+        _tfHelper('Perimeter Zone Width', 'Auto', _cPerimeterWidth,
             helper: 'From Versico table — edit to override', suffix: 'ft',
             kb: TextInputType.number, onChange: (v) {
           setState(() => _zonesOverridden = true);
           _pushZones(double.tryParse(v) ?? 0);
-        })),
-        const SizedBox(width: 8),
-        Expanded(child: _tfHelper('# Outside Corners', '4', _cCornerCount,
+        }),
+        _tfHelper('# Outside Corners', '4', _cCornerCount,
             helper: 'Count of outside roof corners', kb: TextInputType.number,
             onChange: (_) {
               setState(() {});
               if (_perimWidth > 0) _pushZones(_perimWidth);
-            })),
+            }),
       ]),
       _sp8,
       _tf('Number of Drains', '0', _cDrainCount, kb: TextInputType.number, onChange: (v) {
@@ -1080,7 +1109,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
                   color: AppTheme.textMuted, letterSpacing: 0.3)),
           const SizedBox(height: 3),
           Row(children: [
-            Expanded(flex: 2, child: SizedBox(height: 40, child: TextField(
+            Expanded(flex: 2, child: SizedBox(height: 44, child: TextField(
               controller: s.edgeControllers[e],
               keyboardType: TextInputType.number,
               onChanged: (_) { setState(() {}); _pushShape(idx); },
@@ -1095,7 +1124,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
               style: const TextStyle(fontSize: 14),
             ))),
             const SizedBox(width: 6),
-            Expanded(flex: 3, child: SizedBox(height: 40, child: DropdownButtonFormField<String>(
+            Expanded(flex: 3, child: SizedBox(height: 44, child: DropdownButtonFormField<String>(
               value: kEdgeTypes.contains(
                   e < s.edgeTypes.length ? s.edgeTypes[e] : kDefaultEdgeType)
                   ? (e < s.edgeTypes.length ? s.edgeTypes[e] : kDefaultEdgeType)
@@ -1276,13 +1305,12 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
             _tf('Board Type (Versico/Tri-Built)', 'e.g. Versico Tapered Polyiso', _cTaperBoard,
                 onChange: (_) => pushTaper()),
             _sp8,
-            Row(children: [
-              Expanded(child: _dd('Taper Slope', _taperSlope, kTaperSlopeOptions, (v) {
-                setState(() => _taperSlope = v!); pushTaper(); })),
-              const SizedBox(width: 8),
-              Expanded(child: _dd('Min at Drain', _taperMinThick,
+            _responsiveRow([
+              _dd('Taper Slope', _taperSlope, kTaperSlopeOptions, (v) {
+                setState(() => _taperSlope = v!); pushTaper(); }),
+              _dd('Min at Drain', _taperMinThick,
                   kTaperMinThicknesses.map((v) => v.toString()).toList(), (v) {
-                setState(() => _taperMinThick = v!); pushTaper(); })),
+                setState(() => _taperMinThick = v!); pushTaper(); }),
             ]),
             _sp8,
             _tf('System Area', '0', _cTaperArea, suffix: 'sq ft',
@@ -1303,13 +1331,12 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
           child: Column(children: [
             _dd('Type', _cbType, kCoverBoardTypes, (v) { setState(() => _cbType = v!); pushCB(); }),
             _sp8,
-            Row(children: [
-              Expanded(child: _dd('Thickness', _cbThickness,
+            _responsiveRow([
+              _dd('Thickness', _cbThickness,
                   kCoverBoardThicknesses.map((v) => v.toString()).toList(), (v) {
-                setState(() => _cbThickness = v!); pushCB(); })),
-              const SizedBox(width: 8),
-              Expanded(child: _dd('Attachment', _cbAttachment, kAttachmentMethods, (v) {
-                setState(() => _cbAttachment = v!); pushCB(); })),
+                setState(() => _cbThickness = v!); pushCB(); }),
+              _dd('Attachment', _cbAttachment, kAttachmentMethods, (v) {
+                setState(() => _cbAttachment = v!); pushCB(); }),
             ]),
           ]),
         ),
@@ -1438,7 +1465,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
           // Field roll — user selects width
           _lbl('FIELD AREA ROLL (user-selectable)'), _sp4,
-          SizedBox(height: 40, child: DropdownButtonFormField<String>(
+          SizedBox(height: 44, child: DropdownButtonFormField<String>(
             value: ["5'","10'","12'"].contains(_rollWidth) ? _rollWidth : "10'",
             decoration: InputDecoration(
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1479,39 +1506,35 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _tf('Headwall Flashing Height', '12', _cWallHeight, suffix: 'in'),
       _sp12, _tf('Total Headwall LF', '0', _cWallLF, suffix: 'LF'),
       _sp16, _lbl('PENETRATIONS'), _sp8,
-      Row(children: [
-        Expanded(child: _tf('RTU Curb LF', '0', _cRtuLF, kb: TextInputType.number,
-            onChange: (v) => n.updateRtuTotalLF(double.tryParse(v) ?? 0))),
-        const SizedBox(width: 8),
-        Expanded(child: _tf('Drains', '0', _cDrainCountPen, kb: TextInputType.number)),
+      _responsiveRow([
+        _tf('RTU Curb LF', '0', _cRtuLF, kb: TextInputType.number,
+            onChange: (v) => n.updateRtuTotalLF(double.tryParse(v) ?? 0)),
+        _tf('Drains', '0', _cDrainCountPen, kb: TextInputType.number),
       ]),
       _sp8,
       _dd('Drain Type', _drainType, ['Standard','Overflow','Retrofit'], (v) {
         setState(() => _drainType = v!); n.updateDrainType(v!); }),
       _sp8,
-      Row(children: [
-        Expanded(child: _tf('Pipes (sm 1–4")', '0', _cSmallPipes, kb: TextInputType.number,
-            onChange: (v) => n.updateSmallPipeCount(int.tryParse(v) ?? 0))),
-        const SizedBox(width: 8),
-        Expanded(child: _tf('Pipes (lg 4–12")', '0', _cLargePipes, kb: TextInputType.number,
-            onChange: (v) => n.updateLargePipeCount(int.tryParse(v) ?? 0))),
+      _responsiveRow([
+        _tf('Pipes (sm 1–4")', '0', _cSmallPipes, kb: TextInputType.number,
+            onChange: (v) => n.updateSmallPipeCount(int.tryParse(v) ?? 0)),
+        _tf('Pipes (lg 4–12")', '0', _cLargePipes, kb: TextInputType.number,
+            onChange: (v) => n.updateLargePipeCount(int.tryParse(v) ?? 0)),
       ]),
       _sp8,
-      Row(children: [
-        Expanded(child: _tf('Skylights', '0', _cSkylights, kb: TextInputType.number,
-            onChange: (v) => n.updateSkylightCount(int.tryParse(v) ?? 0))),
-        const SizedBox(width: 8),
-        Expanded(child: _tf('Scuppers', '0', _cScuppers, kb: TextInputType.number,
-            onChange: (v) => n.updateScupperCount(int.tryParse(v) ?? 0))),
+      _responsiveRow([
+        _tf('Skylights', '0', _cSkylights, kb: TextInputType.number,
+            onChange: (v) => n.updateSkylightCount(int.tryParse(v) ?? 0)),
+        _tf('Scuppers', '0', _cScuppers, kb: TextInputType.number,
+            onChange: (v) => n.updateScupperCount(int.tryParse(v) ?? 0)),
       ]),
       _sp8,
-      Row(children: [
-        Expanded(child: _tf('Expansion Joint LF', '0', _cExpJointLF, suffix: 'LF',
+      _responsiveRow([
+        _tf('Expansion Joint LF', '0', _cExpJointLF, suffix: 'LF',
             kb: TextInputType.number,
-            onChange: (v) => n.updateExpansionJointLF(double.tryParse(v) ?? 0))),
-        const SizedBox(width: 8),
-        Expanded(child: _tf('Pitch Pans', '0', _cPitchPans, kb: TextInputType.number,
-            onChange: (v) => n.updatePitchPanCount(int.tryParse(v) ?? 0))),
+            onChange: (v) => n.updateExpansionJointLF(double.tryParse(v) ?? 0)),
+        _tf('Pitch Pans', '0', _cPitchPans, kb: TextInputType.number,
+            onChange: (v) => n.updatePitchPanCount(int.tryParse(v) ?? 0)),
       ]),
     ]);
   }
@@ -1528,39 +1551,37 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         _info('Enter Parapet Height or LF below to expand parapet details.',
             color: AppTheme.textMuted),
         _sp8,
-        Row(children: [
-          Expanded(child: _tf('Parapet Height', '0', _cParapetHeight, suffix: 'in',
+        _responsiveRow([
+          _tf('Parapet Height', '0', _cParapetHeight, suffix: 'in',
               kb: TextInputType.number, onChange: (v) {
                 final val = double.tryParse(v) ?? 0;
                 setState(() { _hasParapet = val > 0; });
                 n.updateParapetHeight(val);
                 n.setParapetEnabled(val > 0);
-              })),
-          const SizedBox(width: 8),
-          Expanded(child: _tf('Total LF', '0', _cParapetLF, suffix: 'LF',
+              }),
+          _tf('Total LF', '0', _cParapetLF, suffix: 'LF',
               kb: TextInputType.number, onChange: (v) {
                 final val = double.tryParse(v) ?? 0;
                 setState(() { _hasParapet = val > 0; if (!_termBarOverride) _cTermBarLF.text = v; });
                 n.updateParapetTotalLF(val);
                 n.setParapetEnabled(val > 0);
-              })),
+              }),
         ]),
       ]);
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _sp16,
-        Row(children: [
-          Expanded(child: _tf('Parapet Height *', '0', _cParapetHeight, suffix: 'in',
+        _responsiveRow([
+          _tf('Parapet Height *', '0', _cParapetHeight, suffix: 'in',
               kb: TextInputType.number, onChange: (v) {
                 setState(() {});
                 n.updateParapetHeight(double.tryParse(v) ?? 0);
-              })),
-          const SizedBox(width: 8),
-          Expanded(child: _tf('Total LF *', '0', _cParapetLF, suffix: 'LF',
+              }),
+          _tf('Total LF *', '0', _cParapetLF, suffix: 'LF',
               kb: TextInputType.number, onChange: (v) {
                 setState(() { if (!_termBarOverride) _cTermBarLF.text = v; });
                 n.updateParapetTotalLF(double.tryParse(v) ?? 0);
-              })),
+              }),
         ]),
         _sp12,
         _calcBox('Parapet Area',
@@ -1573,7 +1594,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
           setState(() => _parapetWallType = v!); n.updateParapetWallType(v!); }),
         _sp12,
         _lbl('Anchor Type (Auto)'), _sp4,
-        Container(height: 40, padding: const EdgeInsets.symmetric(horizontal: 12),
+        Container(height: 44, padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(color: AppTheme.surfaceAlt, borderRadius: BorderRadius.circular(8),
               border: Border.all(color: AppTheme.border)),
           child: Row(children: [
@@ -1634,12 +1655,11 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   Widget _buildMetalScope() {
     final n = ref.read(estimatorProvider.notifier);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Expanded(child: _dd('Coping Width', _copingWidth, kCopingWidths, (v) {
-          setState(() => _copingWidth = v!); n.updateCopingWidth(v!); })),
-        const SizedBox(width: 8),
-        Expanded(child: _tf('Coping LF', '0', _cCopingLF, suffix: 'LF',
-            kb: TextInputType.number, onChange: (v) => n.updateCopingLF(double.tryParse(v) ?? 0))),
+      _responsiveRow([
+        _dd('Coping Width', _copingWidth, kCopingWidths, (v) {
+          setState(() => _copingWidth = v!); n.updateCopingWidth(v!); }),
+        _tf('Coping LF', '0', _cCopingLF, suffix: 'LF',
+            kb: TextInputType.number, onChange: (v) => n.updateCopingLF(double.tryParse(v) ?? 0)),
       ]),
       _sp12,
       _dd('Edge Metal Type', _edgeMetalType, kEdgeMetalTypes, (v) {
@@ -1665,12 +1685,11 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
           kb: TextInputType.number,
           onChange: (v) => n.updateOtherEdgeMetalLF(double.tryParse(v) ?? 0)),
       _sp12,
-      Row(children: [
-        Expanded(child: _dd('Gutter Size', _gutterSize, kGutterSizes, (v) {
-          setState(() => _gutterSize = v!); n.updateGutterSize(v!); })),
-        const SizedBox(width: 8),
-        Expanded(child: _tf('Gutter LF', '0', _cGutterLF, suffix: 'LF',
-            kb: TextInputType.number, onChange: (v) => n.updateGutterLF(double.tryParse(v) ?? 0))),
+      _responsiveRow([
+        _dd('Gutter Size', _gutterSize, kGutterSizes, (v) {
+          setState(() => _gutterSize = v!); n.updateGutterSize(v!); }),
+        _tf('Gutter LF', '0', _cGutterLF, suffix: 'LF',
+            kb: TextInputType.number, onChange: (v) => n.updateGutterLF(double.tryParse(v) ?? 0)),
       ]),
       _sp12,
       _tf('Downspout Count', '0', _cDownspouts, kb: TextInputType.number,
@@ -1748,7 +1767,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     bool enabled = true, ValueChanged<String>? onChange,
   }) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     _lbl(label), _sp4,
-    SizedBox(height: 40, child: TextField(
+    SizedBox(height: 44, child: TextField(
       controller: c, enabled: enabled, keyboardType: kb, onChanged: onChange,
       decoration: _dec(hint, suffix: suffix != null
           ? Text(suffix, style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)) : null,
@@ -1769,7 +1788,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   Widget _dd(String label, String value, List<String> items, ValueChanged<String?> onChanged) =>
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _lbl(label), _sp4,
-        SizedBox(height: 40, child: DropdownButtonFormField<String>(
+        SizedBox(height: 44, child: DropdownButtonFormField<String>(
           value: items.contains(value) ? value : items.first,
           decoration: InputDecoration(contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               filled: true, fillColor: Colors.white),

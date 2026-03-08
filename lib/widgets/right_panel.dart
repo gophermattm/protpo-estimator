@@ -1511,11 +1511,9 @@ class _SummarySection extends ConsumerWidget {
     BuildContext context, WidgetRef ref, String projectName, BomResult bom,
   ) async {
     final items = bom.activeItems.map((item) => {
-      'name': item.name,
-      'qty': item.orderQty,
-      'unit': item.unit,
-      'category': item.category,
-      'notes': item.notes,
+      'skuId': item.name,        // TODO: replace with real Beacon SKU once qxo_sku_map is populated
+      'quantity': item.orderQty.toInt(),
+      'uom': item.unit,
     }).toList();
 
     try {
