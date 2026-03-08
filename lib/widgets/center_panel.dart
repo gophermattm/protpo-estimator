@@ -22,6 +22,7 @@ import '../services/bom_calculator.dart';
 import '../models/insulation_system.dart';
 import '../services/r_value_calculator.dart';
 import '../widgets/roof_renderer.dart';
+import '../services/qxo_pricing_service.dart';
 
 class CenterPanel extends ConsumerStatefulWidget {
   const CenterPanel({super.key});
@@ -121,6 +122,25 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
   // -1 = project total, 0..n = building index
   int _sel = -1;
 
+  // QXO pricing state
+  Map<String, Map<String, double>> _prices = {};
+  bool _loadingPrices = false;
+
+  Future<void> _fetchPrices(BomResult bom) async {
+    setState(() => _loadingPrices = true);
+    try {
+      // Use item names as lookup keys against QXO
+      final skuIds = bom.activeItems.map((item) => item.name).toList();
+      final result = await QxoPricingService().getPricing(skuIds);
+      setState(() {
+        _prices = result;
+        _loadingPrices = false;
+      });
+    } catch (e) {
+      setState(() => _loadingPrices = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isMulti   = ref.watch(isMultiBuildingProvider);
@@ -188,6 +208,36 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
 
           // ── Summary chips ────────────────────────────────────────────────────
           _SummaryChips(area: displayArea, membrane: membrane, info: info, totalRValue: rResult?.totalRValue ?? 0.0),
+          const SizedBox(height: 12),
+
+          // ── Fetch Pricing button ──────────────────────────────────────────
+          Row(children: [
+            SizedBox(
+              height: 32,
+              child: ElevatedButton.icon(
+                onPressed: _loadingPrices ? null : () => _fetchPrices(bom),
+                icon: _loadingPrices
+                    ? SizedBox(width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.attach_money, size: 16),
+                label: Text(_loadingPrices ? 'Loading...' : 'Fetch Pricing',
+                    style: const TextStyle(fontSize: 12)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.accent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+            ),
+            if (_prices.isNotEmpty) ...[
+              const SizedBox(width: 10),
+              Icon(Icons.check_circle, size: 16, color: AppTheme.accent),
+              const SizedBox(width: 4),
+              Text('${_prices.length} items priced',
+                  style: TextStyle(fontSize: 11, color: AppTheme.accent, fontWeight: FontWeight.w500)),
+            ],
+          ]),
           const SizedBox(height: 20),
 
           // ── Roof renderer (individual building only) ────────────────────────
@@ -227,6 +277,7 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
                 items:       entry.value,
                 expandedRows: widget.expandedRows,
                 onToggle:    widget.onToggle,
+                prices:      _prices,
               ),
             )),
 
@@ -284,6 +335,7 @@ class _BomCategoryCard extends StatelessWidget {
   final List<BomLineItem> items;
   final Set<String> expandedRows;
   final ValueChanged<String> onToggle;
+  final Map<String, Map<String, double>> prices;
 
   static const Map<String, IconData> _catIcons = {
     'Membrane':               Icons.texture,
@@ -299,6 +351,7 @@ class _BomCategoryCard extends StatelessWidget {
   const _BomCategoryCard({
     required this.category, required this.items,
     required this.expandedRows, required this.onToggle,
+    required this.prices,
   });
 
   @override
@@ -346,15 +399,23 @@ class _BomCategoryCard extends StatelessWidget {
             Expanded(flex: 4, child: Text('Item', style: _hdrStyle)),
             SizedBox(width: 52, child: Text('Qty', style: _hdrStyle, textAlign: TextAlign.right)),
             SizedBox(width: 56, child: Text('Unit', style: _hdrStyle, textAlign: TextAlign.right)),
+            SizedBox(width: 72, child: Text('Unit Price', style: _hdrStyle, textAlign: TextAlign.right)),
+            SizedBox(width: 72, child: Text('Total', style: _hdrStyle, textAlign: TextAlign.right)),
           ]),
         ),
 
         // Rows
-        ...active.map((item) => _BomRow(
-          item: item,
-          isExpanded: expandedRows.contains('${item.category}:${item.name}'),
-          onToggle: () => onToggle('${item.category}:${item.name}'),
-        )),
+        ...active.map((item) {
+          // Look up unit price from prices map — first UOM value found
+          final priceMap = prices[item.name];
+          final unitPrice = priceMap?.values.isNotEmpty == true ? priceMap!.values.first : null;
+          return _BomRow(
+            item: item,
+            isExpanded: expandedRows.contains('${item.category}:${item.name}'),
+            onToggle: () => onToggle('${item.category}:${item.name}'),
+            unitPrice: unitPrice,
+          );
+        }),
       ]),
     );
   }
@@ -369,8 +430,9 @@ class _BomRow extends StatelessWidget {
   final BomLineItem item;
   final bool isExpanded;
   final VoidCallback onToggle;
+  final double? unitPrice;
 
-  const _BomRow({required this.item, required this.isExpanded, required this.onToggle});
+  const _BomRow({required this.item, required this.isExpanded, required this.onToggle, this.unitPrice});
 
   @override
   Widget build(BuildContext context) {
@@ -408,6 +470,18 @@ class _BomRow extends StatelessWidget {
             SizedBox(width: 56, child: Text(item.unit,
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
                 textAlign: TextAlign.right)),
+            // Unit Price
+            SizedBox(width: 72, child: Text(
+              unitPrice != null ? '\$${unitPrice!.toStringAsFixed(2)}' : '\u2014',
+              style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+              textAlign: TextAlign.right,
+            )),
+            // Total
+            SizedBox(width: 72, child: Text(
+              unitPrice != null ? '\$${(unitPrice! * item.orderQty).toStringAsFixed(2)}' : '\u2014',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textPrimary),
+              textAlign: TextAlign.right,
+            )),
             // Expand chevron
             const SizedBox(width: 8),
             Icon(isExpanded ? Icons.expand_less : Icons.expand_more,
@@ -662,6 +736,16 @@ class _SummaryChips extends StatelessWidget {
   Widget build(BuildContext context) {
     final sq   = area > 0 ? (area / 100).toStringAsFixed(1) : '—';
     final aStr = area > 0 ? _fmt(area) : '—';
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isNarrow = screenWidth < 500;
+
+    final chips = [
+      _chipData('Total Area',   '$aStr sf',                                Icons.crop_square),
+      _chipData('Squares',      sq,                                        Icons.grid_4x4),
+      _chipData('Membrane',     '${membrane.thickness} ${membrane.membraneType}', Icons.texture),
+      _chipData('Attachment',   membrane.fieldAttachment == 'Mechanically Attached' ? 'Mech. Att.' : membrane.fieldAttachment == 'Fully Adhered' ? 'Fully Adh.' : 'Rhinobond', Icons.link),
+      _chipData('R-Value',      totalRValue > 0 ? 'R-${totalRValue.toStringAsFixed(0)}' : '—', Icons.thermostat),
+    ];
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -670,31 +754,40 @@ class _SummaryChips extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: AppTheme.primary.withOpacity(0.15)),
       ),
-      child: Row(children: [
-        _chip('Total Area',   '$aStr sf',                                Icons.crop_square),
-        _vDivider(),
-        _chip('Squares',      sq,                                        Icons.grid_4x4),
-        _vDivider(),
-        _chip('Membrane',     '${membrane.thickness} ${membrane.membraneType}', Icons.texture),
-        _vDivider(),
-        _chip('Attachment',   membrane.fieldAttachment == 'Mechanically Attached' ? 'Mech. Att.' : membrane.fieldAttachment == 'Fully Adhered' ? 'Fully Adh.' : 'Rhinobond', Icons.link),
-        _vDivider(),
-        _chip('R-Value',      totalRValue > 0 ? 'R-${totalRValue.toStringAsFixed(0)}' : '—', Icons.thermostat),
-      ]),
+      child: isNarrow
+          ? Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: chips.map((c) => SizedBox(
+                width: (screenWidth - 56) / 3, // 3 per row on narrow
+                child: _chip(c.$1, c.$2, c.$3),
+              )).toList(),
+            )
+          : Row(children: [
+              for (int i = 0; i < chips.length; i++) ...[
+                if (i > 0) _vDivider(),
+                Expanded(child: _chip(chips[i].$1, chips[i].$2, chips[i].$3)),
+              ],
+            ]),
     );
   }
 
-  Widget _chip(String label, String value, IconData icon) => Expanded(
-    child: Column(children: [
+  (String, String, IconData) _chipData(String label, String value, IconData icon) =>
+      (label, value, icon);
+
+  Widget _chip(String label, String value, IconData icon) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
       Icon(icon, size: 14, color: AppTheme.primary.withOpacity(0.7)),
       const SizedBox(height: 3),
       Text(value,
           style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary),
-          overflow: TextOverflow.ellipsis),
+          overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
       Text(label,
           style: TextStyle(fontSize: 10, color: AppTheme.textMuted),
-          overflow: TextOverflow.ellipsis),
-    ]),
+          overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+    ],
   );
 }
 
@@ -790,8 +883,10 @@ class _FasteningScheduleTab extends ConsumerWidget {
           border: Border.all(color: c.withOpacity(0.25))),
       child: Row(children: [
         Icon(icon, color: c, size: 18), const SizedBox(width: 10),
-        Text('Attachment Method: ', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-        Text(method, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c)),
+        Flexible(child: Text.rich(TextSpan(children: [
+          TextSpan(text: 'Attachment: ', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+          TextSpan(text: method, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c)),
+        ]), overflow: TextOverflow.ellipsis)),
       ]),
     );
   }

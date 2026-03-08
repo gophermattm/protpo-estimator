@@ -23,6 +23,8 @@ import '../providers/estimator_providers.dart';
 import '../models/insulation_system.dart';
 import '../models/section_models.dart';
 import '../models/roof_geometry.dart';
+import '../services/qxo_quote_service.dart';
+import '../services/bom_calculator.dart';
 
 // ── Mode enum ─────────────────────────────────────────────────────────────────
 
@@ -717,10 +719,14 @@ User request: "$userText"
   Widget build(BuildContext context) {
     return Column(children: [
       if (!_chatExpanded) ...[
-        const _SummarySection(),
+        Flexible(
+          child: SingleChildScrollView(
+            child: const _SummarySection(),
+          ),
+        ),
         Divider(height: 1, color: AppTheme.border),
       ],
-      Expanded(child: _buildChatSection()),
+      Expanded(flex: 2, child: _buildChatSection()),
     ]);
   }
 
@@ -1170,7 +1176,7 @@ User request: "$userText"
                       color: _mode == _BotMode.assist
                           ? const Color(0xFF7C3AED) : AppTheme.primary)),
               contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 15, vertical: 9),
+                  horizontal: 15, vertical: 12),
               filled: true,
               fillColor: AppTheme.surfaceAlt,
             ),
@@ -1445,8 +1451,96 @@ class _SummarySection extends ConsumerWidget {
                 textStyle: const TextStyle(fontSize: 13)),
           )),
         ]),
+
+        const SizedBox(height: 10),
+
+        // Send to Beacon button
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: () => _showBeaconConfirmation(context, ref),
+            icon: const Icon(Icons.send, size: 16),
+            label: const Text('Send to Beacon'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFF59E0B), // amber/orange — Beacon brand
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ),
       ]),
     );
+  }
+
+  static void _showBeaconConfirmation(BuildContext context, WidgetRef ref) {
+    final info = ref.read(projectInfoProvider);
+    final bom  = ref.read(aggregateBomProvider);
+    final projectName = info.projectName.isNotEmpty ? info.projectName : 'Untitled Project';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Send to Beacon'),
+        content: Text(
+          'Submit "$projectName" with ${bom.activeItems.length} BOM items to QXO Beacon for quoting?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _submitToBeacon(context, ref, projectName, bom);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFF59E0B),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static Future<void> _submitToBeacon(
+    BuildContext context, WidgetRef ref, String projectName, BomResult bom,
+  ) async {
+    final items = bom.activeItems.map((item) => {
+      'name': item.name,
+      'qty': item.orderQty,
+      'unit': item.unit,
+      'category': item.category,
+      'notes': item.notes,
+    }).toList();
+
+    try {
+      final result = await QxoQuoteService().submitQuote(
+        projectName: projectName,
+        items: items,
+      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result['message'] ?? 'Quote submitted to Beacon successfully!'),
+            backgroundColor: const Color(0xFF16A34A),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send to Beacon: ${e.toString().split('\n').first}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   static Widget _statItem(String label, String value, String unit,
