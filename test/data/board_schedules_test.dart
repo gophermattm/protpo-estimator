@@ -131,6 +131,28 @@ void main() {
       expect(seq.panels.map((p) => p.letter).toList(), ['AA', 'A', 'B', 'C']);
     });
 
+    test('Versico 3/8 standard returns SS TT', () {
+      final seq = lookupPanelSequence(
+        manufacturer: 'Versico',
+        taperRate: '3/8:12',
+        profileType: 'standard',
+      );
+      expect(seq, isNotNull);
+      expect(seq!.panels.length, 2);
+      expect(seq.panels.map((p) => p.letter).toList(), ['SS', 'TT']);
+    });
+
+    test('TRI-BUILT 1/2 standard returns Q', () {
+      final seq = lookupPanelSequence(
+        manufacturer: 'TRI-BUILT',
+        taperRate: '1/2:12',
+        profileType: 'standard',
+      );
+      expect(seq, isNotNull);
+      expect(seq!.panels.length, 1);
+      expect(seq.panels.first.letter, 'Q');
+    });
+
     test('invalid manufacturer returns null', () {
       final seq = lookupPanelSequence(
         manufacturer: 'UNKNOWN_MFR',
