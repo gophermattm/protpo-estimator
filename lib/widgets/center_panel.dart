@@ -25,6 +25,7 @@ import '../services/bom_calculator.dart';
 import '../models/insulation_system.dart';
 import '../services/platform_utils.dart';
 import '../services/r_value_calculator.dart';
+import '../services/board_schedule_calculator.dart';
 import '../widgets/roof_renderer.dart';
 import 'package:intl/intl.dart';
 import '../services/qxo_pricing_service.dart';
@@ -1935,6 +1936,8 @@ class _ThermalCodeTab extends ConsumerWidget {
     final info      = ref.watch(projectInfoProvider);
     final insul     = ref.watch(insulationSystemProvider);
 
+    final boardSchedule = ref.watch(boardScheduleProvider);
+
     final totalR     = rResult?.totalRValue ?? 0;
     final required   = info.requiredRValue;
     final passes     = required == null ? null : totalR >= required;
@@ -1947,7 +1950,11 @@ class _ThermalCodeTab extends ConsumerWidget {
         const SizedBox(height: 20),
 
         // R-value hero
-        _rValueHero(totalR, required, passes, hasZip),
+        if (boardSchedule != null && boardSchedule.rows.isNotEmpty) ...[
+          _taperedRValueHero(rResult, boardSchedule, insul, required, hasZip),
+        ] else ...[
+          _rValueHero(totalR, required, passes, hasZip),
+        ],
         const SizedBox(height: 20),
 
         // R-value breakdown
@@ -1979,6 +1986,50 @@ class _ThermalCodeTab extends ConsumerWidget {
                 ],
               ),
             ),
+          ])),
+          const SizedBox(height: 16),
+        ],
+
+        // Board schedule summary (when tapered insulation active + drains placed)
+        if (boardSchedule != null && boardSchedule.rows.isNotEmpty) ...[
+          _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _cardHeader('Board Schedule', Icons.view_column),
+            const SizedBox(height: 8),
+            _scheduleRow('Taper Distance', '${boardSchedule.rows.last.distanceEnd.toStringAsFixed(1)} ft'),
+            _scheduleRow('Max Thickness', '${boardSchedule.maxThicknessAtRidge.toStringAsFixed(2)}"'),
+            _scheduleRow('Avg Taper Thickness', '${boardSchedule.avgTaperThickness.toStringAsFixed(2)}"'),
+            const Divider(height: 16),
+            Text('Tapered Panels', style: TextStyle(fontSize: 12,
+                fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
+            const SizedBox(height: 4),
+            ...boardSchedule.taperedPanelCounts.entries.map((e) =>
+              _scheduleRow('  Panel ${e.key}', '${e.value} panels')),
+            if (boardSchedule.flatFillCounts.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text('Flat Fill', style: TextStyle(fontSize: 12,
+                  fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
+              const SizedBox(height: 4),
+              ...(boardSchedule.flatFillCounts.entries.toList()
+                ..sort((a, b) => a.key.compareTo(b.key)))
+                .map((e) => _scheduleRow('  ${_ins(e.key)}', '${e.value} boards')),
+            ],
+            const Divider(height: 16),
+            _scheduleRow('Total Tapered', '${boardSchedule.totalTaperedPanels} panels'),
+            _scheduleRow('Total Flat Fill', '${boardSchedule.totalFlatFillPanels} boards'),
+            _scheduleRow('Total w/ Waste', '${boardSchedule.totalPanelsWithWaste} panels',
+                bold: true),
+            if (boardSchedule.warnings.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              ...boardSchedule.warnings.map((w) => Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(Icons.warning_amber, size: 13, color: AppTheme.warning),
+                  const SizedBox(width: 6),
+                  Expanded(child: Text(w,
+                      style: TextStyle(fontSize: 11, color: AppTheme.warning))),
+                ]),
+              )),
+            ],
           ])),
           const SizedBox(height: 16),
         ],
@@ -2089,6 +2140,93 @@ class _ThermalCodeTab extends ConsumerWidget {
           color: passes ? AppTheme.accent : AppTheme.error)),
     ]),
   );
+
+  static Widget _scheduleRow(String label, String value, {bool bold = false}) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 3),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label, style: TextStyle(fontSize: 12,
+                color: AppTheme.textSecondary,
+                fontWeight: bold ? FontWeight.w600 : FontWeight.normal)),
+            Text(value, style: TextStyle(fontSize: 12,
+                fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
+                color: bold ? AppTheme.primary : AppTheme.textPrimary)),
+          ],
+        ),
+      );
+
+  static Widget _taperedRValueHero(
+    RValueResult? rResult,
+    BoardScheduleResult schedule,
+    InsulationSystem insul,
+    double? required,
+    bool hasZip,
+  ) {
+    final l1R = (rResult?.layer1.rValue ?? 0);
+    final l2R = (rResult?.layer2?.rValue ?? 0);
+    final cbR = (rResult?.coverBoard?.rValue ?? 0);
+    const memR = 0.5;
+    final uniformR = l1R + l2R + cbR + memR;
+
+    const taperRPerInch = 5.7;
+    final minR = uniformR + (schedule.minThicknessAtDrain * taperRPerInch);
+    final avgR = uniformR + (schedule.avgTaperThickness * taperRPerInch);
+    final maxR = uniformR + (schedule.maxThicknessAtRidge * taperRPerInch);
+
+    final passesMin = required == null ? null : minR >= required;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: passesMin == false
+            ? AppTheme.error.withValues(alpha: 0.05)
+            : AppTheme.primary.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: passesMin == false
+              ? AppTheme.error.withValues(alpha: 0.3)
+              : AppTheme.primary.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Tapered Assembly R-Value Range',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                color: AppTheme.textSecondary)),
+        const SizedBox(height: 8),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+          _rValueColumn('Min\n(at drain)', minR, required),
+          _rValueColumn('Average', avgR, required),
+          _rValueColumn('Max\n(at ridge)', maxR, required),
+        ]),
+        if (required != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            passesMin == true
+                ? 'Minimum R-value meets code requirement of R-${required.toStringAsFixed(0)}'
+                : 'Minimum R-value below code requirement of R-${required.toStringAsFixed(0)}',
+            style: TextStyle(fontSize: 11,
+                color: passesMin == true ? AppTheme.accent : AppTheme.error,
+                fontWeight: FontWeight.w500),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  static Widget _rValueColumn(String label, double rValue, double? required) {
+    final passes = required == null ? null : rValue >= required;
+    return Column(children: [
+      Text(label,
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+      const SizedBox(height: 4),
+      Text('R-${rValue.toStringAsFixed(1)}',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700,
+              color: passes == false ? AppTheme.error : AppTheme.primary)),
+    ]);
+  }
 
   static String _ins(double t) =>
       '${t == t.roundToDouble() ? t.toInt() : t}"';
