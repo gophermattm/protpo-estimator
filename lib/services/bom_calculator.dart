@@ -20,6 +20,7 @@ import '../models/roof_geometry.dart';
 import '../models/insulation_system.dart';
 import '../models/section_models.dart';
 import '../models/system_specs.dart';
+import 'board_schedule_calculator.dart';
 
 // ─── BOM LINE ITEM ────────────────────────────────────────────────────────────
 
@@ -109,6 +110,7 @@ class BomCalculator {
     required ParapetWalls parapet,
     required Penetrations penetrations,
     required MetalScope metalScope,
+    BoardScheduleResult? boardSchedule,
   }) {
     final warnings = <String>[];
     final items    = <BomLineItem>[];
@@ -301,20 +303,84 @@ class BomCalculator {
 
       // Tapered insulation
       if (insulation.hasTaper && insulation.taperDefaults != null) {
-        final taper      = insulation.taperDefaults!;
-        final taperArea  = totalArea;
-        final base       = taperArea / boardSf;
-        final withW      = base * (1 + wMat);
-        final orderQty   = withW.ceil().toDouble();
-        items.add(BomLineItem(
-          category: 'Insulation',
-          name: 'Tapered Polyiso — ${taper.taperRate} slope',
-          orderQty: orderQty,
-          unit: 'boards',
-          notes: 'Min ${_ins(taper.minThickness)} at drain, tapered system',
-          trace: _insTrace(taperArea, base, withW, orderQty, wMat, boardSf,
-              'Tapered — Polyiso'),
-        ));
+        final taper = insulation.taperDefaults!;
+
+        if (boardSchedule != null && boardSchedule.totalTaperedPanels > 0) {
+          // Per-panel-type lines from board schedule
+          for (final entry in boardSchedule.taperedPanelCounts.entries) {
+            final letter = entry.key;
+            final count = entry.value;
+            final withW = count * (1 + wMat);
+            final orderQty = withW.ceil().toDouble();
+            items.add(BomLineItem(
+              category: 'Insulation',
+              name: 'Tapered Polyiso — Panel $letter (${taper.manufacturer} ${taper.taperRate})',
+              orderQty: orderQty,
+              unit: 'panels',
+              notes: "4'×4' tapered panels, ${taper.attachmentMethod}",
+              trace: BomTrace(
+                baseDescription: '$count panels (Panel $letter) from board schedule',
+                baseQty: count.toDouble(),
+                wastePercent: wMat,
+                withWaste: withW,
+                packageSize: 1,
+                orderQty: orderQty,
+                breakdown: [
+                  'Panel $letter count:  $count panels',
+                  'Waste:               ${_pct(wMat)}%',
+                  'With waste:          ${withW.toStringAsFixed(1)}',
+                  'ORDER QTY:           ${orderQty.toInt()} panels',
+                ],
+              ),
+            ));
+          }
+
+          // Flat fill lines
+          final sortedFill = boardSchedule.flatFillCounts.entries.toList()
+            ..sort((a, b) => a.key.compareTo(b.key));
+          for (final entry in sortedFill) {
+            final thickness = entry.key;
+            final count = entry.value;
+            final withW = count * (1 + wMat);
+            final orderQty = withW.ceil().toDouble();
+            items.add(BomLineItem(
+              category: 'Insulation',
+              name: 'Flat Fill Polyiso ${_ins(thickness)} (${taper.manufacturer})',
+              orderQty: orderQty,
+              unit: 'boards',
+              notes: "4'×4' flat stock under tapered panels, ${taper.attachmentMethod}",
+              trace: BomTrace(
+                baseDescription: '$count boards (${_ins(thickness)} flat fill) from board schedule',
+                baseQty: count.toDouble(),
+                wastePercent: wMat,
+                withWaste: withW,
+                packageSize: 1,
+                orderQty: orderQty,
+                breakdown: [
+                  'Flat fill ${_ins(thickness)} count: $count boards',
+                  'Waste:                    ${_pct(wMat)}%',
+                  'With waste:               ${withW.toStringAsFixed(1)}',
+                  'ORDER QTY:                ${orderQty.toInt()} boards',
+                ],
+              ),
+            ));
+          }
+        } else {
+          // Fallback: placeholder when no board schedule (no drains placed)
+          final taperArea = totalArea;
+          final base = taperArea / boardSf;
+          final withW = base * (1 + wMat);
+          final orderQty = withW.ceil().toDouble();
+          items.add(BomLineItem(
+            category: 'Insulation',
+            name: 'Tapered Polyiso — ${taper.taperRate} slope',
+            orderQty: orderQty,
+            unit: 'boards',
+            notes: 'Min ${_ins(taper.minThickness)} at drain — place drains for detailed schedule',
+            trace: _insTrace(taperArea, base, withW, orderQty, wMat, boardSf,
+                'Tapered — Polyiso (estimated, no drains placed)'),
+          ));
+        }
       }
 
       // Cover board

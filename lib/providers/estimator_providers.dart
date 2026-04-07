@@ -771,6 +771,7 @@ final bomProvider = Provider<BomResult>((ref) {
   final parapet     = ref.watch(parapetWallsProvider);
   final penetrations = ref.watch(penetrationsProvider);
   final metal       = ref.watch(metalScopeProvider);
+  final boardSchedule = ref.watch(boardScheduleProvider);
 
   return BomCalculator.calculate(
     projectInfo:   projectInfo,
@@ -781,6 +782,7 @@ final bomProvider = Provider<BomResult>((ref) {
     parapet:       parapet,
     penetrations:  penetrations,
     metalScope:    metal,
+    boardSchedule: boardSchedule,
   );
 });
 
