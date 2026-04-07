@@ -19,10 +19,14 @@ import '../models/building_state.dart';
 import '../models/project_info.dart';
 import '../models/roof_geometry.dart';
 import '../models/system_specs.dart';
+import '../models/drainage_zone.dart';
 import '../models/insulation_system.dart';
 import '../models/section_models.dart';
 import '../services/r_value_calculator.dart';
 import '../services/bom_calculator.dart';
+import '../services/validation_engine.dart';
+import '../services/qxo_pricing_service.dart';
+import '../models/labor_models.dart';
 
 // ─── ROOT PROVIDER ────────────────────────────────────────────────────────────
 
@@ -93,9 +97,33 @@ final metalScopeProvider = Provider<MetalScope>(
 );
 
 
+// ── VALIDATION ENGINE PROVIDER ─────────────────────────────────────────────────
+
+final validationResultProvider = Provider<ValidationResult>((ref) {
+  final info = ref.watch(projectInfoProvider);
+  final geo = ref.watch(roofGeometryProvider);
+  final specs = ref.watch(systemSpecsProvider);
+  final insul = ref.watch(insulationSystemProvider);
+  final membrane = ref.watch(membraneSystemProvider);
+  final parapet = ref.watch(parapetWallsProvider);
+  final pen = ref.watch(penetrationsProvider);
+  final metal = ref.watch(metalScopeProvider);
+  final bom = ref.watch(bomProvider);
+
+  return ValidationEngine.validate(
+    projectInfo: info, geometry: geo, systemSpecs: specs,
+    insulation: insul, membrane: membrane, parapet: parapet,
+    penetrations: pen, metalScope: metal, bom: bom,
+  );
+});
+
 // ── SOW overrides provider ─────────────────────────────────────────────────────
 final sowOverridesProvider = Provider<Map<String, String>>((ref) =>
     ref.watch(activeBuildingProvider).sowOverrides);
+
+// ── Sub instructions overrides provider ──────────────────────────────────────
+final subInstructionOverridesProvider =
+    StateProvider<Map<String, String>>((ref) => {});
 // ─── CALCULATION PROVIDERS ────────────────────────────────────────────────────
 
 /// R-value result for the active building.
@@ -103,26 +131,30 @@ final rValueResultProvider = Provider<RValueResult?>((ref) {
   final insulation = ref.watch(insulationSystemProvider);
   final projectInfo = ref.watch(projectInfoProvider);
 
-  if (insulation.layer1.thickness <= 0) return null;
+  // No flat insulation layers and no tapered — nothing to calculate
+  final hasLayers = insulation.numberOfLayers >= 1 && insulation.layer1.thickness > 0;
+  final hasTapered = insulation.hasTaper && insulation.taperDefaults != null;
+  final hasCB = insulation.hasCoverBoard && insulation.coverBoard != null;
+  if (!hasLayers && !hasTapered && !hasCB) return null;
 
   return RValueCalculator.calculate(
-    layer1: InsulationLayerInput(
-      materialType: insulation.layer1.type,
-      thickness: insulation.layer1.thickness,
-    ),
+    layer1: hasLayers
+        ? InsulationLayerInput(
+            materialType: insulation.layer1.type,
+            thickness: insulation.layer1.thickness,
+          )
+        : InsulationLayerInput(materialType: 'None', thickness: 0),
     layer2: insulation.numberOfLayers == 2 && insulation.layer2 != null
         ? InsulationLayerInput(
             materialType: insulation.layer2!.type,
             thickness: insulation.layer2!.thickness,
           )
         : null,
-    tapered: insulation.hasTaperedInsulation && insulation.tapered != null
+    tapered: insulation.hasTaper && insulation.taperDefaults != null
         ? TaperedInsulationInput(
-            materialType: insulation.tapered!.boardType.isNotEmpty
-                ? insulation.tapered!.boardType
-                : 'Polyiso',
-            minThicknessAtDrain: insulation.tapered!.minThicknessAtDrain,
-            maxThickness: insulation.tapered!.maxThickness,
+            materialType: 'Polyiso',
+            minThicknessAtDrain: insulation.taperDefaults!.minThickness,
+            maxThickness: 0, // auto-calculated in future phases
           )
         : null,
     coverBoard: insulation.hasCoverBoard && insulation.coverBoard != null
@@ -141,23 +173,23 @@ final rValueValidationProvider = Provider<List<ValidationMessage>>((ref) {
   final projectInfo = ref.watch(projectInfoProvider);
 
   return RValueCalculator.validate(
-    layer1: InsulationLayerInput(
-      materialType: insulation.layer1.type,
-      thickness: insulation.layer1.thickness,
-    ),
+    layer1: insulation.numberOfLayers >= 1
+        ? InsulationLayerInput(
+            materialType: insulation.layer1.type,
+            thickness: insulation.layer1.thickness,
+          )
+        : InsulationLayerInput(materialType: 'None', thickness: 0),
     layer2: insulation.numberOfLayers == 2 && insulation.layer2 != null
         ? InsulationLayerInput(
             materialType: insulation.layer2!.type,
             thickness: insulation.layer2!.thickness,
           )
         : null,
-    tapered: insulation.hasTaperedInsulation && insulation.tapered != null
+    tapered: insulation.hasTaper && insulation.taperDefaults != null
         ? TaperedInsulationInput(
-            materialType: insulation.tapered!.boardType.isNotEmpty
-                ? insulation.tapered!.boardType
-                : 'Polyiso',
-            minThicknessAtDrain: insulation.tapered!.minThicknessAtDrain,
-            maxThickness: insulation.tapered!.maxThickness,
+            materialType: 'Polyiso',
+            minThicknessAtDrain: insulation.taperDefaults!.minThickness,
+            maxThickness: 0, // auto-calculated in future phases
           )
         : null,
     coverBoard: insulation.hasCoverBoard && insulation.coverBoard != null
@@ -388,6 +420,16 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
             roofGeometry: b.roofGeometry.copyWith(outsideCorners: count)),
       );
 
+  void updateInsideCorners(int count) => _updateActive(
+        (b) => b.copyWith(
+            roofGeometry: b.roofGeometry.copyWith(insideCorners: count)),
+      );
+
+  void updateSprayFoamThickness(double thickness) => _updateActive(
+        (b) => b.copyWith(
+            systemSpecs: b.systemSpecs.copyWith(sprayFoamThickness: thickness)),
+      );
+
   // ── System Specs (active building) ────────────────────────────────────────
 
   void updateSystemSpecs(SystemSpecs specs) =>
@@ -436,21 +478,23 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
         (b) => b.copyWith(
           insulationSystem: count == 2
               ? b.insulationSystem.withTwoLayers()
-              : b.insulationSystem.withOneLayer(),
+              : count == 0
+                  ? b.insulationSystem.withNoLayers()
+                  : b.insulationSystem.withOneLayer(),
         ),
       );
 
   void setTaperedEnabled(bool enabled) => _updateActive(
         (b) => b.copyWith(
           insulationSystem: enabled
-              ? b.insulationSystem.withTaperedEnabled()
-              : b.insulationSystem.withTaperedDisabled(),
+              ? b.insulationSystem.withTaperEnabled()
+              : b.insulationSystem.withTaperDisabled(),
         ),
       );
 
-  void updateTapered(TaperedInsulation tapered) => _updateActive(
+  void updateTaperDefaults(TaperDefaults taperDefaults) => _updateActive(
         (b) => b.copyWith(
-            insulationSystem: b.insulationSystem.copyWith(tapered: tapered)),
+            insulationSystem: b.insulationSystem.copyWith(taperDefaults: taperDefaults)),
       );
 
   void setCoverBoardEnabled(bool enabled) => _updateActive(
@@ -828,9 +872,401 @@ class _Contrib {
   const _Contrib(this.building, this.withWaste);
 }
 
-// ─── COMPANY LOGO PROVIDER ────────────────────────────────────────────────────
-// Stores raw image bytes uploaded by the user.
-// Null = no logo uploaded yet.
+// ─── COMPANY PROFILE ──────────────────────────────────────────────────────────
 
-final companyLogoProvider =
-    StateProvider<List<int>?>((ref) => null);
+class CompanyProfile {
+  final String companyName;
+  final String phone;
+  final String email;
+  final String address;
+  final String website;
+  final String tagline;        // e.g. "Commercial Roofing Specialists"
+  final int brandColorValue;   // Color value (0xFFRRGGBB)
+  final List<int>? logoBytes;  // Raw image bytes
+
+  const CompanyProfile({
+    this.companyName = '',
+    this.phone = '',
+    this.email = '',
+    this.address = '',
+    this.website = '',
+    this.tagline = '',
+    this.brandColorValue = 0xFF1E3A5F, // default ProTPO blue
+    this.logoBytes,
+  });
+
+  bool get hasLogo => logoBytes != null && logoBytes!.isNotEmpty;
+  bool get hasName => companyName.isNotEmpty;
+
+  CompanyProfile copyWith({
+    String? companyName,
+    String? phone,
+    String? email,
+    String? address,
+    String? website,
+    String? tagline,
+    int? brandColorValue,
+    List<int>? logoBytes,
+    bool clearLogo = false,
+  }) => CompanyProfile(
+    companyName: companyName ?? this.companyName,
+    phone: phone ?? this.phone,
+    email: email ?? this.email,
+    address: address ?? this.address,
+    website: website ?? this.website,
+    tagline: tagline ?? this.tagline,
+    brandColorValue: brandColorValue ?? this.brandColorValue,
+    logoBytes: clearLogo ? null : (logoBytes ?? this.logoBytes),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'companyName': companyName,
+    'phone': phone,
+    'email': email,
+    'address': address,
+    'website': website,
+    'tagline': tagline,
+    'brandColorValue': brandColorValue,
+    // logoBytes serialized separately
+  };
+
+  factory CompanyProfile.fromJson(Map<String, dynamic> json) => CompanyProfile(
+    companyName: json['companyName'] ?? '',
+    phone: json['phone'] ?? '',
+    email: json['email'] ?? '',
+    address: json['address'] ?? '',
+    website: json['website'] ?? '',
+    tagline: json['tagline'] ?? '',
+    brandColorValue: json['brandColorValue'] ?? 0xFF1E3A5F,
+  );
+}
+
+final companyProfileProvider =
+    StateProvider<CompanyProfile>((ref) => const CompanyProfile());
+
+// Legacy alias — reads logo from company profile
+final companyLogoProvider = Provider<List<int>?>((ref) =>
+    ref.watch(companyProfileProvider).logoBytes);
+
+/// QXO pricing data fetched from center panel.
+/// Stored here so the export service can access it.
+final pricedItemsProvider =
+    StateProvider<Map<String, QxoPricedItem>?>((ref) => null);
+
+/// Global project margin % (0.0–1.0). Applied to all BOM items unless overridden.
+final globalMarginProvider = StateProvider<double>((ref) => 0.30);
+
+// ─── LABOR PROVIDERS ────────────────────────────────────────────────────────
+
+/// Whether labor is included in the estimate.
+final laborEnabledProvider = StateProvider<bool>((ref) => false);
+
+/// All configured crews. Starts with one default crew.
+final laborCrewsProvider = StateProvider<List<LaborCrew>>((ref) => [
+  LaborCrew(name: 'Default Crew', rates: Map<String, double>.from(kDefaultLaborRates)),
+]);
+
+/// Index of the currently selected crew in the crews list.
+final selectedCrewIndexProvider = StateProvider<int>((ref) => 0);
+
+/// The active crew (derived).
+final activeCrewProvider = Provider<LaborCrew>((ref) {
+  final crews = ref.watch(laborCrewsProvider);
+  final idx = ref.watch(selectedCrewIndexProvider);
+  return crews[idx.clamp(0, crews.length - 1)];
+});
+
+/// Computed labor line items based on active crew rates and current BOM inputs.
+final laborLineItemsProvider = Provider<List<LaborLineItem>>((ref) {
+  final enabled = ref.watch(laborEnabledProvider);
+  if (!enabled) return [];
+
+  final crew = ref.watch(activeCrewProvider);
+  final geo = ref.watch(roofGeometryProvider);
+  final specs = ref.watch(systemSpecsProvider);
+  final insulation = ref.watch(insulationSystemProvider);
+  final parapet = ref.watch(parapetWallsProvider);
+  final penetrations = ref.watch(penetrationsProvider);
+  final metal = ref.watch(metalScopeProvider);
+
+  final items = <LaborLineItem>[];
+  final area = geo.totalArea;
+  final squares = area / 100;
+  final membrane = ref.watch(membraneSystemProvider);
+
+  // ── TEAR-OFF ──
+  if (specs.projectType == 'Tear-off & Replace' && area > 0) {
+    final roofType = specs.existingRoofType;
+    if (roofType == 'Spray Foam') {
+      items.add(LaborLineItem(
+        name: 'Remove Spray Foam (${specs.sprayFoamThickness.toStringAsFixed(0)}")', unit: 'SQ',
+        rate: crew.rateFor('Remove Spray Foam'), quantity: squares,
+      ));
+      if (specs.sprayFoamThickness > 8) {
+        final extraInches = specs.sprayFoamThickness - 8;
+        final extraIncrements = (extraInches / 2).ceil();
+        items.add(LaborLineItem(
+          name: 'Spray Foam Extra Depth (${extraIncrements}x2" above 8")',
+          unit: 'SQ',
+          rate: crew.rateFor('Remove Spray Foam') * 0.5 * extraIncrements,
+          quantity: squares,
+        ));
+      }
+    } else {
+      final removeMap = {
+        'Modified Bitumen': 'Remove Torch Down',
+        'Single-Ply': 'Remove TPO',
+        'BUR': 'Remove Tar and Gravel',
+        'Metal': 'Remove Tar and Gravel',
+      };
+      final removeItem = removeMap[roofType] ?? 'Remove TPO';
+      items.add(LaborLineItem(
+        name: removeItem, unit: 'SQ',
+        rate: crew.rateFor(removeItem), quantity: squares,
+      ));
+    }
+    items.add(LaborLineItem(
+      name: 'Dump Fees', unit: 'each',
+      rate: crew.rateFor('Dump Fees'), quantity: 1,
+    ));
+  }
+
+  // ── DECKING ──
+  if (specs.deckType == 'Wood' && area > 0) {
+    items.add(LaborLineItem(
+      name: 'Install Decking (per sheet)', unit: 'sheets',
+      rate: crew.rateFor('Install Decking (per sheet)'),
+      quantity: (area / 32).ceilToDouble(),
+    ));
+  }
+  if (specs.deckType == 'Metal' && area > 0) {
+    items.add(LaborLineItem(
+      name: 'Flutes', unit: 'SQ',
+      rate: crew.rateFor('Flutes'), quantity: squares,
+    ));
+  }
+
+  // ── INSULATION ──
+  if (insulation.layer1.thickness > 0 && area > 0) {
+    items.add(LaborLineItem(
+      name: 'Install ISO Board (Layer 1)', unit: 'SQ',
+      rate: crew.rateFor('Install ISO Board'), quantity: squares,
+    ));
+  }
+  if (insulation.numberOfLayers == 2 && (insulation.layer2?.thickness ?? 0) > 0 && area > 0) {
+    items.add(LaborLineItem(
+      name: 'Install ISO Board (Layer 2)', unit: 'SQ',
+      rate: crew.rateFor('Install ISO Board'), quantity: squares,
+    ));
+  }
+  if (insulation.hasCoverBoard && (insulation.coverBoard?.thickness ?? 0) > 0 && area > 0) {
+    items.add(LaborLineItem(
+      name: 'Install Cover Board', unit: 'SQ',
+      rate: crew.rateFor('Install Cover Board'), quantity: squares,
+    ));
+  }
+  if (insulation.hasTaper && area > 0) {
+    items.add(LaborLineItem(
+      name: 'Install Taper System', unit: 'SQ',
+      rate: crew.rateFor('Install Taper System'), quantity: squares,
+    ));
+  }
+
+  // ── MEMBRANE ──
+  if (area > 0) {
+    items.add(LaborLineItem(
+      name: 'Install TPO Membrane (${membrane.fieldAttachment})', unit: 'SQ',
+      rate: crew.rateFor('Install TPO Membrane'), quantity: squares,
+    ));
+  }
+
+  // ── PARAPET WALLS ──
+  if (parapet.hasParapetWalls && parapet.parapetTotalLF > 0) {
+    final parapetSQ = ((parapet.parapetHeight / 12) * parapet.parapetTotalLF) / 100;
+    items.add(LaborLineItem(
+      name: 'Install Parapet Wall Flashings', unit: 'SQ',
+      rate: crew.rateFor('Install Parapet Flashings'), quantity: parapetSQ,
+    ));
+  }
+  if (parapet.hasParapetWalls && parapet.terminationBarLF > 0) {
+    items.add(LaborLineItem(
+      name: 'Install Termination Bar', unit: 'LF',
+      rate: crew.rateFor('Install Termination Bar'),
+      quantity: parapet.terminationBarLF,
+    ));
+  }
+
+  // ── PENETRATIONS ──
+  if (penetrations.smallPipeCount + penetrations.largePipeCount > 0) {
+    items.add(LaborLineItem(
+      name: 'Install Custom HVAC Pipes', unit: 'each',
+      rate: crew.rateFor('Install Custom HVAC Pipes'),
+      quantity: (penetrations.smallPipeCount + penetrations.largePipeCount).toDouble(),
+    ));
+  }
+  if (penetrations.rtuDetails.isNotEmpty) {
+    items.add(LaborLineItem(
+      name: 'HVAC Curbs', unit: 'each',
+      rate: crew.rateFor('HVAC Curbs'),
+      quantity: penetrations.rtuDetails.length.toDouble(),
+    ));
+  }
+  if (penetrations.skylightCount > 0) {
+    items.add(LaborLineItem(
+      name: 'Skylight Curbs', unit: 'each',
+      rate: crew.rateFor('Skylight Curbs'),
+      quantity: penetrations.skylightCount.toDouble(),
+    ));
+  }
+  if (penetrations.scupperCount > 0) {
+    items.add(LaborLineItem(
+      name: 'Install Custom Scupper', unit: 'each',
+      rate: crew.rateFor('Install Custom Scupper'),
+      quantity: penetrations.scupperCount.toDouble(),
+    ));
+  }
+  if (penetrations.pitchPanCount > 0) {
+    items.add(LaborLineItem(
+      name: 'Install Sealant Pockets', unit: 'each',
+      rate: crew.rateFor('Install Custom Curb (exhaust fan)'),
+      quantity: penetrations.pitchPanCount.toDouble(),
+    ));
+  }
+  if (geo.numberOfDrains > 0) {
+    items.add(LaborLineItem(
+      name: 'Drains', unit: 'each',
+      rate: crew.rateFor('Drains'),
+      quantity: geo.numberOfDrains.toDouble(),
+    ));
+  }
+
+  // ── EDGE METAL ──
+  if (metal.dripEdgeLF > 0) {
+    items.add(LaborLineItem(
+      name: 'Install Drip Edge and Tape', unit: 'LF',
+      rate: crew.rateFor('Install Drip Edge and Tape'),
+      quantity: metal.dripEdgeLF,
+    ));
+  }
+  if (metal.copingLF > 0) {
+    items.add(LaborLineItem(
+      name: 'Install Cap Metal (per foot)', unit: 'LF',
+      rate: crew.rateFor('Install Cap Metal (per foot)'),
+      quantity: metal.copingLF,
+    ));
+  }
+  if (metal.wallFlashingLF > 0) {
+    items.add(LaborLineItem(
+      name: 'Install Wall Flashing', unit: 'LF',
+      rate: crew.rateFor('Install Drip Edge and Tape'),
+      quantity: metal.wallFlashingLF,
+    ));
+  }
+  if (metal.gutterLF > 0) {
+    items.add(LaborLineItem(
+      name: 'Install Gutter', unit: 'LF',
+      rate: crew.rateFor('Install Cap Metal (per foot)'),
+      quantity: metal.gutterLF,
+    ));
+  }
+
+  // ── WALKWAY PADS ──
+  if (penetrations.rtuDetails.isNotEmpty && area > 0) {
+    final walkLF = penetrations.rtuDetails.length * 20.0;
+    items.add(LaborLineItem(
+      name: 'Install Walkway Pads (p/f)', unit: 'LF',
+      rate: crew.rateFor('Install Walkway Pads (p/f)'),
+      quantity: walkLF,
+    ));
+  }
+
+  return items;
+});
+
+/// Per-item margin overrides. Key = BOM item name, value = margin (0.0–1.0).
+/// If an item is in this map, its margin overrides the global value.
+final itemMarginOverridesProvider =
+    StateProvider<Map<String, double>>((ref) => {});
+
+// ─── BOM LINE ITEM OVERRIDES ──────────────────────────────────────────────────
+
+/// Tracks user edits to BOM line items: field overrides, deletions, and additions.
+class BomLineEdit {
+  final String? description;  // overrides item.name
+  final String? partNumber;   // manual QXO part #
+  final double? qty;          // overrides orderQty
+  final double? unitPrice;    // manual price override
+  final String? unit;         // overrides item.unit (e.g. 'cans' vs 'cylinders')
+
+  const BomLineEdit({this.description, this.partNumber, this.qty, this.unitPrice, this.unit});
+
+  bool get hasOverrides =>
+      description != null || partNumber != null || qty != null || unitPrice != null || unit != null;
+}
+
+/// A manually added BOM line item (not from the calculator).
+class ManualBomItem {
+  final String id;          // unique key
+  final String category;
+  final String description;
+  final String partNumber;
+  final double qty;
+  final String unit;
+  final double? unitPrice;
+
+  const ManualBomItem({
+    required this.id,
+    required this.category,
+    required this.description,
+    this.partNumber = '',
+    this.qty = 1.0,
+    this.unit = 'each',
+    this.unitPrice,
+  });
+}
+
+/// Labor line item overrides (user edits to qty, rate, or description).
+class LaborLineEdit {
+  final String? description;
+  final double? rate;
+  final double? qty;
+  const LaborLineEdit({this.description, this.rate, this.qty});
+}
+
+/// Manual labor line items added by user.
+class ManualLaborItem {
+  final String id;
+  final String name;
+  final String unit;
+  final double rate;
+  final double quantity;
+  const ManualLaborItem({
+    required this.id, required this.name, this.unit = 'each',
+    this.rate = 0.0, this.quantity = 1.0,
+  });
+  double get total => rate * quantity;
+}
+
+/// Edits to auto-generated labor items. Key = item name.
+final laborLineEditsProvider =
+    StateProvider<Map<String, LaborLineEdit>>((ref) => {});
+
+/// Deleted auto-generated labor items. Set of item names.
+final laborDeletedItemsProvider =
+    StateProvider<Set<String>>((ref) => {});
+
+/// Manually added labor items.
+final laborManualItemsProvider =
+    StateProvider<List<ManualLaborItem>>((ref) => []);
+
+/// Edits to calculated BOM items. Key = "category:name" (same key used for expand toggle).
+final bomLineEditsProvider =
+    StateProvider<Map<String, BomLineEdit>>((ref) => {});
+
+/// Set of deleted calculated BOM item keys ("category:name").
+final bomDeletedItemsProvider =
+    StateProvider<Set<String>>((ref) => {});
+
+/// Manually added BOM line items.
+final bomManualItemsProvider =
+    StateProvider<List<ManualBomItem>>((ref) => []);

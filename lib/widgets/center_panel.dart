@@ -8,9 +8,12 @@
 /// Hover math: every BOM row is tappable — tap to expand the full calculation
 /// trace showing area → base qty → waste → order qty.
 
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 import 'dart:convert';
 import '../theme/app_theme.dart';
 import 'ui_polish.dart';
@@ -20,9 +23,14 @@ import '../models/project_info.dart';
 import '../providers/estimator_providers.dart';
 import '../services/bom_calculator.dart';
 import '../models/insulation_system.dart';
+import '../services/platform_utils.dart';
 import '../services/r_value_calculator.dart';
 import '../widgets/roof_renderer.dart';
+import 'package:intl/intl.dart';
 import '../services/qxo_pricing_service.dart';
+import '../services/sub_instructions_builder.dart';
+import '../models/estimator_state.dart';
+import '../models/labor_models.dart';
 
 class CenterPanel extends ConsumerStatefulWidget {
   const CenterPanel({super.key});
@@ -42,7 +50,7 @@ class _CenterPanelState extends ConsumerState<CenterPanel>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
   }
 
   @override
@@ -54,28 +62,41 @@ class _CenterPanelState extends ConsumerState<CenterPanel>
   @override
   Widget build(BuildContext context) {
     return Column(children: [
-      Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: AppTheme.border)),
+      Stack(children: [
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border(bottom: BorderSide(color: AppTheme.border)),
+          ),
+          child: TabBar(
+            controller: _tabController,
+            labelColor: AppTheme.primary,
+            unselectedLabelColor: AppTheme.textSecondary,
+            indicatorColor: AppTheme.primary,
+            indicatorWeight: 3,
+            labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+            unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+            isScrollable: true,
+            tabs: const [
+              Tab(text: 'Materials Takeoff'),
+              Tab(text: 'Fastening Schedule'),
+              Tab(text: 'Thermal & Code'),
+              Tab(text: 'Scope of Work'),
+              Tab(text: 'Install Instructions'),
+            ],
+          ),
         ),
-        child: TabBar(
-          controller: _tabController,
-          labelColor: AppTheme.primary,
-          unselectedLabelColor: AppTheme.textSecondary,
-          indicatorColor: AppTheme.primary,
-          indicatorWeight: 3,
-          labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-          unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
-          isScrollable: true,
-          tabs: const [
-            Tab(text: 'Materials Takeoff'),
-            Tab(text: 'Fastening Schedule'),
-            Tab(text: 'Thermal & Code'),
-            Tab(text: 'Scope of Work'),
-          ],
+        // Right fade hint for scrollable tabs
+        Positioned(right: 0, top: 0, bottom: 1, width: 24,
+          child: IgnorePointer(child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Colors.white.withValues(alpha: 0), Colors.white],
+              ),
+            ),
+          )),
         ),
-      ),
+      ]),
       Expanded(
         child: TabBarView(
           controller: _tabController,
@@ -93,6 +114,7 @@ class _CenterPanelState extends ConsumerState<CenterPanel>
             const _FasteningScheduleTab(),
             const _ThermalCodeTab(),
             const _ScopeOfWorkTab(),
+            const _SubInstructionsTab(),
           ],
         ),
       ),
@@ -122,27 +144,59 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
   // -1 = project total, 0..n = building index
   int _sel = -1;
 
-  // QXO pricing state
-  Map<String, Map<String, double>> _prices = {};
+  // QXO pricing state — maps BOM item name → resolved QXO item with pricing
+  Map<String, QxoPricedItem> _pricedItems = {};
   bool _loadingPrices = false;
 
   Future<void> _fetchPrices(BomResult bom) async {
+    final activeItems = bom.activeItems;
+    if (activeItems.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No BOM items to price. Add roof inputs first.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
     setState(() => _loadingPrices = true);
     try {
-      // Use item names as lookup keys against QXO
-      final skuIds = bom.activeItems.map((item) => item.name).toList();
-      final result = await QxoPricingService().getPricing(skuIds);
+      final bomNames = activeItems.map((item) => item.name).toList();
+      final bomQuantities = {
+        for (final item in activeItems)
+          item.name: item.orderQty.ceil(),
+      };
+      debugPrint('[QXO] Fetching pricing for ${bomNames.length} items: ${bomNames.take(3)}...');
+      final result = await QxoPricingService().fetchBomPricing(
+        bomNames,
+        bomQuantities: bomQuantities,
+      );
+      debugPrint('[QXO] Got pricing for ${result.length} items');
       setState(() {
-        _prices = result;
+        _pricedItems = result;
         _loadingPrices = false;
       });
-    } catch (e) {
+      // Store in provider so export service can access pricing data
+      ref.read(pricedItemsProvider.notifier).state = result;
+      if (mounted && result.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No matching QXO items found. Check item names.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (e, st) {
+      debugPrint('[QXO] Pricing error: $e\n$st');
       setState(() => _loadingPrices = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Pricing unavailable: ${e.toString().split('\n').first}'),
-            backgroundColor: Colors.orange,
+            content: Text('Pricing error: ${e.toString().split('\n').first}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
           ),
         );
       }
@@ -154,7 +208,7 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
     final isMulti   = ref.watch(isMultiBuildingProvider);
     final allBoms   = ref.watch(allBuildingBomsProvider);
     final aggBom    = ref.watch(aggregateBomProvider);
-    final buildings = ref.watch(estimatorProvider).buildings;
+    final buildings = ref.watch(estimatorProvider.select((s) => s.buildings));
     final geo       = ref.watch(roofGeometryProvider);
     final membrane  = ref.watch(membraneSystemProvider);
     final info      = ref.watch(projectInfoProvider);
@@ -238,14 +292,22 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
                 ),
               ),
             ),
-            if (_prices.isNotEmpty) ...[
+            if (_pricedItems.isNotEmpty) ...[
               const SizedBox(width: 10),
               Icon(Icons.check_circle, size: 16, color: AppTheme.accent),
               const SizedBox(width: 4),
-              Text('${_prices.length} items priced',
+              Text('${_pricedItems.length} items priced',
                   style: TextStyle(fontSize: 11, color: AppTheme.accent, fontWeight: FontWeight.w500)),
             ],
           ]),
+
+          // ── Estimate Total Cost & Margin ─────────────────────────────────
+          if (_pricedItems.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _GlobalMarginInput(),
+            const SizedBox(height: 10),
+            _ProjectValueCard(pricedItems: _pricedItems),
+          ],
           const SizedBox(height: 20),
 
           // ── Roof renderer (individual building only) ────────────────────────
@@ -285,10 +347,40 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
                 items:       entry.value,
                 expandedRows: widget.expandedRows,
                 onToggle:    widget.onToggle,
-                prices:      _prices,
+                pricedItems: _pricedItems,
               ),
             )),
 
+          // Show restore button if items have been deleted
+          Builder(builder: (ctx) {
+            final deleted = ref.watch(bomDeletedItemsProvider);
+            if (deleted.isEmpty) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.amber.shade200),
+                ),
+                child: Row(children: [
+                  Icon(Icons.visibility_off, size: 16, color: Colors.amber.shade700),
+                  const SizedBox(width: 8),
+                  Text('${deleted.length} line item(s) hidden',
+                      style: TextStyle(fontSize: 12, color: Colors.amber.shade800)),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: () =>
+                        ref.read(bomDeletedItemsProvider.notifier).state = {},
+                    icon: Icon(Icons.restore, size: 14, color: Colors.amber.shade800),
+                    label: Text('Restore All',
+                        style: TextStyle(fontSize: 12, color: Colors.amber.shade800)),
+                  ),
+                ]),
+              ),
+            );
+          }),
           const SizedBox(height: 8),
           _hoverMathHint(),
         ],
@@ -326,7 +418,7 @@ String _pct(double f) => (f * 100).toStringAsFixed(0);
 Widget _vDivider() => Container(
   width: 1, height: 28,
   margin: const EdgeInsets.symmetric(horizontal: 6),
-  color: AppTheme.primary.withOpacity(0.15),
+  color: AppTheme.primary.withValues(alpha:0.15),
 );
 
 Widget _hoverMathHint() => Row(children: [
@@ -336,14 +428,262 @@ Widget _hoverMathHint() => Row(children: [
       style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
 ]);
 
+// ── Global Margin Input ───────────────────────────────────────────────────────
+
+class _GlobalMarginInput extends ConsumerWidget {
+  const _GlobalMarginInput();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final margin = ref.watch(globalMarginProvider);
+    final pct = (margin * 100).round();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceAlt,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(children: [
+        Icon(Icons.percent, size: 16, color: AppTheme.textSecondary),
+        const SizedBox(width: 8),
+        Text('Project Margin',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                color: AppTheme.textPrimary)),
+        const Spacer(),
+        SizedBox(width: 120, height: 28, child: Slider(
+          value: margin,
+          min: 0, max: 0.60,
+          divisions: 60,
+          onChanged: (v) => ref.read(globalMarginProvider.notifier).state = v,
+        )),
+        SizedBox(width: 40, child: Text('$pct%',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                color: AppTheme.primary), textAlign: TextAlign.right)),
+      ]),
+    );
+  }
+}
+
+// ── Project Value Card (Cost + Margin = Sell Price) ──────────────────────────
+
+class _ProjectValueCard extends ConsumerWidget {
+  final Map<String, QxoPricedItem>? pricedItems;
+  const _ProjectValueCard({required this.pricedItems});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final currFmt = NumberFormat.currency(symbol: '\$', decimalDigits: 2);
+    final globalMargin = ref.watch(globalMarginProvider);
+    final overrides = ref.watch(itemMarginOverridesProvider);
+    final laborItems = ref.watch(laborLineItemsProvider);
+    final laborEnabled = ref.watch(laborEnabledProvider);
+    final deleted = ref.watch(bomDeletedItemsProvider);
+    final edits = ref.watch(bomLineEditsProvider);
+    final bom = ref.watch(allBuildingBomsProvider);
+    final manualItems = ref.watch(bomManualItemsProvider);
+
+    double totalCost = 0;
+    double totalValue = 0;
+    int unpricedCount = 0;
+
+    // Calculate from live BOM items (respecting deletions and edits)
+    for (final bomResult in bom) {
+      for (final item in bomResult.activeItems) {
+        final itemKey = '${item.category}:${item.name}';
+        if (deleted.contains(itemKey)) continue;
+        final edit = edits[itemKey];
+        final priced = pricedItems?[item.name];
+        final unitPrice = edit?.unitPrice ?? priced?.unitPrice;
+        final qty = edit?.qty ?? item.orderQty;
+        if (unitPrice != null && unitPrice > 0) {
+          final lineCost = unitPrice * qty;
+          totalCost += lineCost;
+          final margin = overrides[item.name] ?? globalMargin;
+          totalValue += margin < 1.0 ? lineCost / (1 - margin) : lineCost;
+        } else {
+          unpricedCount++;
+        }
+      }
+    }
+
+    // Add manual items
+    for (final m in manualItems) {
+      if (m.unitPrice != null && m.unitPrice! > 0) {
+        final lineCost = m.unitPrice! * m.qty;
+        totalCost += lineCost;
+        totalValue += globalMargin < 1.0 ? lineCost / (1 - globalMargin) : lineCost;
+      }
+    }
+
+    double laborTotal = 0;
+    if (laborEnabled) {
+      final laborDeleted = ref.watch(laborDeletedItemsProvider);
+      final laborEdits = ref.watch(laborLineEditsProvider);
+      final laborManual = ref.watch(laborManualItemsProvider);
+      for (final li in laborItems) {
+        if (laborDeleted.contains(li.name)) continue;
+        final le = laborEdits[li.name];
+        laborTotal += (le?.qty ?? li.quantity) * (le?.rate ?? li.rate);
+      }
+      for (final m in laborManual) laborTotal += m.total;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [AppTheme.accent.withValues(alpha:0.08), AppTheme.accent.withValues(alpha:0.03)],
+        ),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.accent.withValues(alpha:0.3)),
+      ),
+      child: Column(children: [
+        Row(children: [
+          Icon(Icons.receipt_long, size: 20, color: AppTheme.textMuted),
+          const SizedBox(width: 10),
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Total Material Cost',
+                  style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+              if (unpricedCount > 0)
+                Text('$unpricedCount items not yet priced',
+                    style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+            ],
+          )),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: Text(currFmt.format(totalCost),
+                key: ValueKey(totalCost),
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600,
+                    color: AppTheme.textSecondary)),
+          ),
+        ]),
+        if (laborEnabled && laborTotal > 0) ...[
+          const SizedBox(height: 6),
+          Row(children: [
+            Icon(Icons.engineering, size: 20, color: AppTheme.textMuted),
+            const SizedBox(width: 10),
+            Expanded(child: Text('Total Labor Cost',
+                style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              child: Text(currFmt.format(laborTotal),
+                  key: ValueKey(laborTotal),
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600,
+                      color: AppTheme.textSecondary)),
+            ),
+          ]),
+        ],
+        const Divider(height: 16),
+        Row(children: [
+          Icon(Icons.trending_up, size: 20, color: AppTheme.accent),
+          const SizedBox(width: 10),
+          Expanded(child: Text('Total Project Value',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary))),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: Text(currFmt.format(totalValue + laborTotal),
+                key: ValueKey(totalValue + laborTotal),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700,
+                    color: AppTheme.accent)),
+          ),
+        ]),
+      ]),
+    );
+  }
+}
+
+// ── Margin Chip (tappable to override per-item margin) ────────────────────────
+
+class _MarginChip extends ConsumerWidget {
+  final String itemName;
+  final double margin;
+  final bool isOverride;
+
+  const _MarginChip({required this.itemName, required this.margin, required this.isOverride});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final pct = (margin * 100).round();
+    return GestureDetector(
+      onTap: () => _showMarginDialog(context, ref),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        decoration: BoxDecoration(
+          color: isOverride ? AppTheme.warning.withValues(alpha:0.1) : Colors.transparent,
+          borderRadius: BorderRadius.circular(4),
+          border: isOverride ? Border.all(color: AppTheme.warning.withValues(alpha:0.4)) : null,
+        ),
+        child: Text('$pct%',
+            style: TextStyle(fontSize: 11,
+                fontWeight: isOverride ? FontWeight.w700 : FontWeight.w400,
+                color: isOverride ? AppTheme.warning : AppTheme.textMuted),
+            textAlign: TextAlign.right),
+      ),
+    );
+  }
+
+  void _showMarginDialog(BuildContext context, WidgetRef ref) {
+    final controller = TextEditingController(text: (margin * 100).round().toString());
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Margin for ${itemName.length > 30 ? '${itemName.substring(0, 30)}...' : itemName}',
+            style: const TextStyle(fontSize: 14)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: controller,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'Margin %',
+              suffixText: '%',
+              hintText: 'e.g. 30',
+            ),
+            autofocus: true,
+          ),
+          const SizedBox(height: 8),
+          if (ref.read(itemMarginOverridesProvider).containsKey(itemName))
+            TextButton(
+              onPressed: () {
+                final overrides = Map<String, double>.from(ref.read(itemMarginOverridesProvider));
+                overrides.remove(itemName);
+                ref.read(itemMarginOverridesProvider.notifier).state = overrides;
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('Reset to Global'),
+            ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final val = double.tryParse(controller.text);
+              if (val != null && val >= 0 && val < 100) {
+                final overrides = Map<String, double>.from(ref.read(itemMarginOverridesProvider));
+                overrides[itemName] = val / 100;
+                ref.read(itemMarginOverridesProvider.notifier).state = overrides;
+              }
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ── BOM Category Card ──────────────────────────────────────────────────────────
 
-class _BomCategoryCard extends StatelessWidget {
+class _BomCategoryCard extends ConsumerWidget {
   final String category;
   final List<BomLineItem> items;
   final Set<String> expandedRows;
   final ValueChanged<String> onToggle;
-  final Map<String, Map<String, double>> prices;
+  final Map<String, QxoPricedItem> pricedItems;
 
   static const Map<String, IconData> _catIcons = {
     'Membrane':               Icons.texture,
@@ -354,19 +694,25 @@ class _BomCategoryCard extends StatelessWidget {
     'Details & Accessories':  Icons.plumbing,
     'Metal Scope':            Icons.view_day,
     'Consumables':            Icons.construction,
+    'Vapor Retarder':         Icons.water_drop,
   };
 
   const _BomCategoryCard({
     required this.category, required this.items,
     required this.expandedRows, required this.onToggle,
-    required this.prices,
+    required this.pricedItems,
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final icon    = _catIcons[category] ?? Icons.list;
-    final active  = items.where((i) => i.hasQuantity).toList();
-    if (active.isEmpty) return const SizedBox.shrink();
+    final deleted = ref.watch(bomDeletedItemsProvider);
+    final manualItems = ref.watch(bomManualItemsProvider)
+        .where((m) => m.category == category).toList();
+    final active  = items.where((i) =>
+        i.hasQuantity && !deleted.contains('${i.category}:${i.name}')).toList();
+
+    if (active.isEmpty && manualItems.isEmpty) return const SizedBox.shrink();
 
     return Container(
       decoration: BoxDecoration(
@@ -390,38 +736,58 @@ class _BomCategoryCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: AppTheme.primary.withOpacity(0.1),
+                color: AppTheme.primary.withValues(alpha:0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Text('${active.length}', style: TextStyle(
+              child: Text('${active.length + manualItems.length}', style: TextStyle(
                   fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w700)),
             ),
+            const SizedBox(width: 8),
+            _AddLineItemButton(category: category),
           ]),
         ),
 
-        // Column headers
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: Row(children: [
-            Expanded(flex: 4, child: Text('Item', style: _hdrStyle)),
-            SizedBox(width: 52, child: Text('Qty', style: _hdrStyle, textAlign: TextAlign.right)),
-            SizedBox(width: 56, child: Text('Unit', style: _hdrStyle, textAlign: TextAlign.right)),
-            SizedBox(width: 72, child: Text('Unit Price', style: _hdrStyle, textAlign: TextAlign.right)),
-            SizedBox(width: 72, child: Text('Total', style: _hdrStyle, textAlign: TextAlign.right)),
-          ]),
-        ),
+        // Column headers + rows — horizontally scrollable on mobile
+        LayoutBuilder(builder: (context, constraints) {
+          final needsScroll = constraints.maxWidth < 500;
+          final content = Column(children: [
+            // Column headers
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
+              child: Row(children: [
+                const SizedBox(width: 28),
+                Expanded(flex: 3, child: Text('Item', style: _hdrStyle)),
+                Expanded(flex: 3, child: Text('QXO Description', style: _hdrStyle)),
+                SizedBox(width: 48, child: Text('Qty', style: _hdrStyle, textAlign: TextAlign.right)),
+                SizedBox(width: 48, child: Text('Unit', style: _hdrStyle, textAlign: TextAlign.right)),
+                SizedBox(width: 64, child: Text('Cost', style: _hdrStyle, textAlign: TextAlign.right)),
+                SizedBox(width: 48, child: Text('Margin', style: _hdrStyle, textAlign: TextAlign.right)),
+                SizedBox(width: 68, child: Text('Sell Price', style: _hdrStyle, textAlign: TextAlign.right)),
+                SizedBox(width: 72, child: Text('Line Total', style: _hdrStyle, textAlign: TextAlign.right)),
+              ]),
+            ),
+            // Calculated rows
+            ...active.map((item) {
+              final priced = pricedItems[item.name];
+              return _BomRow(
+                item: item,
+                isExpanded: expandedRows.contains('${item.category}:${item.name}'),
+                onToggle: () => onToggle('${item.category}:${item.name}'),
+                pricedItem: priced,
+              );
+            }),
+            // Manual rows
+            ...manualItems.map((m) => _ManualBomRow(item: m)),
+          ]);
 
-        // Rows
-        ...active.map((item) {
-          // Look up unit price from prices map — first UOM value found
-          final priceMap = prices[item.name];
-          final unitPrice = priceMap?.values.isNotEmpty == true ? priceMap!.values.first : null;
-          return _BomRow(
-            item: item,
-            isExpanded: expandedRows.contains('${item.category}:${item.name}'),
-            onToggle: () => onToggle('${item.category}:${item.name}'),
-            unitPrice: unitPrice,
+          if (!needsScroll) return content;
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 700),
+              child: IntrinsicWidth(child: content),
+            ),
           );
         }),
       ]),
@@ -434,16 +800,40 @@ class _BomCategoryCard extends StatelessWidget {
 
 // ── BOM Row with hover math ────────────────────────────────────────────────────
 
-class _BomRow extends StatelessWidget {
+class _BomRow extends ConsumerWidget {
   final BomLineItem item;
   final bool isExpanded;
   final VoidCallback onToggle;
-  final double? unitPrice;
+  final QxoPricedItem? pricedItem;
 
-  const _BomRow({required this.item, required this.isExpanded, required this.onToggle, this.unitPrice});
+  const _BomRow({required this.item, required this.isExpanded, required this.onToggle, this.pricedItem});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final globalMargin = ref.watch(globalMarginProvider);
+    final overrides = ref.watch(itemMarginOverridesProvider);
+    final itemMargin = overrides[item.name] ?? globalMargin;
+
+    // Calculate sell price and line total — always use live BOM qty
+    final costPerUnit = pricedItem?.unitPrice;
+    final sellPerUnit = costPerUnit != null && itemMargin < 1.0
+        ? costPerUnit / (1 - itemMargin) : costPerUnit;
+    final lineTotal = sellPerUnit != null ? sellPerUnit * item.orderQty : null;
+
+    final itemKey = '${item.category}:${item.name}';
+    final edits = ref.watch(bomLineEditsProvider);
+    final edit = edits[itemKey];
+
+    // Apply overrides — always use live BOM qty (item.orderQty), not stale pricing qty
+    final displayName = edit?.description ?? item.name;
+    final displayQty = edit?.qty ?? item.orderQty;
+    final displayPrice = edit?.unitPrice ?? costPerUnit;
+    final displayPart = edit?.partNumber ?? pricedItem?.qxoItemNumber;
+
+    final effectiveSell = displayPrice != null && itemMargin < 1.0
+        ? displayPrice / (1 - itemMargin) : displayPrice;
+    final effectiveLineTotal = effectiveSell != null ? effectiveSell * displayQty : null;
+
     return Column(children: [
       // Main row
       InkWell(
@@ -451,43 +841,101 @@ class _BomRow extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
           decoration: BoxDecoration(
-            color: isExpanded ? AppTheme.primary.withOpacity(0.03) : Colors.transparent,
+            color: isExpanded ? AppTheme.primary.withValues(alpha:0.03)
+                : edit != null ? Colors.amber.withValues(alpha:0.04) : Colors.transparent,
             border: Border(bottom: BorderSide(
-                color: isExpanded ? AppTheme.primary.withOpacity(0.1) : AppTheme.border.withOpacity(0.5))),
+                color: isExpanded ? AppTheme.primary.withValues(alpha:0.1) : AppTheme.border.withValues(alpha:0.5))),
           ),
           child: Row(children: [
-            // Name + notes
-            Expanded(flex: 4, child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(item.name, style: TextStyle(fontSize: 13, color: AppTheme.textPrimary,
-                    fontWeight: FontWeight.w500)),
-                if (item.notes.isNotEmpty)
-                  Text(item.notes, style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
-              ],
+            // Delete + Edit buttons
+            SizedBox(width: 28, child: Row(mainAxisSize: MainAxisSize.min, children: [
+              _DeleteItemButton(itemKey: itemKey),
+            ])),
+            // Name + notes (double-tap to edit)
+            Expanded(flex: 3, child: GestureDetector(
+              onDoubleTap: () => _showEditDialog(context, ref, itemKey, item, pricedItem, edit),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Flexible(child: Text(displayName, style: TextStyle(fontSize: 13, color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.w500))),
+                    if (edit != null) ...[
+                      const SizedBox(width: 4),
+                      Icon(Icons.edit, size: 10, color: Colors.amber.shade700),
+                    ],
+                  ]),
+                  if (item.notes.isNotEmpty)
+                    Text(item.notes, style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+                ],
+              ),
             )),
-            // Qty
-            SizedBox(width: 52, child: Text(
-              item.orderQty == item.orderQty.roundToDouble()
-                  ? item.orderQty.toInt().toString()
-                  : item.orderQty.toStringAsFixed(1),
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.primary),
-              textAlign: TextAlign.right,
+            // QXO Description (double-tap to edit)
+            Expanded(flex: 3, child: GestureDetector(
+              onDoubleTap: () => _showEditDialog(context, ref, itemKey, item, pricedItem, edit),
+              child: pricedItem != null || displayPart != null
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(pricedItem?.qxoProductName ?? displayName,
+                          style: TextStyle(fontSize: 12, color: AppTheme.accent,
+                              fontWeight: FontWeight.w500),
+                          maxLines: 2, overflow: TextOverflow.ellipsis),
+                      Text('${pricedItem?.qxoBrand ?? ''} #${displayPart ?? ''}',
+                          style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+                    ],
+                  )
+                : Text('\u2014', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+            )),
+            // Qty (double-tap to edit)
+            SizedBox(width: 48, child: GestureDetector(
+              onDoubleTap: () => _showEditDialog(context, ref, itemKey, item, pricedItem, edit),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    displayQty == displayQty.roundToDouble()
+                        ? displayQty.toInt().toString()
+                        : displayQty.toStringAsFixed(1),
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary),
+                    textAlign: TextAlign.right,
+                  ),
+                  if (edit?.qty != null)
+                    Text('was ${item.orderQty.toInt()}',
+                        style: TextStyle(fontSize: 8, color: Colors.amber.shade700)),
+                ],
+              ),
             )),
             // Unit
-            SizedBox(width: 56, child: Text(item.unit,
-                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+            SizedBox(width: 48, child: Text(
+                edit?.unit ?? pricedItem?.uom ?? item.unit,
+                style: TextStyle(fontSize: 11, color: edit?.unit != null ? Colors.amber.shade700 : AppTheme.textSecondary),
                 textAlign: TextAlign.right)),
-            // Unit Price
-            SizedBox(width: 72, child: Text(
-              unitPrice != null ? '\$${unitPrice!.toStringAsFixed(2)}' : '\u2014',
-              style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+            // Cost (double-tap to edit)
+            SizedBox(width: 64, child: GestureDetector(
+              onDoubleTap: () => _showEditDialog(context, ref, itemKey, item, pricedItem, edit),
+              child: Text(
+                displayPrice != null ? '\$${displayPrice.toStringAsFixed(2)}' : '\u2014',
+                style: TextStyle(fontSize: 12, color: edit?.unitPrice != null ? Colors.amber.shade700 : AppTheme.textSecondary),
+                textAlign: TextAlign.right,
+              ),
+            )),
+            // Margin % — tappable to edit
+            SizedBox(width: 48, child: _MarginChip(
+              itemName: item.name,
+              margin: itemMargin,
+              isOverride: overrides.containsKey(item.name),
+            )),
+            // Sell Price (unit price with margin)
+            SizedBox(width: 68, child: Text(
+              effectiveSell != null ? '\$${effectiveSell.toStringAsFixed(2)}' : '\u2014',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: AppTheme.textPrimary),
               textAlign: TextAlign.right,
             )),
-            // Total
+            // Line Total (sell price × qty)
             SizedBox(width: 72, child: Text(
-              unitPrice != null ? '\$${(unitPrice! * item.orderQty).toStringAsFixed(2)}' : '\u2014',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textPrimary),
+              effectiveLineTotal != null ? '\$${effectiveLineTotal.toStringAsFixed(2)}' : '\u2014',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.accent),
               textAlign: TextAlign.right,
             )),
             // Expand chevron
@@ -504,9 +952,9 @@ class _BomRow extends StatelessWidget {
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: AppTheme.primary.withOpacity(0.04),
+            color: AppTheme.primary.withValues(alpha:0.04),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: AppTheme.primary.withOpacity(0.15)),
+            border: Border.all(color: AppTheme.primary.withValues(alpha:0.15)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -546,6 +994,300 @@ class _BomRow extends StatelessWidget {
           ),
         ),
     ]);
+  }
+}
+
+// ── Edit Dialog for BOM line items ────────────────────────────────────────────
+
+void _showEditDialog(BuildContext context, WidgetRef ref, String itemKey,
+    BomLineItem item, QxoPricedItem? pricedItem, BomLineEdit? existingEdit) {
+  final descCtrl = TextEditingController(text: existingEdit?.description ?? item.name);
+  final partCtrl = TextEditingController(text: existingEdit?.partNumber ?? pricedItem?.qxoItemNumber ?? '');
+  final qtyCtrl = TextEditingController(text: (existingEdit?.qty ?? item.orderQty).toStringAsFixed(
+      (existingEdit?.qty ?? item.orderQty) == (existingEdit?.qty ?? item.orderQty).roundToDouble() ? 0 : 1));
+  final priceCtrl = TextEditingController(
+      text: (existingEdit?.unitPrice ?? pricedItem?.unitPrice)?.toStringAsFixed(2) ?? '');
+  final unitCtrl = TextEditingController(text: existingEdit?.unit ?? pricedItem?.uom ?? item.unit);
+
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Row(children: [
+        Icon(Icons.edit, size: 20, color: AppTheme.primary),
+        const SizedBox(width: 8),
+        const Text('Edit Line Item', style: TextStyle(fontSize: 16)),
+        const Spacer(),
+        if (existingEdit != null)
+          TextButton.icon(
+            icon: Icon(Icons.undo, size: 14, color: Colors.red.shade400),
+            label: Text('Reset', style: TextStyle(fontSize: 12, color: Colors.red.shade400)),
+            onPressed: () {
+              ref.read(bomLineEditsProvider.notifier).update((m) {
+                final copy = Map<String, BomLineEdit>.from(m);
+                copy.remove(itemKey);
+                return copy;
+              });
+              Navigator.pop(ctx);
+            },
+          ),
+      ]),
+      content: SizedBox(
+        width: 400,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: descCtrl,
+            decoration: const InputDecoration(labelText: 'Description', isDense: true),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: partCtrl,
+            decoration: const InputDecoration(labelText: 'Part # / QXO Item Number', isDense: true),
+          ),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(child: TextField(
+              controller: qtyCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Quantity', isDense: true),
+            )),
+            const SizedBox(width: 12),
+            Expanded(child: TextField(
+              controller: unitCtrl,
+              decoration: const InputDecoration(labelText: 'Unit', isDense: true),
+            )),
+            const SizedBox(width: 12),
+            Expanded(child: TextField(
+              controller: priceCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Unit Price (\$)', isDense: true),
+            )),
+          ]),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        ElevatedButton(
+          onPressed: () {
+            final newDesc = descCtrl.text != item.name ? descCtrl.text : null;
+            final newPart = partCtrl.text.isNotEmpty && partCtrl.text != (pricedItem?.qxoItemNumber ?? '')
+                ? partCtrl.text : null;
+            final newQty = double.tryParse(qtyCtrl.text);
+            final qtyOverride = newQty != null && newQty != item.orderQty ? newQty : null;
+            final newPrice = double.tryParse(priceCtrl.text);
+            final priceOverride = newPrice != null ? newPrice : null;
+            final origUnit = pricedItem?.uom ?? item.unit;
+            final unitOverride = unitCtrl.text.isNotEmpty && unitCtrl.text != origUnit
+                ? unitCtrl.text : null;
+
+            final edit = BomLineEdit(
+              description: newDesc,
+              partNumber: newPart,
+              qty: qtyOverride,
+              unitPrice: priceOverride,
+              unit: unitOverride,
+            );
+            if (edit.hasOverrides) {
+              ref.read(bomLineEditsProvider.notifier).update((m) =>
+                  {...m, itemKey: edit});
+            }
+            Navigator.pop(ctx);
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    ),
+  );
+}
+
+// ── Delete item button ────────────────────────────────────────────────────────
+
+class _DeleteItemButton extends ConsumerWidget {
+  final String itemKey;
+  const _DeleteItemButton({required this.itemKey});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return IconButton(
+        padding: EdgeInsets.zero,
+        iconSize: 14,
+        constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+        icon: Icon(Icons.close, color: Colors.red.shade300),
+        tooltip: 'Remove line item',
+        onPressed: () {
+          ref.read(bomDeletedItemsProvider.notifier).update((s) => {...s, itemKey});
+        },
+      );
+  }
+}
+
+// ── Add line item button ──────────────────────────────────────────────────────
+
+class _AddLineItemButton extends ConsumerWidget {
+  final String category;
+  const _AddLineItemButton({required this.category});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return SizedBox(
+      height: 24,
+      child: TextButton.icon(
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        icon: Icon(Icons.add, size: 14, color: AppTheme.accent),
+        label: Text('Add', style: TextStyle(fontSize: 11, color: AppTheme.accent)),
+        onPressed: () => _showAddDialog(context, ref, category),
+      ),
+    );
+  }
+
+  void _showAddDialog(BuildContext context, WidgetRef ref, String category) {
+    final descCtrl = TextEditingController();
+    final partCtrl = TextEditingController();
+    final qtyCtrl = TextEditingController(text: '1');
+    final unitCtrl = TextEditingController(text: 'each');
+    final priceCtrl = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: [
+          Icon(Icons.add_circle, size: 20, color: AppTheme.accent),
+          const SizedBox(width: 8),
+          Text('Add to $category', style: const TextStyle(fontSize: 16)),
+        ]),
+        content: SizedBox(
+          width: 400,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: descCtrl,
+              decoration: const InputDecoration(labelText: 'Description *', isDense: true),
+              autofocus: true,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: partCtrl,
+              decoration: const InputDecoration(labelText: 'Part # (optional)', isDense: true),
+            ),
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(child: TextField(
+                controller: qtyCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Quantity', isDense: true),
+              )),
+              const SizedBox(width: 12),
+              Expanded(child: TextField(
+                controller: unitCtrl,
+                decoration: const InputDecoration(labelText: 'Unit', isDense: true),
+              )),
+            ]),
+            const SizedBox(height: 12),
+            TextField(
+              controller: priceCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Unit Price (\$, optional)', isDense: true),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              if (descCtrl.text.isEmpty) return;
+              final newItem = ManualBomItem(
+                id: 'manual_${DateTime.now().millisecondsSinceEpoch}',
+                category: category,
+                description: descCtrl.text,
+                partNumber: partCtrl.text,
+                qty: double.tryParse(qtyCtrl.text) ?? 1.0,
+                unit: unitCtrl.text.isEmpty ? 'each' : unitCtrl.text,
+                unitPrice: double.tryParse(priceCtrl.text),
+              );
+              ref.read(bomManualItemsProvider.notifier).update((list) => [...list, newItem]);
+              Navigator.pop(ctx);
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Manual BOM row (user-added items) ─────────────────────────────────────────
+
+class _ManualBomRow extends ConsumerWidget {
+  final ManualBomItem item;
+  const _ManualBomRow({required this.item});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final globalMargin = ref.watch(globalMarginProvider);
+    final sellPrice = item.unitPrice != null && globalMargin < 1.0
+        ? item.unitPrice! / (1 - globalMargin) : item.unitPrice;
+    final lineTotal = sellPrice != null ? sellPrice * item.qty : null;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha:0.03),
+        border: Border(bottom: BorderSide(color: AppTheme.border.withValues(alpha:0.5))),
+      ),
+      child: Row(children: [
+        // Delete
+        SizedBox(width: 44, child: IconButton(
+            padding: EdgeInsets.zero, iconSize: 14,
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            icon: Icon(Icons.close, color: Colors.red.shade300),
+            onPressed: () {
+              ref.read(bomManualItemsProvider.notifier).update(
+                  (list) => list.where((m) => m.id != item.id).toList());
+            },
+          ),
+        ),
+        // Description
+        Expanded(flex: 3, child: Row(children: [
+          Icon(Icons.person_add, size: 10, color: AppTheme.accent),
+          const SizedBox(width: 4),
+          Flexible(child: Text(item.description, style: TextStyle(fontSize: 13,
+              color: AppTheme.textPrimary, fontWeight: FontWeight.w500))),
+        ])),
+        // Part #
+        Expanded(flex: 3, child: item.partNumber.isNotEmpty
+            ? Text('#${item.partNumber}', style: TextStyle(fontSize: 12, color: AppTheme.accent))
+            : Text('\u2014', style: TextStyle(fontSize: 12, color: AppTheme.textMuted))),
+        // Qty
+        SizedBox(width: 48, child: Text(
+          item.qty == item.qty.roundToDouble() ? item.qty.toInt().toString() : item.qty.toStringAsFixed(1),
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary),
+          textAlign: TextAlign.right,
+        )),
+        // Unit
+        SizedBox(width: 48, child: Text(item.unit,
+            style: TextStyle(fontSize: 11, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
+        // Cost
+        SizedBox(width: 64, child: Text(
+          item.unitPrice != null ? '\$${item.unitPrice!.toStringAsFixed(2)}' : '\u2014',
+          style: TextStyle(fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
+        // Margin
+        SizedBox(width: 48, child: Text('${(globalMargin * 100).toStringAsFixed(0)}%',
+            style: TextStyle(fontSize: 11, color: AppTheme.textMuted), textAlign: TextAlign.right)),
+        // Sell Price
+        SizedBox(width: 68, child: Text(
+          sellPrice != null ? '\$${sellPrice.toStringAsFixed(2)}' : '\u2014',
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: AppTheme.textPrimary),
+          textAlign: TextAlign.right)),
+        // Line Total
+        SizedBox(width: 72, child: Text(
+          lineTotal != null ? '\$${lineTotal.toStringAsFixed(2)}' : '\u2014',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.accent),
+          textAlign: TextAlign.right)),
+        const SizedBox(width: 24), // align with expand chevron space
+      ]),
+    );
   }
 }
 
@@ -620,7 +1362,7 @@ class _BuildingSelector extends StatelessWidget {
     final active = selected == idx;
     final bg = active ? (isTotal ? AppTheme.primaryDark : AppTheme.primary) : Colors.white;
     final fg = active ? Colors.white : AppTheme.textPrimary;
-    final sg = active ? Colors.white.withOpacity(0.75) : AppTheme.textMuted;
+    final sg = active ? Colors.white.withValues(alpha:0.75) : AppTheme.textMuted;
 
     return GestureDetector(
       onTap: () => onSelect(idx),
@@ -630,7 +1372,7 @@ class _BuildingSelector extends StatelessWidget {
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(7),
-          border: active ? null : Border.all(color: AppTheme.border.withOpacity(0.5)),
+          border: active ? null : Border.all(color: AppTheme.border.withValues(alpha:0.5)),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Icon(icon, size: 14, color: fg),
@@ -668,11 +1410,11 @@ class _TotalBanner extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [AppTheme.primary.withOpacity(0.08), AppTheme.primary.withOpacity(0.03)],
+          colors: [AppTheme.primary.withValues(alpha:0.08), AppTheme.primary.withValues(alpha:0.03)],
           begin: Alignment.centerLeft, end: Alignment.centerRight,
         ),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.primary.withOpacity(0.2)),
+        border: Border.all(color: AppTheme.primary.withValues(alpha:0.2)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
@@ -758,9 +1500,9 @@ class _SummaryChips extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: AppTheme.primary.withOpacity(0.04),
+        color: AppTheme.primary.withValues(alpha:0.04),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.primary.withOpacity(0.15)),
+        border: Border.all(color: AppTheme.primary.withValues(alpha:0.15)),
       ),
       child: isNarrow
           ? Wrap(
@@ -787,7 +1529,7 @@ class _SummaryChips extends StatelessWidget {
   Widget _chip(String label, String value, IconData icon) => Column(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Icon(icon, size: 14, color: AppTheme.primary.withOpacity(0.7)),
+      Icon(icon, size: 14, color: AppTheme.primary.withValues(alpha:0.7)),
       const SizedBox(height: 3),
       Text(value,
           style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary),
@@ -833,7 +1575,7 @@ class _FasteningScheduleTab extends ConsumerWidget {
                 Icons.grid_on, showWarning: !hasZones,
                 warning: hasZones ? null : 'Wind zone widths not set — enter building height to auto-calculate.'),
             const SizedBox(height: 4),
-            _fasteningTable(geo, isRhinobond, wAcc, info.warrantyYears),
+            _fasteningTable(geo, isRhinobond, wAcc, info.warrantyYears, info.designWindSpeed),
           ])),
           const SizedBox(height: 16),
         ],
@@ -887,8 +1629,8 @@ class _FasteningScheduleTab extends ConsumerWidget {
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-      decoration: BoxDecoration(color: c.withOpacity(0.08), borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: c.withOpacity(0.25))),
+      decoration: BoxDecoration(color: c.withValues(alpha:0.08), borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: c.withValues(alpha:0.25))),
       child: Row(children: [
         Icon(icon, color: c, size: 18), const SizedBox(width: 10),
         Flexible(child: Text.rich(TextSpan(children: [
@@ -899,15 +1641,19 @@ class _FasteningScheduleTab extends ConsumerWidget {
     );
   }
 
-  Widget _fasteningTable(geo, bool rhinobond, double wAcc, int warrantyYears) {
+  Widget _fasteningTable(geo, bool rhinobond, double wAcc, int warrantyYears, String? designWindSpeed) {
     final zones = geo.windZones;
     final hasData = zones.fieldZoneArea > 0;
 
-    // Fastening densities driven by warranty tier — mirrors bom_calculator logic.
-    // MA: from Versico MA tables. Rhinobond: ~33–50% of MA (larger bond area per plate).
+    // Apply wind speed adjustment — same logic as BOM calculator.
+    // ≥90 mph: bump one warranty tier; ≥130 mph: bump two tiers.
+    final windMph = _parseWindMph(designWindSpeed);
+    final effectiveWarranty = _windAdjustedWarranty(warrantyYears, windMph);
+
+    // Fastening densities driven by effective warranty tier (wind-adjusted).
     final densities     = rhinobond
-        ? _rbDensities(warrantyYears)
-        : _maDensities(warrantyYears);
+        ? _rbDensities(effectiveWarranty)
+        : _maDensities(effectiveWarranty);
     final fieldDensity  = densities.$1;
     final perimDensity  = densities.$2;
     final cornerDensity = densities.$3;
@@ -916,21 +1662,36 @@ class _FasteningScheduleTab extends ConsumerWidget {
     final perimQty  = hasData ? (zones.perimeterZoneArea * perimDensity  * (1 + wAcc)).ceil() : null;
     final cornerQty = hasData ? (zones.cornerZoneArea * cornerDensity * (1 + wAcc)).ceil() : null;
 
-    return Table(
-      border: TableBorder.all(color: AppTheme.border, borderRadius: BorderRadius.circular(7)),
-      columnWidths: const {0: FlexColumnWidth(2), 1: FlexColumnWidth(1.2),
-          2: FlexColumnWidth(1.2), 3: FlexColumnWidth(1.2), 4: FlexColumnWidth(1.2)},
-      children: [
-        TableRow(
-          decoration: BoxDecoration(color: AppTheme.surfaceAlt),
-          children: ['Zone', 'Area (sf)', 'Density', 'Pattern', rhinobond ? 'Plates' : 'Fasteners']
-              .map(_th).toList(),
+    final windNote = windMph >= 90
+        ? '  Wind ${windMph.toInt()} mph: using ${effectiveWarranty}-year densities (base ${warrantyYears}-year)'
+        : null;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (windNote != null)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Row(children: [
+            Icon(Icons.air, size: 14, color: Colors.orange.shade700),
+            const SizedBox(width: 4),
+            Text(windNote, style: TextStyle(fontSize: 11, color: Colors.orange.shade700, fontWeight: FontWeight.w500)),
+          ]),
         ),
-        _fRow('Field',     _nf(zones.fieldZoneArea),     '${fieldDensity.toStringAsFixed(3)}/sf',  '24"×24"', fieldQty,  AppTheme.primary.withOpacity(0.05)),
-        _fRow('Perimeter', _nf(zones.perimeterZoneArea), '${perimDensity.toStringAsFixed(3)}/sf',  '12"×12"', perimQty,  AppTheme.primary.withOpacity(0.10)),
-        _fRow('Corner',    _nf(zones.cornerZoneArea),    '${cornerDensity.toStringAsFixed(3)}/sf', '8"×12"',  cornerQty, AppTheme.primary.withOpacity(0.16)),
-      ],
-    );
+      Table(
+        border: TableBorder.all(color: AppTheme.border, borderRadius: BorderRadius.circular(7)),
+        columnWidths: const {0: FlexColumnWidth(2), 1: FlexColumnWidth(1.2),
+            2: FlexColumnWidth(1.2), 3: FlexColumnWidth(1.2), 4: FlexColumnWidth(1.2)},
+        children: [
+          TableRow(
+            decoration: BoxDecoration(color: AppTheme.surfaceAlt),
+            children: ['Zone', 'Area (sf)', 'Density', 'Pattern', rhinobond ? 'Plates' : 'Fasteners']
+                .map(_th).toList(),
+          ),
+          _fRow('Field',     _nf(zones.fieldZoneArea),     '${fieldDensity.toStringAsFixed(3)}/sf',  '24"x24"', fieldQty,  AppTheme.primary.withValues(alpha:0.05)),
+          _fRow('Perimeter', _nf(zones.perimeterZoneArea), '${perimDensity.toStringAsFixed(3)}/sf',  '12"x12"', perimQty,  AppTheme.primary.withValues(alpha:0.10)),
+          _fRow('Corner',    _nf(zones.cornerZoneArea),    '${cornerDensity.toStringAsFixed(3)}/sf', '8"x12"',  cornerQty, AppTheme.primary.withValues(alpha:0.16)),
+        ],
+      ),
+    ]);
   }
 
   Widget _fastenerLengthCard(InsulationSystem insul, String deckType) {
@@ -1079,9 +1840,9 @@ class _FasteningScheduleTab extends ConsumerWidget {
           margin: const EdgeInsets.only(bottom: 6),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: isActive ? AppTheme.accent.withOpacity(0.08) : AppTheme.surfaceAlt,
+            color: isActive ? AppTheme.accent.withValues(alpha:0.08) : AppTheme.surfaceAlt,
             borderRadius: BorderRadius.circular(7),
-            border: Border.all(color: isActive ? AppTheme.accent.withOpacity(0.3) : AppTheme.border),
+            border: Border.all(color: isActive ? AppTheme.accent.withValues(alpha:0.3) : AppTheme.border),
           ),
           child: Row(children: [
             Icon(isActive ? Icons.check_circle : Icons.circle_outlined,
@@ -1279,14 +2040,14 @@ class _ThermalCodeTab extends ConsumerWidget {
       child: Row(children: [
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('Total Assembly R-Value',
-              style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 13)),
+              style: TextStyle(color: Colors.white.withValues(alpha:0.8), fontSize: 13)),
           const SizedBox(height: 6),
           Text(totalR > 0 ? 'R-${totalR.toStringAsFixed(1)}' : '—',
               style: const TextStyle(color: Colors.white, fontSize: 44,
                   fontWeight: FontWeight.w800)),
           if (required != null)
             Text('Required: R-${required.toStringAsFixed(0)}',
-                style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 12)),
+                style: TextStyle(color: Colors.white.withValues(alpha:0.75), fontSize: 12)),
         ])),
         if (passes != null)
           Container(
@@ -1414,6 +2175,46 @@ class _ScopeOfWorkTabState extends ConsumerState<_ScopeOfWorkTab> {
                   foregroundColor: AppTheme.textSecondary,
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
             ),
+          const SizedBox(width: 8),
+          ElevatedButton.icon(
+            onPressed: () async {
+              final state = ref.read(estimatorProvider);
+              final bom = ref.read(bomProvider);
+              final rValue = ref.read(rValueResultProvider);
+              final profile = ref.read(companyProfileProvider);
+              final sowOvr = ref.read(sowOverridesProvider);
+              await _exportSingleDocPdf(
+                state: state, title: 'Scope of Work', filename: 'scope_of_work',
+                profile: profile,
+                buildContent: () {
+                  final widgets = <pw.Widget>[];
+                  final effectiveText = <String, String>{...autoText};
+                  for (final e in sowOvr.entries) effectiveText[e.key] = e.value;
+                  for (final entry in effectiveText.entries) {
+                    if (entry.value.trim().isEmpty) continue;
+                    widgets.add(pw.Padding(
+                      padding: const pw.EdgeInsets.only(bottom: 8),
+                      child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+                        pw.Text(entry.key.replaceAll('_', ' ').toUpperCase(),
+                            style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold,
+                                color: _pdfBlue, letterSpacing: 0.5)),
+                        pw.SizedBox(height: 3),
+                        pw.Text(_sanitizePdf(entry.value),
+                            style: pw.TextStyle(fontSize: 9, color: _pdfSlate700, lineSpacing: 1.3)),
+                      ]),
+                    ));
+                  }
+                  return widgets;
+                },
+              );
+            },
+            icon: const Icon(Icons.download, size: 14),
+            label: const Text('Export PDF', style: TextStyle(fontSize: 12)),
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              minimumSize: Size.zero,
+            ),
+          ),
         ]),
 
         if (hasAnyOverride) ...[
@@ -1421,9 +2222,9 @@ class _ScopeOfWorkTabState extends ConsumerState<_ScopeOfWorkTab> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
             decoration: BoxDecoration(
-                color: const Color(0xFF7C3AED).withOpacity(0.06),
+                color: const Color(0xFF7C3AED).withValues(alpha:0.06),
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: const Color(0xFF7C3AED).withOpacity(0.2))),
+                border: Border.all(color: const Color(0xFF7C3AED).withValues(alpha:0.2))),
             child: Row(children: [
               const Icon(Icons.auto_awesome, size: 13, color: Color(0xFF7C3AED)),
               const SizedBox(width: 6),
@@ -1604,7 +2405,7 @@ class _ScopeOfWorkTabState extends ConsumerState<_ScopeOfWorkTab> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                 decoration: BoxDecoration(
-                    color: const Color(0xFF7C3AED).withOpacity(0.1),
+                    color: const Color(0xFF7C3AED).withValues(alpha:0.1),
                     borderRadius: BorderRadius.circular(4)),
                 child: const Text('AI EDITED',
                     style: TextStyle(fontSize: 8, fontWeight: FontWeight.w700,
@@ -1635,9 +2436,9 @@ class _ScopeOfWorkTabState extends ConsumerState<_ScopeOfWorkTab> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                 decoration: BoxDecoration(
-                    color: const Color(0xFF7C3AED).withOpacity(0.08),
+                    color: const Color(0xFF7C3AED).withValues(alpha:0.08),
                     borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: const Color(0xFF7C3AED).withOpacity(0.25))),
+                    border: Border.all(color: const Color(0xFF7C3AED).withValues(alpha:0.25))),
                 child: const Row(mainAxisSize: MainAxisSize.min, children: [
                   Icon(Icons.auto_awesome, size: 9, color: Color(0xFF7C3AED)),
                   SizedBox(width: 3),
@@ -1651,8 +2452,11 @@ class _ScopeOfWorkTabState extends ConsumerState<_ScopeOfWorkTab> {
         ]),
 
         const SizedBox(height: 6),
-        Text(displayText,
-            style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary, height: 1.6)),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 680),
+          child: Text(displayText,
+              style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary, height: 1.6)),
+        ),
       ]),
     );
   }
@@ -1732,7 +2536,7 @@ class _ScopeOfWorkTabState extends ConsumerState<_ScopeOfWorkTab> {
       if (l2.thickness > 0)
         parts.add('${l2.thickness}" ${l2.type}, Layer 2, ${l2.attachmentMethod.toLowerCase()}');
     }
-    if (insul.hasTaperedInsulation) parts.add('tapered insulation system (slope-to-drain)');
+    if (insul.hasTaper) parts.add('tapered insulation system (slope-to-drain)');
     if (insul.hasCoverBoard && insul.coverBoard != null) {
       final cb = insul.coverBoard!;
       parts.add('${cb.thickness}" ${cb.type} cover board, ${cb.attachmentMethod.toLowerCase()}');
@@ -1826,8 +2630,12 @@ class _SowEditSheetState extends State<_SowEditSheet> {
       ).timeout(const Duration(seconds: 20));
 
       if (response.statusCode == 200) {
-        final data    = jsonDecode(response.body);
-        final newText = (data['result']?['result'] as String? ?? '').trim();
+        final data = jsonDecode(response.body);
+        // Firebase on_call wraps: {"result":{"result":{"result":"text"}}}
+        final r1 = data['result'];
+        final r2 = r1 is Map ? r1['result'] : r1;
+        final r3 = r2 is Map ? r2['result'] : r2;
+        final newText = (r3?.toString() ?? '').trim();
         if (newText.isNotEmpty) {
           setState(() { _textCtrl.text = newText; _promptCtrl.clear(); });
         } else {
@@ -1837,7 +2645,7 @@ class _SowEditSheetState extends State<_SowEditSheet> {
         setState(() => _error = 'AI error (${response.statusCode}).');
       }
     } catch (e) {
-      setState(() => _error = 'Connection error.');
+      setState(() => _error = 'Connection error: ${e.toString().split('\n').first}');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -1856,7 +2664,7 @@ class _SowEditSheetState extends State<_SowEditSheet> {
           Container(
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-                color: const Color(0xFF7C3AED).withOpacity(0.1),
+                color: const Color(0xFF7C3AED).withValues(alpha:0.1),
                 borderRadius: BorderRadius.circular(6)),
             child: const Icon(Icons.auto_awesome, size: 16, color: Color(0xFF7C3AED)),
           ),
@@ -1880,7 +2688,7 @@ class _SowEditSheetState extends State<_SowEditSheet> {
           decoration: BoxDecoration(
               color: const Color(0xFFF5F3FF),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFF7C3AED).withOpacity(0.2))),
+              border: Border.all(color: const Color(0xFF7C3AED).withValues(alpha:0.2))),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('AI Instruction',
                 style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
@@ -1933,7 +2741,7 @@ class _SowEditSheetState extends State<_SowEditSheet> {
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                            color: const Color(0xFF7C3AED).withOpacity(0.3))),
+                            color: const Color(0xFF7C3AED).withValues(alpha:0.3))),
                     child: Text(q,
                         style: const TextStyle(fontSize: 10,
                             color: Color(0xFF7C3AED), fontWeight: FontWeight.w500)),
@@ -2019,7 +2827,7 @@ Widget _sectionHeader(String title, IconData icon) => Row(children: [
   Container(
     padding: const EdgeInsets.all(10),
     decoration: BoxDecoration(
-      color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+      color: AppTheme.primary.withValues(alpha:0.1), borderRadius: BorderRadius.circular(8)),
     child: Icon(icon, color: AppTheme.primary, size: 22),
   ),
   const SizedBox(width: 12),
@@ -2054,13 +2862,643 @@ Widget _cardHeader(String title, IconData icon,
 
 Widget _warnBox(String msg, Color color) => Container(
   padding: const EdgeInsets.all(10),
-  decoration: BoxDecoration(color: color.withOpacity(0.08), borderRadius: BorderRadius.circular(7),
-      border: Border.all(color: color.withOpacity(0.25))),
+  decoration: BoxDecoration(color: color.withValues(alpha:0.08), borderRadius: BorderRadius.circular(7),
+      border: Border.all(color: color.withValues(alpha:0.25))),
   child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Icon(Icons.info_outline, color: color, size: 14), const SizedBox(width: 7),
     Expanded(child: Text(msg, style: TextStyle(fontSize: 11, color: color))),
   ]),
 );
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SUBCONTRACTOR INSTALLATION INSTRUCTIONS TAB
+// ══════════════════════════════════════════════════════════════════════════════
+
+class _SubInstructionsTab extends ConsumerStatefulWidget {
+  const _SubInstructionsTab();
+
+  @override
+  ConsumerState<_SubInstructionsTab> createState() => _SubInstructionsTabState();
+}
+
+class _SubInstructionsTabState extends ConsumerState<_SubInstructionsTab> {
+  static const List<(String, String)> _sections = [
+    ('overview',       'System Overview'),
+    ('deck_prep',      'Deck Preparation'),
+    ('insulation',     'Insulation Installation'),
+    ('membrane',       'Membrane Installation'),
+    ('parapet',        'Parapet Wall Flashings'),
+    ('penetrations',   'Penetration Flashings'),
+    ('metal',          'Sheet Metal & Edge Details'),
+    ('accessories',    'Accessories & Sealants'),
+    ('quality',        'Quality & Compliance'),
+  ];
+
+  bool _isExporting = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final geo = ref.watch(roofGeometryProvider);
+    final specs = ref.watch(systemSpecsProvider);
+    final insul = ref.watch(insulationSystemProvider);
+    final membrane = ref.watch(membraneSystemProvider);
+    final parapet = ref.watch(parapetWallsProvider);
+    final metal = ref.watch(metalScopeProvider);
+    final info = ref.watch(projectInfoProvider);
+    final pen = ref.watch(penetrationsProvider);
+    final overrides = ref.watch(subInstructionOverridesProvider);
+
+    final area = geo.totalArea;
+    final autoText = _buildSubAutoText(geo, specs, insul, membrane, parapet, metal, info, pen, area);
+    final hasAnyOverride = overrides.isNotEmpty;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          _sectionHeader('Subcontractor Installation Instructions', Icons.engineering),
+          const Spacer(),
+          if (hasAnyOverride)
+            TextButton.icon(
+              onPressed: () => ref.read(subInstructionOverridesProvider.notifier).state = {},
+              icon: const Icon(Icons.refresh, size: 14),
+              label: const Text('Reset All', style: TextStyle(fontSize: 12)),
+              style: TextButton.styleFrom(
+                  foregroundColor: AppTheme.textSecondary,
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
+            ),
+          const SizedBox(width: 8),
+          _isExporting
+              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              : ElevatedButton.icon(
+                  onPressed: () => _exportPdf(context),
+                  icon: const Icon(Icons.download, size: 14),
+                  label: const Text('Export PDF', style: TextStyle(fontSize: 12)),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    minimumSize: Size.zero,
+                  ),
+                ),
+        ]),
+        const SizedBox(height: 6),
+        Text('Field-level installation guide for roofing crews. Tap any section to edit or enhance with AI.',
+            style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+        const SizedBox(height: 16),
+
+        ..._sections.map((s) {
+          final key = s.$1;
+          final title = s.$2;
+          final auto = autoText[key] ?? '';
+          if (auto.isEmpty && overrides[key] == null) return const SizedBox.shrink();
+          return _editableSection(
+            context: context,
+            sectionKey: key,
+            title: title,
+            autoText: auto,
+            overrideText: overrides[key],
+            allSections: autoText,
+            isSubInstruction: true,
+          );
+        }),
+      ]),
+    );
+  }
+
+  Future<void> _exportPdf(BuildContext context) async {
+    setState(() => _isExporting = true);
+    try {
+      final state = ref.read(estimatorProvider);
+      final bom = ref.read(bomProvider);
+      final rValue = ref.read(rValueResultProvider);
+      final profile = ref.read(companyProfileProvider);
+      final overrides = ref.read(subInstructionOverridesProvider);
+      await _exportSubInstructionsPdf(state, bom, rValue, profile, overrides);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Export error: $e'), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
+    }
+  }
+
+  Widget _editableSection({
+    required BuildContext context,
+    required String sectionKey,
+    required String title,
+    required String autoText,
+    String? overrideText,
+    required Map<String, String> allSections,
+    required bool isSubInstruction,
+  }) {
+    final isEdited = overrideText != null;
+    final displayText = overrideText ?? autoText;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Row(children: [
+            Text(title.toUpperCase(),
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11,
+                    color: isEdited ? const Color(0xFF7C3AED) : AppTheme.primary,
+                    letterSpacing: 1)),
+            if (isEdited) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                    color: const Color(0xFF7C3AED).withValues(alpha:0.1),
+                    borderRadius: BorderRadius.circular(4)),
+                child: const Text('EDITED', style: TextStyle(fontSize: 8,
+                    fontWeight: FontWeight.w700, color: Color(0xFF7C3AED))),
+              ),
+            ],
+          ])),
+          InkWell(
+            onTap: () => _openEditSheet(context, sectionKey, title, displayText, allSections),
+            borderRadius: BorderRadius.circular(6),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                  color: AppTheme.primary.withValues(alpha:0.06),
+                  borderRadius: BorderRadius.circular(6)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.auto_awesome, size: 12, color: AppTheme.primary),
+                const SizedBox(width: 4),
+                Text('Edit with AI', style: TextStyle(fontSize: 10,
+                    fontWeight: FontWeight.w600, color: AppTheme.primary)),
+              ]),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isEdited ? const Color(0xFF7C3AED).withValues(alpha:0.03) : AppTheme.surfaceAlt,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: isEdited
+                ? const Color(0xFF7C3AED).withValues(alpha:0.15)
+                : AppTheme.border),
+          ),
+          child: Text(displayText,
+              style: TextStyle(fontSize: 12, color: AppTheme.textPrimary, height: 1.5)),
+        ),
+      ]),
+    );
+  }
+
+  void _openEditSheet(BuildContext context, String key, String title,
+      String currentText, Map<String, String> allSections) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) => _SubEditSheet(
+        sectionKey: key,
+        sectionTitle: title,
+        currentText: currentText,
+        allSections: allSections,
+        onSave: (newText) {
+          ref.read(subInstructionOverridesProvider.notifier).update((m) =>
+              {...m, key: newText});
+        },
+        onReset: () {
+          ref.read(subInstructionOverridesProvider.notifier).update((m) {
+            final copy = Map<String, String>.from(m);
+            copy.remove(key);
+            return copy;
+          });
+        },
+      ),
+    );
+  }
+
+  Map<String, String> _buildSubAutoText(geo, specs, insul, membrane, parapet,
+      metal, info, pen, double area) {
+    final map = <String, String>{};
+    final isMA = membrane.fieldAttachment == 'Mechanically Attached';
+    final isFA = membrane.fieldAttachment == 'Fully Adhered';
+    final isRB = membrane.fieldAttachment == 'Rhinobond (Induction Welded)';
+    final zones = geo.windZones;
+    final hasZones = zones.perimeterZoneWidth > 0;
+
+    map['overview'] = 'Project: ${info.projectName}. '
+        'Type: ${specs.projectType}. Deck: ${specs.deckType}. '
+        'Membrane: Versico ${membrane.thickness} ${membrane.membraneType}, ${membrane.color}, ${membrane.fieldAttachment}. '
+        'Warranty: ${info.warrantyYears}-year NDL. '
+        '${info.designWindSpeed != null ? "Design wind: ${info.designWindSpeed}. " : ""}'
+        'Total area: ${area.toStringAsFixed(0)} SF.';
+
+    if (specs.projectType == 'Tear-off & Replace') {
+      map['deck_prep'] = 'Remove existing ${specs.existingRoofType} (${specs.existingLayers} layers) to structural ${specs.deckType.toLowerCase()} deck. '
+          'Inspect for damage, deflection, deterioration. Report all findings before proceeding. '
+          '${specs.existingRoofType == "BUR" || specs.existingRoofType == "Modified Bitumen" ? "Apply substrate primer to bituminous residue before insulation." : ""}'
+          '${specs.vaporRetarder != "None" ? " Install ${specs.vaporRetarder.toLowerCase()} vapor retarder over deck." : ""}';
+    } else {
+      map['deck_prep'] = 'Verify ${specs.deckType.toLowerCase()} deck is clean, dry, free of debris. '
+          '${specs.vaporRetarder != "None" ? "Install ${specs.vaporRetarder.toLowerCase()} vapor retarder over deck." : ""}';
+    }
+
+    final l1 = insul.layer1;
+    var insulText = 'Layer 1: ${l1.type} ${l1.thickness}" - ${l1.attachmentMethod}. ';
+    if (l1.attachmentMethod == 'Mechanically Attached') {
+      final l1Len = BomCalculator.selectFastenerLenPublic(specs.deckType,
+          BomCalculator.stackThicknessPublic(insul, 1));
+      insulText += 'Fastener: ${BomCalculator.fastenerNamePublic(specs.deckType)} $l1Len with 3" insulation plate, 4 per 4\'x8\' board. ';
+    }
+    if (insul.numberOfLayers == 2 && insul.layer2 != null) {
+      final l2 = insul.layer2!;
+      insulText += 'Layer 2: ${l2.type} ${l2.thickness}" - ${l2.attachmentMethod}. Offset joints min 6" from Layer 1. ';
+      if (l2.attachmentMethod == 'Mechanically Attached') {
+        final l2Len = BomCalculator.selectFastenerLenPublic(specs.deckType,
+            BomCalculator.stackThicknessPublic(insul, 2));
+        insulText += 'Fastener: ${BomCalculator.fastenerNamePublic(specs.deckType)} $l2Len (through L1+L2) with 3" plate. ';
+      }
+    }
+    if (insul.hasCoverBoard && insul.coverBoard != null) {
+      final cb = insul.coverBoard!;
+      insulText += 'Cover Board: ${cb.type} ${cb.thickness}" - ${cb.attachmentMethod}. ';
+    }
+    insulText += 'Stagger all joints. No aligned joints between layers.';
+    map['insulation'] = insulText;
+
+    // Membrane
+    var memText = '';
+    if (isMA) {
+      memText = 'MECHANICALLY ATTACHED: Install ${membrane.thickness} ${membrane.membraneType} ${membrane.rollWidth}x100\' field rolls. ';
+      if (hasZones) {
+        final windMph = _parseWindMph(info.designWindSpeed);
+        final effW = _windAdjustedWarranty(info.warrantyYears, windMph);
+        final d = _maDensities(effW);
+        memText += 'Fastening densities (${effW}-year${effW != info.warrantyYears ? ", wind-adjusted" : ""}): '
+            'Field ${d.$1.toStringAsFixed(2)}/SF, Perimeter ${d.$2.toStringAsFixed(2)}/SF, Corner ${d.$3.toStringAsFixed(2)}/SF. '
+            'Zone width: ${zones.perimeterZoneWidth.toStringAsFixed(1)}\'. ';
+      }
+      final stackIn = BomCalculator.stackThicknessPublic(insul, 3);
+      final memLen = BomCalculator.selectFastenerLenPublic(specs.deckType, stackIn);
+      memText += 'Membrane fastener: ${BomCalculator.fastenerNamePublic(specs.deckType)} $memLen (${stackIn.toStringAsFixed(1)}" stack to deck) with 3" stress plate. ';
+    } else if (isFA) {
+      memText = 'FULLY ADHERED: Apply Cav-Grip III adhesive (~60 SF/gal) to substrate and membrane back. Roll into adhesive while tacky. ';
+    } else if (isRB) {
+      memText = 'RHINOBOND: Install induction weld plates at specified density. Lay membrane and weld with induction equipment. No through-membrane fasteners. ';
+    }
+    memText += 'Seam: ${membrane.seamType}. '
+        '${membrane.seamType == "Hot Air Welded" ? "Min 1.5\" weld width, probe-test every 100 LF." : "Apply TPO primer before tape."} '
+        'Cut-edge sealant on all reinforced membrane cut edges.';
+    map['membrane'] = memText;
+
+    if (parapet.hasParapetWalls && parapet.parapetTotalLF > 0) {
+      map['parapet'] = '${parapet.parapetTotalLF.toStringAsFixed(0)} LF parapet walls, '
+          '${parapet.parapetHeight.toStringAsFixed(0)}" height, ${parapet.wallType} construction. '
+          '${isMA ? "Install RUSS strip (6\" wide) at wall/deck transition, fasten 12\" O.C. " : ""}'
+          'Adhere TPO flashing with CAV-Grip 3v spray (40lb cyl, ~400 SF/cyl). '
+          'Pair with UN-TACK cleaner (8lb cyl, 1:1). '
+          'Extend from field membrane (min 4\" lap, welded) up wall to termination. '
+          'Apply TPO primer at all pressure-sensitive transitions. '
+          'Terminate with ${parapet.terminationType.toLowerCase()} at ${parapet.parapetHeight.toStringAsFixed(0)}" height. '
+          'Water cut-off mastic under bar, single-ply sealant at top edge. '
+          'Term bar fasteners: ${_termFastDesc(parapet)} at 8" O.C.';
+    }
+
+    final details = <String>[];
+    if (pen.rtuDetails.isNotEmpty) details.add('RTU curbs: ${pen.rtuDetails.length} units, ${pen.rtuTotalLF.toStringAsFixed(0)} LF. Flash with 6\'x100\' TPO, 4 curb wrap corners/unit.');
+    if (pen.smallPipeCount > 0) details.add('Small pipe boots (1-4"): ${pen.smallPipeCount} - pre-molded TPO with clamping ring.');
+    if (pen.largePipeCount > 0) details.add('Large pipe boots (4-12"): ${pen.largePipeCount} - pre-molded TPO with clamping ring.');
+    if (pen.pitchPanCount > 0) details.add('Sealant pockets: ${pen.pitchPanCount} - Versico TPO molded.');
+    if (pen.skylightCount > 0) details.add('Skylights: ${pen.skylightCount} - flash per Versico curb detail.');
+    if (pen.scupperCount > 0) details.add('Scuppers: ${pen.scupperCount} - EPDM pressure-sensitive flashing.');
+    if (geo.numberOfDrains > 0) details.add('Roof drains: ${geo.numberOfDrains} - TPO flash, mastic under clamping ring.');
+    if (pen.expansionJointLF > 0) details.add('Expansion joints: ${pen.expansionJointLF.toStringAsFixed(0)} LF.');
+    map['penetrations'] = details.isNotEmpty ? details.join(' ') : 'No penetrations specified.';
+
+    final metalParts = <String>[];
+    if (metal.copingLF > 0) metalParts.add('Coping: ${metal.copingLF.toStringAsFixed(0)} LF, ${metal.copingWidth}, 10\' sections.');
+    if (metal.wallFlashingLF > 0) metalParts.add('Wall flashing: ${metal.wallFlashingLF.toStringAsFixed(0)} LF.');
+    if (metal.dripEdgeLF > 0) metalParts.add('Drip edge (${metal.edgeMetalType}): ${metal.dripEdgeLF.toStringAsFixed(0)} LF.');
+    if (metal.gutterLF > 0) metalParts.add('Gutter (${metal.gutterSize}): ${metal.gutterLF.toStringAsFixed(0)} LF, ${metal.downspoutCount} downspout(s).');
+    metalParts.add('Edge fasteners: ${BomCalculator.fastenerNamePublic(specs.deckType)} at 12" O.C.');
+    map['metal'] = metalParts.join(' ');
+
+    map['accessories'] = 'Inside corners: ${geo.insideCorners} prefab (TPO primer required). '
+        'Outside corners: ${geo.outsideCorners} prefab (TPO primer required). '
+        'T-joint covers at all 3-way intersections (TPO primer required). '
+        'Lap sealant at T-joint edges, tape overlaps, flashing edges. '
+        'Cut-edge sealant on all reinforced TPO cuts (1/8" bead). '
+        'Water block sealant at T-joints, laps, penetrations.'
+        '${pen.rtuDetails.isNotEmpty ? " Install heat-weldable TPO walkway pads at HVAC access paths." : ""}';
+
+    map['quality'] = 'All work per Versico VersiWeld TPO Installation Guide and Detail Manual. '
+        'Probe-test all welds every 100 LF minimum. '
+        'No exposed fasteners through finished membrane (except termination bars). '
+        'Protect completed work from traffic, debris, weather. '
+        'Versico manufacturer inspection required before warranty issuance. '
+        '${info.warrantyYears}-year NDL warranty.';
+
+    return map;
+  }
+
+  String _termFastDesc(ParapetWalls p) {
+    switch (p.wallType) {
+      case 'Wood': return 'Wood screws 1-5/8"';
+      case 'Metal Stud': return 'TEK screws 1"';
+      default: return 'Masonry anchors 1-1/4"';
+    }
+  }
+}
+
+// ── Sub Instructions Edit Sheet ──────────────────────────────────────────────
+
+class _SubEditSheet extends StatefulWidget {
+  final String sectionKey;
+  final String sectionTitle;
+  final String currentText;
+  final Map<String, String> allSections;
+  final ValueChanged<String> onSave;
+  final VoidCallback onReset;
+
+  const _SubEditSheet({
+    required this.sectionKey, required this.sectionTitle,
+    required this.currentText, required this.allSections,
+    required this.onSave, required this.onReset,
+  });
+
+  @override
+  State<_SubEditSheet> createState() => _SubEditSheetState();
+}
+
+class _SubEditSheetState extends State<_SubEditSheet> {
+  late TextEditingController _textCtrl;
+  final _promptCtrl = TextEditingController();
+  bool _isLoading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _textCtrl = TextEditingController(text: widget.currentText);
+  }
+
+  @override
+  void dispose() {
+    _textCtrl.dispose();
+    _promptCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _rewriteWithAI(String instruction) async {
+    if (instruction.trim().isEmpty) return;
+    setState(() { _isLoading = true; _error = null; });
+
+    final otherContext = widget.allSections.entries
+        .where((e) => e.key != widget.sectionKey)
+        .take(3)
+        .map((e) => '${e.key}: ${e.value.substring(0, e.value.length.clamp(0, 100))}')
+        .join('\n');
+
+    final systemMsg = 'You are a commercial roofing field superintendent writing subcontractor installation instructions. '
+        'Rewrite the given section based on the instruction. '
+        'Use clear, direct field language. Include specific measurements, fastener specs, and patterns. '
+        'Return ONLY the rewritten text.';
+
+    final userMsg = 'Section: "${widget.sectionTitle}"\n\n'
+        'Current text:\n"${_textCtrl.text}"\n\n'
+        'Instruction: "$instruction"\n\n'
+        'Other sections for context:\n$otherContext';
+
+    try {
+      final response = await http.post(
+        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'data': {
+          'mode': 'sow',
+          'system': systemMsg,
+          'prompt': userMsg,
+        }}),
+      ).timeout(const Duration(seconds: 20));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        // Firebase on_call wraps: {"result":{"result":{"result":"text"}}}
+        final r1 = data['result'];
+        final r2 = r1 is Map ? r1['result'] : r1;
+        final r3 = r2 is Map ? r2['result'] : r2;
+        final newText = (r3?.toString() ?? '').trim();
+        if (newText.isNotEmpty) {
+          setState(() { _textCtrl.text = newText; _promptCtrl.clear(); });
+        } else {
+          setState(() => _error = 'Empty response.');
+        }
+      } else {
+        setState(() => _error = 'AI error (${response.statusCode}).');
+      }
+    } catch (e) {
+      setState(() => _error = 'Connection error.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottom),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+                color: const Color(0xFF7C3AED).withValues(alpha:0.1),
+                borderRadius: BorderRadius.circular(6)),
+            child: const Icon(Icons.engineering, size: 16, color: Color(0xFF7C3AED)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Edit: ${widget.sectionTitle}',
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+            const Text('AI rewrite or edit manually',
+                style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+          ])),
+          IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close, size: 20)),
+        ]),
+        const SizedBox(height: 12),
+        // AI prompt
+        Row(children: [
+          Expanded(child: TextField(
+            controller: _promptCtrl,
+            decoration: InputDecoration(
+              hintText: 'e.g. "add more detail about weld testing" or "make it shorter"',
+              hintStyle: const TextStyle(fontSize: 12),
+              isDense: true,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            style: const TextStyle(fontSize: 13),
+            onSubmitted: _rewriteWithAI,
+          )),
+          const SizedBox(width: 8),
+          _isLoading
+              ? const SizedBox(width: 36, height: 36, child: CircularProgressIndicator(strokeWidth: 2))
+              : IconButton(
+                  onPressed: () => _rewriteWithAI(_promptCtrl.text),
+                  icon: const Icon(Icons.auto_awesome, color: Color(0xFF7C3AED)),
+                  tooltip: 'Enhance with AI',
+                ),
+        ]),
+        if (_error != null)
+          Padding(padding: const EdgeInsets.only(top: 4),
+              child: Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 11))),
+        const SizedBox(height: 12),
+        // Manual edit
+        TextField(
+          controller: _textCtrl,
+          maxLines: 6,
+          decoration: InputDecoration(
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            filled: true, fillColor: Colors.grey.shade50,
+          ),
+          style: const TextStyle(fontSize: 13, height: 1.5),
+        ),
+        const SizedBox(height: 12),
+        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          TextButton(onPressed: () { widget.onReset(); Navigator.pop(context); },
+              child: const Text('Reset to Auto')),
+          const SizedBox(width: 8),
+          ElevatedButton(
+            onPressed: () { widget.onSave(_textCtrl.text); Navigator.pop(context); },
+            child: const Text('Save'),
+          ),
+        ]),
+      ]),
+    );
+  }
+}
+
+// ── Export helper for sub instructions PDF ────────────────────────────────────
+
+Future<void> _exportSubInstructionsPdf(EstimatorState state, BomResult bom,
+    RValueResult? rValue, CompanyProfile profile,
+    Map<String, String> overrides) async {
+  // ignore: avoid_web_libraries_in_flutter
+  await _exportSingleDocPdf(
+    state: state,
+    title: 'Installation Instructions',
+    filename: 'install_instructions',
+    profile: profile,
+    buildContent: () {
+      // If overrides exist, build from overrides; else use auto-generated
+      final widgets = <pw.Widget>[];
+      for (final entry in overrides.entries) {
+        widgets.add(pw.Padding(
+          padding: const pw.EdgeInsets.only(bottom: 8),
+          child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+            pw.Text(entry.key.replaceAll('_', ' ').toUpperCase(),
+                style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold,
+                    color: _pdfBlue, letterSpacing: 0.5)),
+            pw.SizedBox(height: 3),
+            pw.Text(_sanitizePdf(entry.value),
+                style: pw.TextStyle(fontSize: 9, color: _pdfSlate700, lineSpacing: 1.3)),
+          ]),
+        ));
+      }
+      if (widgets.isEmpty) {
+        // Use auto-generated content from the builder
+        final autoWidgets = buildSubInstructions(state, bom, rValue: rValue);
+        widgets.addAll(autoWidgets);
+      }
+      return widgets;
+    },
+  );
+}
+
+Future<void> _exportSingleDocPdf({
+  required EstimatorState state,
+  required String title,
+  required String filename,
+  required CompanyProfile profile,
+  required List<pw.Widget> Function() buildContent,
+}) async {
+  final doc = pw.Document(title: '${state.projectInfo.projectName} - $title');
+  final fmt = PdfPageFormat.letter;
+  final content = buildContent();
+
+  pw.ImageProvider? logoImg;
+  if (profile.hasLogo) {
+    logoImg = pw.MemoryImage(Uint8List.fromList(profile.logoBytes!));
+  }
+
+  for (var i = 0; i < content.length; i += 28) {
+    final chunk = content.sublist(i, (i + 28).clamp(0, content.length));
+    doc.addPage(pw.Page(
+      pageFormat: fmt,
+      margin: pw.EdgeInsets.fromLTRB(40, 40, 40, 50),
+      build: (ctx) => pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          _pdfSimpleHeader(title, state, logoImg, profile),
+          pw.SizedBox(height: 12),
+          ...chunk,
+          pw.Spacer(),
+          _pdfSimpleFooter(ctx),
+        ],
+      ),
+    ));
+  }
+
+  final bytes = await doc.save();
+  final fn = '${state.projectInfo.projectName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}_$filename.pdf';
+
+  // Web download
+  downloadBytes(bytes, fn, mimeType: 'application/pdf');
+}
+
+pw.Widget _pdfSimpleHeader(String section, EstimatorState state,
+    pw.ImageProvider? logo, CompanyProfile profile) =>
+  pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+    pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+      pw.Row(children: [
+        if (logo != null) ...[
+          pw.Container(height: 28, constraints: const pw.BoxConstraints(maxWidth: 120),
+              child: pw.Image(logo, fit: pw.BoxFit.contain)),
+          pw.SizedBox(width: 8),
+        ],
+        pw.Text(_sanitizePdf(profile.hasName ? profile.companyName : 'ProTPO'),
+            style: pw.TextStyle(fontSize: 9, color: _pdfSlate500, fontWeight: pw.FontWeight.bold)),
+      ]),
+      pw.Text(_sanitizePdf('${state.projectInfo.projectName} - $section'),
+          style: pw.TextStyle(fontSize: 8, color: _pdfSlate500)),
+    ]),
+    pw.SizedBox(height: 4),
+    pw.Divider(color: _pdfSlate200, thickness: 0.5),
+  ]);
+
+pw.Widget _pdfSimpleFooter(pw.Context ctx) => pw.Column(children: [
+  pw.Divider(color: _pdfSlate200, thickness: 0.5),
+  pw.SizedBox(height: 4),
+  pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+    pw.Text('Generated by ProTPO', style: pw.TextStyle(fontSize: 7, color: _pdfSlate500)),
+    pw.Text('Page ${ctx.pageNumber} of ${ctx.pagesCount}',
+        style: pw.TextStyle(fontSize: 7, color: _pdfSlate500)),
+  ]),
+]);
+
+const _pdfBlue = PdfColor(0.12, 0.23, 0.37);
+const _pdfSlate700 = PdfColor(0.20, 0.25, 0.33);
+const _pdfSlate500 = PdfColor(0.39, 0.45, 0.55);
+const _pdfSlate200 = PdfColor(0.89, 0.91, 0.94);
+
+String _sanitizePdf(String v) => v
+    .replaceAll('\u2014', '-').replaceAll('\u2013', '-')
+    .replaceAll('\u2018', "'").replaceAll('\u2019', "'")
+    .replaceAll('\u201C', '"').replaceAll('\u201D', '"')
+    .replaceAll('\u00D7', 'x').replaceAll('\u00AE', '(R)')
+    .replaceAll('\u00A0', ' ')
+    .replaceAll(RegExp(r'[^\x00-\xFF]'), '');
 
 // ─── Fastening density helpers (mirrors bom_calculator — keep in sync) ────────
 
@@ -2084,4 +3522,24 @@ Widget _warnBox(String msg, Color color) => Container(
     case 30: return (0.333, 0.667, 1.000);
     default: return (0.167, 0.333, 0.500);
   }
+}
+
+/// Parse wind speed string (e.g. "115 mph") to double.
+double _parseWindMph(String? windSpeed) {
+  if (windSpeed == null || windSpeed.isEmpty) return 0.0;
+  final match = RegExp(r'(\d+)').firstMatch(windSpeed);
+  return match != null ? double.tryParse(match.group(1)!) ?? 0.0 : 0.0;
+}
+
+/// Bump warranty tier for wind speed — mirrors BomCalculator._windAdjustedWarranty.
+int _windAdjustedWarranty(int warrantyYears, double windSpeedMph) {
+  const tiers = [10, 15, 20, 25, 30];
+  var idx = tiers.indexOf(warrantyYears);
+  if (idx < 0) idx = 2;
+  if (windSpeedMph >= 130) {
+    idx = (idx + 2).clamp(0, tiers.length - 1);
+  } else if (windSpeedMph >= 90) {
+    idx = (idx + 1).clamp(0, tiers.length - 1);
+  }
+  return tiers[idx];
 }

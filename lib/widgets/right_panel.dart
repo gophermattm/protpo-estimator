@@ -24,6 +24,7 @@ import '../models/insulation_system.dart';
 import '../models/section_models.dart';
 import '../models/roof_geometry.dart';
 import '../services/qxo_quote_service.dart';
+import '../services/qxo_pricing_service.dart';
 import '../services/bom_calculator.dart';
 
 // ── Mode enum ─────────────────────────────────────────────────────────────────
@@ -184,7 +185,7 @@ class _RightPanelState extends ConsumerState<RightPanel> {
           'thickness':  insul.layer2!.thickness,
           'attachment': insul.layer2!.attachmentMethod,
         } : null,
-        'hasTapered':      insul.hasTaperedInsulation,
+        'hasTapered':      insul.hasTaper,
         'hasCoverBoard':   insul.hasCoverBoard,
         'coverBoardType':  insul.coverBoard?.type,
         'totalRValue':     rResult?.totalRValue,
@@ -333,7 +334,11 @@ ${jsonEncode(snapshot)}
           _addError('AI Assist error: ${data['error']['message'] ?? 'Server error'}');
           return;
         }
-        final raw2 = data['result']?['result']?.toString() ?? data['result']?.toString() ?? '';
+        // Firebase on_call wraps: {"result":{"result":{"result":"text"}}}
+        final ar1 = data['result'];
+        final ar2 = ar1 is Map ? ar1['result'] : ar1;
+        final ar3 = ar2 is Map ? ar2['result'] : ar2;
+        final raw2 = (ar3?.toString() ?? '').trim();
         if (raw2.isEmpty) { _addError('Empty response from AI. Try again.'); return; }
 
         final raw = raw2.trim();
@@ -407,6 +412,10 @@ Available actions (return exactly one as JSON):
 { "action": "updateEdgeMetalLF",         "value": <number> }
 { "action": "updateGutterLF",            "value": <number> }
 { "action": "updateProjectName",         "value": "<string>" }
+{ "action": "updateInsulationLayers",   "value": 0 | 1 | 2 }
+{ "action": "addBomItem",              "value": { "description": "<product name>", "category": "Adhesives & Sealants" | "Membrane" | "Insulation" | "Fasteners & Plates" | "Parapet & Termination" | "Details & Accessories" | "Metal Scope" | "Consumables", "qty": <number>, "unit": "<unit>" } }
+{ "action": "editBomItem",             "value": { "match": "<partial name to find>", "qty": <number or null>, "unit": "<unit or null>", "description": "<new name or null>" } }
+{ "action": "explainBomItem",         "value": "<partial name to find in BOM>" }
 { "action": "unknown",                   "value": null, "reply": "<explain what you cannot do>" }
 ''';
 
@@ -414,6 +423,14 @@ Available actions (return exactly one as JSON):
 You are ProTPO's AI input assistant. The user wants to update their roofing project.
 Parse their request and return a single JSON action object from the list below.
 Return ONLY the JSON. No markdown. No explanation.
+
+Key rules:
+- Use "addBomItem" to add materials, products, adhesives, sealants, or accessories to the BOM.
+- Use "editBomItem" to change qty, unit, or description of an existing calculated BOM item.
+- Use "explainBomItem" when the user asks WHY a quantity was calculated, HOW a number was derived, or wants to understand any BOM line item. Match on a keyword from the item name.
+- Use "updateInsulationLayers" with value 0 when user wants no flat insulation.
+- For product requests like "add a gallon of adhesive", use addBomItem with the right category.
+- For questions about calculations, quantities, or "explain" / "why" / "how" requests, use explainBomItem.
 
 $actionSchema
 
@@ -445,7 +462,11 @@ User request: "$userText"
         _addError('AI error: ${data['error']['message'] ?? 'Server error'}');
         return;
       }
-      final raw = (data['result']?['result']?.toString() ?? '').trim();
+      // Firebase on_call wraps: {"result":{"result":{"result":"text"}}}
+      final r1 = data['result'];
+      final r2 = r1 is Map ? r1['result'] : r1;
+      final r3 = r2 is Map ? r2['result'] : r2;
+      final raw = (r3?.toString() ?? '').trim();
       var clean = raw.replaceAll(RegExp(r'```json|```'), '').trim();
       // Extract JSON object
       final si = clean.indexOf('{');
@@ -648,6 +669,101 @@ User request: "$userText"
           return _ActionResult(success: true,
               description: 'Large pipe count set to $value.');
 
+        // Insulation layers (0 = none)
+        case 'updateInsulationLayers':
+          final count = (value as num).toInt();
+          if (count < 0 || count > 2) {
+            return _ActionResult(success: false,
+                description: 'Layers must be 0, 1, or 2.');
+          }
+          n.setNumberOfLayers(count);
+          return _ActionResult(success: true,
+              description: count == 0
+                  ? 'Insulation layers set to None (tapered/cover board only).'
+                  : 'Insulation set to $count layer${count > 1 ? "s" : ""}.');
+
+        // Add manual BOM item
+        case 'addBomItem':
+          final m = value as Map<String, dynamic>;
+          final desc = m['description']?.toString() ?? 'Manual Item';
+          final cat  = m['category']?.toString() ?? 'Adhesives & Sealants';
+          final qty  = (m['qty'] as num?)?.toDouble() ?? 1.0;
+          final unit = m['unit']?.toString() ?? 'each';
+          final id = 'ai_${DateTime.now().millisecondsSinceEpoch}';
+          ref.read(bomManualItemsProvider.notifier).update(
+              (list) => [...list, ManualBomItem(
+                id: id, category: cat, description: desc,
+                qty: qty, unit: unit,
+              )]);
+          return _ActionResult(success: true,
+              description: 'Added $qty $unit of "$desc" to $cat.',
+              detail: 'Double-tap the row in the BOM to edit details or pricing.');
+
+        // Edit existing BOM line item
+        case 'editBomItem':
+          final m = value as Map<String, dynamic>;
+          final match = m['match']?.toString().toLowerCase() ?? '';
+          final bom = ref.read(bomProvider);
+          // Find the first BOM item whose name contains the match string
+          BomLineItem? found;
+          for (final item in bom.items) {
+            if (item.name.toLowerCase().contains(match)) { found = item; break; }
+          }
+          if (found == null) {
+            return _ActionResult(success: false,
+                description: 'Could not find a BOM item matching "$match".');
+          }
+          final itemKey = '${found.category}:${found.name}';
+          final existing = ref.read(bomLineEditsProvider)[itemKey];
+          final newQty = (m['qty'] as num?)?.toDouble();
+          final newUnit = m['unit']?.toString();
+          final newDesc = m['description']?.toString();
+          final edit = BomLineEdit(
+            description: newDesc ?? existing?.description,
+            qty: newQty ?? existing?.qty,
+            unit: newUnit ?? existing?.unit,
+            partNumber: existing?.partNumber,
+            unitPrice: existing?.unitPrice,
+          );
+          if (edit.hasOverrides) {
+            ref.read(bomLineEditsProvider.notifier).update(
+                (map) => {...map, itemKey: edit});
+          }
+          final changes = <String>[];
+          if (newQty != null) changes.add('qty → ${newQty == newQty.roundToDouble() ? newQty.toInt() : newQty.toStringAsFixed(1)}');
+          if (newUnit != null) changes.add('unit → $newUnit');
+          if (newDesc != null) changes.add('name → "$newDesc"');
+          return _ActionResult(success: true,
+              description: 'Updated "${found.name}": ${changes.join(", ")}.');
+
+        // Explain BOM item calculation
+        case 'explainBomItem':
+          final match = (value as String).toLowerCase();
+          final bom = ref.read(bomProvider);
+          BomLineItem? found;
+          for (final item in bom.items) {
+            if (item.name.toLowerCase().contains(match)) { found = item; break; }
+          }
+          if (found == null) {
+            return _ActionResult(success: false,
+                description: 'Could not find a BOM item matching "$match".');
+          }
+          final trace = found.trace;
+          final explanation = StringBuffer();
+          explanation.writeln('📊 ${found.name}');
+          explanation.writeln('Order: ${found.orderQty == found.orderQty.roundToDouble() ? found.orderQty.toInt() : found.orderQty.toStringAsFixed(1)} ${found.unit}');
+          explanation.writeln('');
+          explanation.writeln('Calculation:');
+          for (final line in trace.breakdown) {
+            explanation.writeln('  $line');
+          }
+          if (found.notes.isNotEmpty) {
+            explanation.writeln('');
+            explanation.writeln('Note: ${found.notes}');
+          }
+          return _ActionResult(success: true,
+              description: explanation.toString());
+
         // Metal Scope
         case 'updateCopingLF':
           n.updateCopingLF((value as num).toDouble());
@@ -807,7 +923,7 @@ User request: "$userText"
             child: Container(
               padding: const EdgeInsets.all(5),
               decoration: BoxDecoration(
-                color: _chatExpanded ? AppTheme.primary.withOpacity(0.08) : AppTheme.surfaceAlt,
+                color: _chatExpanded ? AppTheme.primary.withValues(alpha:0.08) : AppTheme.surfaceAlt,
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(color: AppTheme.border),
               ),
@@ -901,7 +1017,7 @@ User request: "$userText"
             Container(
                 padding: const EdgeInsets.all(5),
                 decoration: BoxDecoration(
-                    color: botColor.withOpacity(0.1),
+                    color: botColor.withValues(alpha:0.1),
                     borderRadius: BorderRadius.circular(6)),
                 child: Icon(
                     isAssistBot ? Icons.psychology : Icons.smart_toy,
@@ -920,7 +1036,7 @@ User request: "$userText"
                     color: msg.isUser
                         ? (isAssistBot ? const Color(0xFF7C3AED) : AppTheme.primary)
                         : (msg.type == _MsgType.error
-                            ? AppTheme.error.withOpacity(0.08)
+                            ? AppTheme.error.withValues(alpha:0.08)
                             : Colors.white),
                     borderRadius: BorderRadius.only(
                       topLeft: const Radius.circular(14),
@@ -929,10 +1045,10 @@ User request: "$userText"
                       bottomRight: Radius.circular(msg.isUser ? 3 : 14),
                     ),
                     border: msg.type == _MsgType.error
-                        ? Border.all(color: AppTheme.error.withOpacity(0.3))
+                        ? Border.all(color: AppTheme.error.withValues(alpha:0.3))
                         : null,
                     boxShadow: [BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
+                        color: Colors.black.withValues(alpha:0.05),
                         blurRadius: 4,
                         offset: const Offset(0, 2))],
                   ),
@@ -993,7 +1109,7 @@ User request: "$userText"
         Row(children: [
           Container(padding: const EdgeInsets.all(5),
               decoration: BoxDecoration(
-                  color: const Color(0xFF7C3AED).withOpacity(0.1),
+                  color: const Color(0xFF7C3AED).withValues(alpha:0.1),
                   borderRadius: BorderRadius.circular(6)),
               child: const Icon(Icons.psychology,
                   color: Color(0xFF7C3AED), size: 14)),
@@ -1039,7 +1155,7 @@ User request: "$userText"
   Widget _auditBadge(String label, Color color) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
     decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha:0.1),
         borderRadius: BorderRadius.circular(10)),
     child: Text(label,
         style: TextStyle(fontSize: 10, color: color,
@@ -1065,9 +1181,9 @@ User request: "$userText"
       margin: const EdgeInsets.only(bottom: 5),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-          color: color.withOpacity(0.05),
+          color: color.withValues(alpha:0.05),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: color.withOpacity(0.2))),
+          border: Border.all(color: color.withValues(alpha:0.2))),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Icon(icon, size: 14, color: color),
         const SizedBox(width: 8),
@@ -1100,7 +1216,7 @@ User request: "$userText"
             padding: const EdgeInsets.all(5),
             decoration: BoxDecoration(
                 color: (r.success ? AppTheme.accent : AppTheme.error)
-                    .withOpacity(0.1),
+                    .withValues(alpha:0.1),
                 borderRadius: BorderRadius.circular(6)),
             child: Icon(
                 r.success ? Icons.check_circle : Icons.error_outline,
@@ -1119,9 +1235,9 @@ User request: "$userText"
                     bottomRight: Radius.circular(14)),
                 border: Border.all(
                     color: (r.success ? AppTheme.accent : AppTheme.error)
-                        .withOpacity(0.25)),
+                        .withValues(alpha:0.25)),
                 boxShadow: [BoxShadow(
-                    color: Colors.black.withOpacity(0.04),
+                    color: Colors.black.withValues(alpha:0.04),
                     blurRadius: 4,
                     offset: const Offset(0, 2))]),
             child: Column(
@@ -1213,7 +1329,7 @@ User request: "$userText"
             decoration: BoxDecoration(
                 color: (_mode == _BotMode.assist
                     ? const Color(0xFF7C3AED) : AppTheme.primary)
-                    .withOpacity(0.1),
+                    .withValues(alpha:0.1),
                 borderRadius: BorderRadius.circular(6)),
             child: Icon(
                 _mode == _BotMode.assist ? Icons.psychology : Icons.smart_toy,
@@ -1227,7 +1343,7 @@ User request: "$userText"
               color: Colors.white,
               borderRadius: BorderRadius.circular(14),
               boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
+                  color: Colors.black.withValues(alpha:0.05),
                   blurRadius: 4,
                   offset: const Offset(0, 2))]),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1248,7 +1364,7 @@ User request: "$userText"
         decoration: BoxDecoration(
             color: (_mode == _BotMode.assist
                 ? const Color(0xFF7C3AED) : AppTheme.primary)
-                .withOpacity(0.3 + 0.4 * v),
+                .withValues(alpha:0.3 + 0.4 * v),
             shape: BoxShape.circle)),
   );
 }
@@ -1300,7 +1416,7 @@ class _SummarySection extends ConsumerWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.1),
+                  color: AppTheme.primary.withValues(alpha:0.1),
                   borderRadius: BorderRadius.circular(10)),
               child: Text('$bomCount BOM items',
                   style: TextStyle(fontSize: 11, color: AppTheme.primary,
@@ -1334,7 +1450,7 @@ class _SummarySection extends ConsumerWidget {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                      color: AppTheme.accent.withOpacity(0.1),
+                      color: AppTheme.accent.withValues(alpha:0.1),
                       borderRadius: BorderRadius.circular(4)),
                   child: Text('${info.warrantyYears}yr',
                       style: TextStyle(fontSize: 10, color: AppTheme.accent,
@@ -1510,21 +1626,34 @@ class _SummarySection extends ConsumerWidget {
   static Future<void> _submitToBeacon(
     BuildContext context, WidgetRef ref, String projectName, BomResult bom,
   ) async {
-    final items = bom.activeItems.map((item) => {
-      'skuId': item.name,        // TODO: replace with real Beacon SKU once qxo_sku_map is populated
-      'quantity': item.orderQty.toInt(),
-      'uom': item.unit,
-    }).toList();
-
     try {
+      // First resolve BOM items to QXO catalog items with pricing
+      final bomNames = bom.activeItems.map((item) => item.name).toList();
+      final bomQuantities = {
+        for (final item in bom.activeItems)
+          item.name: item.orderQty.ceil(),
+      };
+      final pricedItems = await QxoPricingService().fetchBomPricing(
+        bomNames,
+        bomQuantities: bomQuantities,
+      );
+
+      if (pricedItems.isEmpty) {
+        throw Exception('Could not match any BOM items to QXO catalog');
+      }
+
       final result = await QxoQuoteService().submitQuote(
         projectName: projectName,
-        items: items,
+        bom: bom,
+        pricedItems: pricedItems,
       );
       if (context.mounted) {
+        final msg = result['success'] == true
+            ? 'Quote submitted to Beacon! ${pricedItems.length} items sent.'
+            : (result['message'] ?? 'Quote submitted to Beacon successfully!');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(result['message'] ?? 'Quote submitted to Beacon successfully!'),
+            content: Text(msg.toString()),
             backgroundColor: const Color(0xFF16A34A),
           ),
         );

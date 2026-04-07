@@ -116,12 +116,27 @@ class BomCalculator {
     final wMat  = projectInfo.wasteMaterial;   // e.g. 0.10
     final wMet  = projectInfo.wasteMetal;      // e.g. 0.05
     final wAcc  = projectInfo.wasteAccessory;  // e.g. 0.05
+    final vocSuffix = projectInfo.vocRegion != 'Standard' ? ' (Low-VOC)' : '';
 
     final totalArea      = geometry.totalArea;
     final fieldArea      = geometry.windZones.fieldZoneArea;
     final perimArea      = geometry.windZones.perimeterZoneArea;
     final cornerArea     = geometry.windZones.cornerZoneArea;
-    final parapetArea    = parapet.hasParapetWalls ? parapet.parapetArea : 0.0;
+    // TPO area for parapet walls — the VERTICAL WALL FACE only.
+    // The deck-side overlap is already covered by the perimeter zone membrane.
+    // The top is covered by coping metal. The flashing strip only needs to go
+    // up the inside wall face from the deck transition to the termination bar.
+    //
+    // Per Versico spec the flashing strip extends:
+    //   - From the roof deck surface up the wall to the termination point
+    //   - A 4" minimum lap onto the field membrane at the base (welded)
+    //
+    // parapetHeight is in inches — the user-entered wall height.
+    // We add 4" (0.33') for the base lap onto the field membrane.
+    final parapetHeightFt = parapet.hasParapetWalls ? parapet.parapetHeight / 12.0 : 0.0;
+    final parapetStripWidthFt = parapetHeightFt + 0.33; // wall height + 4" base lap
+    final parapetTpoArea = parapet.hasParapetWalls
+        ? parapetStripWidthFt * parapet.parapetTotalLF : 0.0;
     final termBarLF      = parapet.hasParapetWalls ? parapet.terminationBarLF : 0.0;
     final totalPerimeter = geometry.totalPerimeter;
     final drainCount     = geometry.numberOfDrains;
@@ -138,13 +153,31 @@ class BomCalculator {
       warnings.add('WARNING: Warranty years not set — fastening density defaulting to 20-year pattern.');
     }
 
+    // Parse design wind speed for fastening density adjustment
+    final windSpeedMph = _parseWindSpeed(projectInfo.designWindSpeed);
+    final bool isHighWind = windSpeedMph >= 130;
+    final bool isElevatedWind = windSpeedMph >= 90;
+    if (isHighWind) {
+      warnings.add('NOTE: Design wind speed ${windSpeedMph.toInt()} mph — hurricane-zone fastening densities applied.');
+    } else if (isElevatedWind) {
+      warnings.add('NOTE: Design wind speed ${windSpeedMph.toInt()} mph — elevated wind fastening densities applied.');
+    }
+
+    // R-value validation
+    if (projectInfo.requiredRValue != null && projectInfo.requiredRValue! > 0 && totalArea > 0) {
+      final actualR = _estimateRValue(insulation);
+      if (actualR < projectInfo.requiredRValue!) {
+        warnings.add('WARNING: Insulation R-value ~${actualR.toStringAsFixed(1)} may not meet code requirement of R-${projectInfo.requiredRValue!.toStringAsFixed(0)} for ${projectInfo.climateZone ?? "this zone"}.');
+      }
+    }
+
     // ── EFFECTIVE AREAS ──────────────────────────────────────────────────────
     // When zone areas aren't set, fall back to total area for membrane rolls.
     final effectiveFieldArea  = hasZones ? fieldArea  : totalArea;
     final effectivePerimArea  = hasZones ? perimArea  : 0.0;
     final effectiveCornerArea = hasZones ? cornerArea : 0.0;
     // Flashing area = parapet + perimeter zone + corner zone (all use 6'×100' rolls)
-    final flashingArea = parapetArea + effectivePerimArea + effectiveCornerArea;
+    final flashingArea = parapetTpoArea + effectivePerimArea + effectiveCornerArea;
 
     // ══════════════════════════════════════════════════════════════════════════
     // 1. MEMBRANE
@@ -183,23 +216,25 @@ class BomCalculator {
       ));
     }
 
-    // 1b. Flashing / perimeter rolls (6'×100')
-    if (flashingArea > 0) {
+    // 1b. Flashing / perimeter rolls (6'×100') — skip when set to "None"
+    if (flashingArea > 0 && membrane.perimeterRollWidth != 'None') {
       final base     = flashingArea / flashRollCoverage;
       final withW    = base * (1 + wMat);
       final orderQty = withW.ceil().toDouble();
       final parts = <String>[];
-      if (parapetArea > 0)           parts.add('parapet ${_sf(parapetArea)}');
+      if (parapetTpoArea > 0) parts.add('parapet ${_sf(parapetTpoArea)} (${parapetHeightFt.toStringAsFixed(1)}\' wall + 4" base lap)');
       if (effectivePerimArea > 0)    parts.add('perimeter zone ${_sf(effectivePerimArea)}');
       if (effectiveCornerArea > 0)   parts.add('corner zone ${_sf(effectiveCornerArea)}');
+      final pRW = membrane.perimeterRollWidth;
+      final pRC = membrane.perimeterRollCoverage.toInt();
       items.add(BomLineItem(
         category: 'Membrane',
-        name: '${membrane.thickness} ${membrane.membraneType} — Flashing (6\'×100\')',
+        name: '${membrane.thickness} ${membrane.membraneType} — Flashing ($pRW×100\' roll, $pRC sf)',
         orderQty: orderQty,
         unit: 'rolls',
-        notes: "6'×100', 600 sf/roll — parapet, perimeter & corner zones",
+        notes: "$pRW×100', $pRC sf/roll — parapet, perimeter & corner zones",
         trace: BomTrace(
-          baseDescription: '${_sf(flashingArea)} ÷ 600 sf/roll',
+          baseDescription: '${_sf(flashingArea)} ÷ $pRC sf/roll',
           baseQty: base,
           wastePercent: wMat,
           withWaste: withW,
@@ -209,7 +244,7 @@ class BomCalculator {
             'Flashing area breakdown:',
             ...parts.map((p) => '  $p'),
             'Total flashing: ${_sf(flashingArea)}',
-            'Roll coverage:  600 sf/roll (6\'×100\')',
+            'Roll coverage:  $pRC sf/roll ($pRW×100\')',
             'Base qty:       ${base.toStringAsFixed(2)} rolls',
             'Waste:          ${_pct(wMat)}%',
             'With waste:     ${withW.toStringAsFixed(2)} rolls',
@@ -228,9 +263,9 @@ class BomCalculator {
     const double bundleBoards = 1.0;   // boards per bundle (adjustable)
 
     if (totalArea > 0) {
-      // Layer 1
+      // Layer 1 (skipped when numberOfLayers == 0, e.g. tapered/cover board only)
       final l1 = insulation.layer1;
-      if (l1.thickness > 0) {
+      if (insulation.numberOfLayers >= 1 && l1.thickness > 0) {
         final base     = totalArea / boardSf;
         final withW    = base * (1 + wMat);
         final orderQty = withW.ceil().toDouble();
@@ -265,20 +300,20 @@ class BomCalculator {
       }
 
       // Tapered insulation
-      if (insulation.hasTaperedInsulation && insulation.tapered != null) {
-        final taper      = insulation.tapered!;
-        final taperArea  = taper.systemArea > 0 ? taper.systemArea : totalArea;
+      if (insulation.hasTaper && insulation.taperDefaults != null) {
+        final taper      = insulation.taperDefaults!;
+        final taperArea  = totalArea;
         final base       = taperArea / boardSf;
         final withW      = base * (1 + wMat);
         final orderQty   = withW.ceil().toDouble();
         items.add(BomLineItem(
           category: 'Insulation',
-          name: 'Tapered Polyiso — ${taper.taperSlope} slope',
+          name: 'Tapered Polyiso — ${taper.taperRate} slope',
           orderQty: orderQty,
           unit: 'boards',
-          notes: 'Min ${_ins(taper.minThicknessAtDrain)} at drain, tapered system',
+          notes: 'Min ${_ins(taper.minThickness)} at drain, tapered system',
           trace: _insTrace(taperArea, base, withW, orderQty, wMat, boardSf,
-              'Tapered — ${taper.boardType.isNotEmpty ? taper.boardType : "Polyiso"}'),
+              'Tapered — Polyiso'),
         ));
       }
 
@@ -310,11 +345,19 @@ class BomCalculator {
     final isRhinobond = membrane.fieldAttachment == 'Rhinobond (Induction Welded)';
     final isFA        = membrane.fieldAttachment == 'Fully Adhered';
 
+    // Temperature/adhesive warnings per Versico spec
+    if (isFA) {
+      warnings.add('Bonding adhesive: apply at min 60°F. Store below 90°F. Verify tacky-not-stringy state before membrane placement.');
+    }
+
     // ── MECHANICALLY ATTACHED (MA) ───────────────────────────────────────────
     // Through-membrane fasteners + seam stress plates.
     // Density driven by warranty tier per Versico MA tables.
+    // Wind speed ≥90 mph: bump to next warranty tier density.
+    // Wind speed ≥130 mph: bump two tiers (hurricane zone).
     if (isMA && totalArea > 0) {
-      final densities     = _fasteningDensities(projectInfo.warrantyYears);
+      final effectiveWarranty = _windAdjustedWarranty(projectInfo.warrantyYears, windSpeedMph);
+      final densities     = _fasteningDensities(effectiveWarranty);
       final fieldDensity  = densities.$1;
       final perimDensity  = densities.$2;
       final cornerDensity = densities.$3;
@@ -399,7 +442,8 @@ class BomCalculator {
     // Plate density is ~33–50% of MA fastener density (larger bond area per plate).
     // Source: Versico Rhinobond TPO Installation Guide & FM approval tables.
     if (isRhinobond && totalArea > 0) {
-      final rbDensities     = _rhinobondDensities(projectInfo.warrantyYears);
+      final rbEffWarranty   = _windAdjustedWarranty(projectInfo.warrantyYears, windSpeedMph);
+      final rbDensities     = _rhinobondDensities(rbEffWarranty);
       final rbFieldDensity  = rbDensities.$1;
       final rbPerimDensity  = rbDensities.$2;
       final rbCornerDensity = rbDensities.$3;
@@ -478,14 +522,14 @@ class BomCalculator {
 
     // Insulation fasteners — one line item per MA layer, each with computed length
     if (totalArea > 0) {
-      final l1MA = insulation.layer1.attachmentMethod == 'Mechanically Attached';
+      final l1MA = insulation.numberOfLayers >= 1 &&
+          insulation.layer1.attachmentMethod == 'Mechanically Attached';
       final l2MA = insulation.numberOfLayers == 2 &&
           (insulation.layer2?.attachmentMethod == 'Mechanically Attached' ?? false);
       final cbMA = insulation.hasCoverBoard &&
           (insulation.coverBoard?.attachmentMethod == 'Mechanically Attached' ?? false);
 
-      // 4 fasteners per 4'×8' board = 0.125/sf
-      const insDensity = 0.125;
+      final insDensity = _insulationDensity(projectInfo.warrantyYears, systemSpecs.deckType);
       const insBoxSize = 500.0;
 
       // Layer 1 MA: fastener only passes through layer 1 stack
@@ -513,6 +557,31 @@ class BomCalculator {
               '${_sf(totalArea)} × $insDensity/sf = ${base.toStringAsFixed(0)} fasteners',
               'Waste: ${_pct(wAcc)}%',
               'ORDER QTY: ${orderQty.toInt()} boxes (500/box)',
+            ],
+          ),
+        ));
+
+        // Insulation plates for Layer 1 — one plate per fastener
+        const l1PlateBoxSize = 1000.0;
+        final l1PlateOrder = (withW / l1PlateBoxSize).ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Fasteners & Plates',
+          name: '3" Insulation Plates — Layer 1',
+          orderQty: l1PlateOrder,
+          unit: 'boxes',
+          notes: '1,000/box — one plate per Layer 1 insulation fastener',
+          trace: BomTrace(
+            baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/box',
+            baseQty: base,
+            wastePercent: wAcc,
+            withWaste: withW,
+            packageSize: l1PlateBoxSize,
+            orderQty: l1PlateOrder,
+            breakdown: [
+              'One 3" galv plate per insulation fastener',
+              '${_sf(totalArea)} × $insDensity/sf = ${base.toStringAsFixed(0)} plates',
+              'Waste: ${_pct(wAcc)}%',
+              'ORDER QTY: ${l1PlateOrder.toInt()} boxes (1,000/box)',
             ],
           ),
         ));
@@ -548,6 +617,31 @@ class BomCalculator {
             ],
           ),
         ));
+
+        // Insulation plates for Layer 2 — one plate per fastener
+        const l2PlateBoxSize = 1000.0;
+        final l2PlateOrder = (withW / l2PlateBoxSize).ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Fasteners & Plates',
+          name: '3" Insulation Plates — Layer 2',
+          orderQty: l2PlateOrder,
+          unit: 'boxes',
+          notes: '1,000/box — one plate per Layer 2 insulation fastener',
+          trace: BomTrace(
+            baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/box',
+            baseQty: base,
+            wastePercent: wAcc,
+            withWaste: withW,
+            packageSize: l2PlateBoxSize,
+            orderQty: l2PlateOrder,
+            breakdown: [
+              'One 3" galv plate per insulation fastener',
+              '${_sf(totalArea)} × $insDensity/sf = ${base.toStringAsFixed(0)} plates',
+              'Waste: ${_pct(wAcc)}%',
+              'ORDER QTY: ${l2PlateOrder.toInt()} boxes (1,000/box)',
+            ],
+          ),
+        ));
       }
 
       // Cover board MA: passes through cover board + insulation stack
@@ -580,6 +674,31 @@ class BomCalculator {
             ],
           ),
         ));
+
+        // Insulation plates for Cover Board — one plate per fastener
+        const cbPlateBoxSize = 1000.0;
+        final cbPlateOrder = (withW / cbPlateBoxSize).ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Fasteners & Plates',
+          name: '3" Insulation Plates — Cover Board',
+          orderQty: cbPlateOrder,
+          unit: 'boxes',
+          notes: '1,000/box — one plate per cover board fastener',
+          trace: BomTrace(
+            baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/box',
+            baseQty: base,
+            wastePercent: wAcc,
+            withWaste: withW,
+            packageSize: cbPlateBoxSize,
+            orderQty: cbPlateOrder,
+            breakdown: [
+              'One 3" galv plate per cover board fastener',
+              '${_sf(totalArea)} × $insDensity/sf = ${base.toStringAsFixed(0)} plates',
+              'Waste: ${_pct(wAcc)}%',
+              'ORDER QTY: ${cbPlateOrder.toInt()} boxes (1,000/box)',
+            ],
+          ),
+        ));
       }
     }
 
@@ -587,50 +706,193 @@ class BomCalculator {
     // 4. ADHESIVES & SEALANTS
     // ══════════════════════════════════════════════════════════════════════════
 
-    // Bonding adhesive (Fully Adhered membrane or adhered insulation/coverboard)
-    final adheredMemArea = isFA ? (totalArea + parapetArea) : parapetArea;
+    // Bonding adhesive — separate parapet (CAV-Grip 3v) from field (Cav-Grip III)
+    final adheredFieldArea = isFA ? totalArea : 0.0;
     final adheredInsArea = [
-      if (insulation.layer1.attachmentMethod == 'Adhered') totalArea,
+      if (insulation.numberOfLayers >= 1 && insulation.layer1.attachmentMethod == 'Adhered') totalArea,
       if (insulation.numberOfLayers == 2 &&
           (insulation.layer2?.attachmentMethod == 'Adhered' ?? false)) totalArea,
+      if (insulation.hasTaper && insulation.taperDefaults != null &&
+          insulation.taperDefaults!.attachmentMethod == 'Adhered')
+        totalArea,
       if (insulation.hasCoverBoard &&
           (insulation.coverBoard?.attachmentMethod == 'Adhered' ?? false)) totalArea,
     ].fold(0.0, (a, b) => a + b);
 
-    final totalAdheredArea = adheredMemArea + adheredInsArea;
-    if (totalAdheredArea > 0) {
-      // Cav-Grip III: ~60 sf per gallon, 15-gal cylinder
-      const coveragePerGal = 60.0;
-      const galPerCylinder = 15.0;
-      final base       = totalAdheredArea / coveragePerGal;
-      final withW      = base * (1 + wAcc);
-      final cylinders  = (withW / galPerCylinder).ceil().toDouble();
-      items.add(BomLineItem(
-        category: 'Adhesives & Sealants',
-        name: 'Bonding Adhesive (Cav-Grip III)',
-        orderQty: cylinders,
-        unit: 'cylinders',
-        notes: '15-gal cylinder, ~60 sf/gal',
-        trace: BomTrace(
-          baseDescription: '${_sf(totalAdheredArea)} ÷ 60 sf/gal',
-          baseQty: base,
-          wastePercent: wAcc,
-          withWaste: withW,
-          packageSize: galPerCylinder,
-          orderQty: cylinders,
-          breakdown: [
-            if (isFA)        'FA membrane area: ${_sf(totalArea + parapetArea)}',
-            if (!isFA && parapetArea > 0) 'Parapet flashing (adhered): ${_sf(parapetArea)}',
-            if (adheredInsArea > 0) 'Adhered insulation area: ${_sf(adheredInsArea)}',
-            'Coverage rate: 60 sf/gal',
-            'Base gallons:  ${base.toStringAsFixed(1)}',
-            'Waste:         ${_pct(wAcc)}%',
-            'With waste:    ${withW.toStringAsFixed(1)} gal',
-            'Cylinder size: 15 gal',
-            'ORDER QTY:     ${cylinders.toInt()} cylinders',
-          ],
-        ),
-      ));
+    final totalFieldAdheredArea = adheredFieldArea + adheredInsArea;
+    if (totalFieldAdheredArea > 0) {
+      final isSprayAdhesive = membrane.adhesiveType == 'CAV-GRIP 3V Spray';
+
+      if (isSprayAdhesive) {
+        // CAV-GRIP 3V spray: ~400 sf per #40 cylinder
+        const coveragePerCyl = 400.0;
+        final cylBase = totalFieldAdheredArea / coveragePerCyl;
+        final cylWithW = cylBase * (1 + wAcc);
+        final cylOrder = cylWithW.ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Adhesives & Sealants',
+          name: 'Versico CAV-GRIP 3V Low-VOC Adhesive/Primer$vocSuffix — #40 Cylinder (Field)',
+          orderQty: cylOrder,
+          unit: 'cylinders',
+          notes: '#40 cylinder, ~400 sf/cyl — spray application, field membrane',
+          trace: BomTrace(
+            baseDescription: '${_sf(totalFieldAdheredArea)} ÷ 400 sf/cyl',
+            baseQty: cylBase,
+            wastePercent: wAcc,
+            withWaste: cylWithW,
+            packageSize: 1,
+            orderQty: cylOrder,
+            breakdown: [
+              if (isFA) 'FA membrane area: ${_sf(totalArea)}',
+              if (adheredInsArea > 0) 'Adhered insulation area: ${_sf(adheredInsArea)}',
+              'Coverage rate: ~400 sf per #40 cylinder',
+              'Base: ${cylBase.toStringAsFixed(2)} cylinders',
+              'Waste: ${_pct(wAcc)}%',
+              'ORDER QTY: ${cylOrder.toInt()} cylinders',
+            ],
+          ),
+        ));
+        // Also add UN-TACK for field CAV-GRIP 3V
+        items.add(BomLineItem(
+          category: 'Adhesives & Sealants',
+          name: 'Versico UN-TACK Adhesive Remover & Cleaner — #8 Aerosol (Field)',
+          orderQty: cylOrder,
+          unit: 'aerosols',
+          notes: '#8 aerosol — one per CAV-GRIP 3V cylinder',
+          trace: BomTrace(
+            baseDescription: '1:1 ratio with CAV-GRIP 3V cylinders',
+            baseQty: cylBase,
+            wastePercent: wAcc,
+            withWaste: cylWithW,
+            packageSize: 1,
+            orderQty: cylOrder,
+            breakdown: ['One UN-TACK per CAV-GRIP 3V cylinder', 'ORDER QTY: ${cylOrder.toInt()} aerosols'],
+          ),
+        ));
+      } else {
+        // VersiWeld TPO Bonding Adhesive: ~60 sf per gallon — auto-select package by area
+        const coveragePerGal = 60.0;
+        final base  = totalFieldAdheredArea / coveragePerGal;
+        final withW = base * (1 + wAcc);
+
+        // Smart package sizing:
+        //   < 120 sf (< 2 gal)  → 1-gallon cans
+        //   120–600 sf (2-10 gal) → 5-gallon pails
+        //   600+ sf (10+ gal)   → 15-gallon cylinders (spray)
+        final String productName;
+        final String unit;
+        final String notes;
+        final double packageGal;
+        if (totalFieldAdheredArea < 120) {
+          productName = 'VersiWeld TPO Bonding Adhesive$vocSuffix — 1 Gal';
+          unit = 'cans';
+          notes = '1-gal, ~60 sf/gal — small area brush/roller application';
+          packageGal = 1.0;
+        } else if (totalFieldAdheredArea < 600) {
+          productName = 'VersiWeld TPO Bonding Adhesive$vocSuffix — 5 Gal Pail';
+          unit = 'pails';
+          notes = '5-gal pail, ~60 sf/gal — field membrane & insulation';
+          packageGal = 5.0;
+        } else {
+          productName = 'VersiWeld TPO Bonding Adhesive$vocSuffix — 15 Gal';
+          unit = 'cylinders';
+          notes = '15-gal, ~60 sf/gal — large area application';
+          packageGal = 15.0;
+        }
+        final orderQty = (withW / packageGal).ceil().toDouble();
+
+        items.add(BomLineItem(
+          category: 'Adhesives & Sealants',
+          name: productName,
+          orderQty: orderQty,
+          unit: unit,
+          notes: notes,
+          trace: BomTrace(
+            baseDescription: '${_sf(totalFieldAdheredArea)} ÷ 60 sf/gal',
+            baseQty: base,
+            wastePercent: wAcc,
+            withWaste: withW,
+            packageSize: packageGal,
+            orderQty: orderQty,
+            breakdown: [
+              if (isFA)        'FA membrane area: ${_sf(totalArea)}',
+              if (adheredInsArea > 0) 'Adhered insulation area: ${_sf(adheredInsArea)}',
+              'Coverage rate: 60 sf/gal',
+              'Base gallons:  ${base.toStringAsFixed(1)}',
+              'Waste:         ${_pct(wAcc)}%',
+              'With waste:    ${withW.toStringAsFixed(1)} gal',
+              'Auto-selected: ${packageGal.toInt()}-gal $unit (${_sf(totalFieldAdheredArea)} adhered area)',
+              'ORDER QTY:     ${orderQty.toInt()} $unit',
+            ],
+          ),
+        ));
+      }
+    }
+
+    // ── Parapet wall adhesive & cleaner (always adhered, separate products) ──
+    if (parapetTpoArea > 0) {
+      // Versico spec: bonding adhesive is NOT required on short parapet walls when:
+      //   - Wall height ≤ 12" and membrane is terminated under metal counterflashing/drip edge
+      //   - Wall height ≤ 18" and a termination bar is used
+      final parapetHeightIn = parapet.parapetHeight; // already in inches
+      final skipParapetAdhesive =
+          (parapetHeightIn <= 12) || // ≤12" with any termination (drip edge / counterflashing)
+          (parapetHeightIn <= 18 && parapet.terminationType == 'Termination Bar');
+
+      if (skipParapetAdhesive) {
+        warnings.add('Parapet adhesive omitted — wall height ${parapetHeightIn.toInt()}" per Versico spec (no adhesive required for short walls with ${parapet.terminationType.toLowerCase()}).');
+      } else {
+        // CAV-Grip 3v Low-VOC: ~400 sf per 40lb cylinder (double-sided vertical application)
+        // Applied to full parapet strip: wall face + deck overlap + top overlap
+        const cavGripCoverage = 400.0;
+        final cavBase      = parapetTpoArea / cavGripCoverage;
+        final cavWithW     = cavBase * (1 + wAcc);
+        final cavOrder     = cavWithW.ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Adhesives & Sealants',
+          name: 'Versico CAV-GRIP 3V Low-VOC Adhesive/Primer$vocSuffix — #40 Cylinder',
+          orderQty: cavOrder,
+          unit: 'cylinders',
+          notes: '#40 cylinder, ~400 sf/cyl — parapet walls (always adhered)',
+          trace: BomTrace(
+            baseDescription: '${_sf(parapetTpoArea)} ÷ 400 sf/cylinder',
+            baseQty: cavBase,
+            wastePercent: wAcc,
+            withWaste: cavWithW,
+            packageSize: 1,
+            orderQty: cavOrder,
+            breakdown: [
+              'Parapet TPO area: ${_sf(parapetTpoArea)}',
+              '  Wall: ${parapetHeightFt.toStringAsFixed(1)}\' + 4" base lap = ${parapetStripWidthFt.toStringAsFixed(2)}\' x ${_lf(parapet.parapetTotalLF)}',
+              'Coverage rate: 400 sf per #40 cylinder (double-sided spray)',
+              'Base: ${cavBase.toStringAsFixed(2)} cylinders',
+              'Waste: ${_pct(wAcc)}%',
+              'ORDER QTY: ${cavOrder.toInt()} cylinders',
+            ],
+          ),
+        ));
+
+        // UN-TACK Adhesive Remover & Cleaner — 1 cylinder per CAV-Grip cylinder (combo)
+        items.add(BomLineItem(
+          category: 'Adhesives & Sealants',
+          name: 'Versico UN-TACK Adhesive Remover & Cleaner — #8 Aerosol',
+          orderQty: cavOrder,
+          unit: 'aerosols',
+          notes: '#8 aerosol — one per CAV-GRIP 3V cylinder',
+          trace: BomTrace(
+            baseDescription: '1:1 ratio with CAV-Grip 3v cylinders',
+            baseQty: cavBase,
+            wastePercent: wAcc,
+            withWaste: cavWithW,
+            packageSize: 1,
+            orderQty: cavOrder,
+            breakdown: [
+              'One UN-TACK per CAV-GRIP 3V cylinder',
+              'ORDER QTY: ${cavOrder.toInt()} aerosols',
+            ],
+          ),
+        ));
+      }
     }
 
     // Cut-edge sealant — estimated from seam LF
@@ -638,19 +900,19 @@ class BomCalculator {
     if (totalArea > 0) {
       final rollWidthFt  = double.tryParse(membrane.rollWidth.replaceAll("'", '')) ?? 10.0;
       final seamLF       = totalArea / rollWidthFt;
-      // 1 tube (10 oz) covers ~50 LF of cut edge
-      const lfPerTube    = 50.0;
-      final base         = seamLF / lfPerTube;
+      // 1 bottle (16 oz) covers ~250 LF of cut edge (Versico spec: 225–275 LF/bottle)
+      const lfPerBottle  = 250.0;
+      final base         = seamLF / lfPerBottle;
       final withW        = base * (1 + wAcc);
       final orderQty     = withW.ceil().toDouble();
       items.add(BomLineItem(
         category: 'Adhesives & Sealants',
-        name: 'TPO Cut Edge Sealant',
+        name: 'Versico TPO Cut Edge Sealant$vocSuffix',
         orderQty: orderQty,
-        unit: 'tubes',
-        notes: '10 oz tubes, ~50 LF/tube',
+        unit: 'bottles',
+        notes: '16 oz bottles, ~250 LF/bottle — 1/8" bead on cut edges',
         trace: BomTrace(
-          baseDescription: '${seamLF.toStringAsFixed(0)} LF seams ÷ 50 LF/tube',
+          baseDescription: '${seamLF.toStringAsFixed(0)} LF seams ÷ 250 LF/bottle',
           baseQty: base,
           wastePercent: wAcc,
           withWaste: withW,
@@ -658,7 +920,39 @@ class BomCalculator {
           orderQty: orderQty,
           breakdown: [
             'Est. seam LF: ${_sf(totalArea)} ÷ ${rollWidthFt.toInt()} ft roll = ${seamLF.toStringAsFixed(0)} LF',
-            'Coverage: 50 LF/tube',
+            'Coverage: 250 LF/bottle',
+            'Waste: ${_pct(wAcc)}%',
+            'ORDER QTY: ${orderQty.toInt()} bottles',
+          ],
+        ),
+      ));
+    }
+
+    // Versico Water Cut-Off Mastic — seam LF at T-joints, laps, penetrations
+    if (totalArea > 0) {
+      final rollWidthFtWco = double.tryParse(membrane.rollWidth.replaceAll("'", '')) ?? 10.0;
+      final seamLFWco      = totalArea / rollWidthFtWco;
+      // 1 tube (11 oz) covers ~10 LF (Versico spec: 10 LF/tube with 7/16" bead)
+      const lfPerTube      = 10.0;
+      final base           = seamLFWco / lfPerTube;
+      final withW          = base * (1 + wAcc);
+      final orderQty       = withW.ceil().toDouble();
+      items.add(BomLineItem(
+        category: 'Adhesives & Sealants',
+        name: 'Versico Water Cut-Off Mastic',
+        orderQty: orderQty,
+        unit: 'tubes',
+        notes: '11 oz tubes, ~10 LF/tube — 7/16" bead at T-joints, laps, penetrations',
+        trace: BomTrace(
+          baseDescription: '${seamLFWco.toStringAsFixed(0)} LF seams ÷ 10 LF/tube',
+          baseQty: base,
+          wastePercent: wAcc,
+          withWaste: withW,
+          packageSize: 1,
+          orderQty: orderQty,
+          breakdown: [
+            'Est. seam LF: ${_sf(totalArea)} ÷ ${rollWidthFtWco.toInt()} ft roll = ${seamLFWco.toStringAsFixed(0)} LF',
+            'Coverage: 10 LF/tube (7/16" bead)',
             'Waste: ${_pct(wAcc)}%',
             'ORDER QTY: ${orderQty.toInt()} tubes',
           ],
@@ -666,31 +960,74 @@ class BomCalculator {
       ));
     }
 
-    // Water block / lap sealant
-    if (totalArea > 0) {
-      // ~1 tube per 10 penetrations / 200 LF of seam — simplified: 1 per 5 rolls
-      final fieldRolls = (totalArea / membrane.rollCoverage).ceil();
-      final base       = (fieldRolls / 5).ceilToDouble();
-      final withW      = base * (1 + wAcc);
-      final orderQty   = withW.ceil().toDouble();
+    // ── Seam tape (when seamType == 'Tape' instead of hot-air welded) ───────
+    // Versico seam tape: 3" wide pressure-sensitive, 100' rolls.
+    // Seam LF = total seam length from roll layout.
+    if (membrane.seamType == 'Tape' && totalArea > 0) {
+      final rollWidthFtTape = double.tryParse(membrane.rollWidth.replaceAll("'", '')) ?? 10.0;
+      final seamLFTape = totalArea / rollWidthFtTape;
+      const tapeRollLF = 100.0;
+      final tapeBase = seamLFTape / tapeRollLF;
+      final tapeWithW = tapeBase * (1 + wAcc);
+      final tapeOrder = tapeWithW.ceil().toDouble();
       items.add(BomLineItem(
         category: 'Adhesives & Sealants',
-        name: 'Water Block Sealant',
-        orderQty: orderQty,
-        unit: 'tubes',
-        notes: '10 oz tubes — T-joints, laps, penetrations',
+        name: 'Versico TPO Seam Tape (3" wide)',
+        orderQty: tapeOrder,
+        unit: 'rolls',
+        notes: "3\"×100' rolls — pressure-sensitive seam tape (requires TPO primer)",
         trace: BomTrace(
-          baseDescription: '1 tube per 5 field rolls (estimated)',
-          baseQty: base,
+          baseDescription: '${seamLFTape.toStringAsFixed(0)} LF seams ÷ 100\'/roll',
+          baseQty: tapeBase,
           wastePercent: wAcc,
-          withWaste: withW,
+          withWaste: tapeWithW,
           packageSize: 1,
-          orderQty: orderQty,
+          orderQty: tapeOrder,
           breakdown: [
-            'Field rolls: $fieldRolls',
-            'Est. ratio: 1 tube per 5 rolls',
-            'Base: ${base.toStringAsFixed(0)} tubes',
-            'ORDER QTY: ${orderQty.toInt()} tubes',
+            'Seam LF: ${_sf(totalArea)} ÷ ${rollWidthFtTape.toInt()}\' roll width = ${seamLFTape.toStringAsFixed(0)} LF',
+            'Roll length: 100\' per roll',
+            'Waste: ${_pct(wAcc)}%',
+            'ORDER QTY: ${tapeOrder.toInt()} rolls',
+          ],
+        ),
+      ));
+    }
+
+    // ── Substrate prep for tear-off projects ─────────────────────────────────
+    // BUR and Modified Bitumen tear-offs leave bituminous residue on the deck.
+    // Deck primer is ONLY needed when insulation is ADHERED directly to deck.
+    // If insulation is mechanically attached, fasteners penetrate through residue — no primer needed.
+    final deckNeedsPrimer = systemSpecs.projectType == 'Tear-off & Replace' &&
+        (systemSpecs.existingRoofType == 'BUR' || systemSpecs.existingRoofType == 'Modified Bitumen') &&
+        insulation.layer1.attachmentMethod == 'Adhered';
+    if (deckNeedsPrimer && totalArea > 0) {
+      // Substrate primer: ~200 sf/gallon, 5-gallon pails
+      const subPrimerCoverage = 200.0;
+      const subPailGal = 5.0;
+      final subBase = totalArea / subPrimerCoverage;
+      final subWithW = subBase * (1 + wAcc);
+      final subOrder = (subWithW / subPailGal).ceil().toDouble();
+      items.add(BomLineItem(
+        category: 'Adhesives & Sealants',
+        name: 'Deck Primer (Post Tear-Off Prep)',
+        orderQty: subOrder,
+        unit: 'pails',
+        notes: '5-gal pails, ~200 sf/gal — preps deck after ${systemSpecs.existingRoofType} removal for new TPO system adhesion',
+        trace: BomTrace(
+          baseDescription: '${_sf(totalArea)} ÷ 200 sf/gal',
+          baseQty: subBase,
+          wastePercent: wAcc,
+          withWaste: subWithW,
+          packageSize: subPailGal,
+          orderQty: subOrder,
+          breakdown: [
+            'Project type: ${systemSpecs.projectType}',
+            'Existing roof: ${systemSpecs.existingRoofType}',
+            'Deck area: ${_sf(totalArea)}',
+            'Coverage: 200 sf/gal',
+            'Base gallons: ${subBase.toStringAsFixed(1)}',
+            'Waste: ${_pct(wAcc)}%',
+            'ORDER QTY: ${subOrder.toInt()} pails (5 gal)',
           ],
         ),
       ));
@@ -731,6 +1068,64 @@ class BomCalculator {
         ));
       }
 
+      // Water cut-off mastic — gasket under termination bar, ~10 LF/tube (Versico spec: 10 LF/tube, 7/16" bead)
+      if (termBarLF > 0) {
+        const lfPerTube = 10.0;
+        final base     = termBarLF / lfPerTube;
+        final withW    = base * (1 + wAcc);
+        final orderQty = withW.ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Parapet & Termination',
+          name: 'Low-VOC Water Cut-Off Mastic',
+          orderQty: orderQty,
+          unit: 'tubes',
+          notes: '~10 LF/tube — 7/16" bead under termination bar',
+          trace: BomTrace(
+            baseDescription: '${_lf(termBarLF)} ÷ 10 LF/tube',
+            baseQty: base,
+            wastePercent: wAcc,
+            withWaste: withW,
+            packageSize: 1,
+            orderQty: orderQty,
+            breakdown: [
+              'Termination bar LF: ${_lf(termBarLF)}',
+              'Coverage: ~10 LF/tube (7/16" bead)',
+              'Waste: ${_pct(wAcc)}%',
+              'ORDER QTY: ${orderQty.toInt()} tubes',
+            ],
+          ),
+        ));
+      }
+
+      // Single-ply sealant — top edge of termination bar, ~25 LF/tube (Versico spec: 25 LF/tube, 1/4" bead)
+      if (termBarLF > 0) {
+        const lfPerTube = 25.0;
+        final base     = termBarLF / lfPerTube;
+        final withW    = base * (1 + wAcc);
+        final orderQty = withW.ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Parapet & Termination',
+          name: 'Universal Single-Ply Sealant',
+          orderQty: orderQty,
+          unit: 'tubes',
+          notes: '~25 LF/tube — 1/4" bead along top edge',
+          trace: BomTrace(
+            baseDescription: '${_lf(termBarLF)} ÷ 25 LF/tube',
+            baseQty: base,
+            wastePercent: wAcc,
+            withWaste: withW,
+            packageSize: 1,
+            orderQty: orderQty,
+            breakdown: [
+              'Termination bar LF: ${_lf(termBarLF)}',
+              'Coverage: ~25 LF/tube (1/4" bead)',
+              'Waste: ${_pct(wAcc)}%',
+              'ORDER QTY: ${orderQty.toInt()} tubes',
+            ],
+          ),
+        ));
+      }
+
       // ── Termination bar fasteners — type driven by wall type ──────────────
       if (termBarLF > 0) {
         const spacingIn = 8.0; // 8" o.c. per Versico spec for all wall types
@@ -758,26 +1153,29 @@ class BomCalculator {
 
         final base     = termBarLF * 12.0 / spacingIn;
         final withW    = base * (1 + wAcc);
-        final orderQty = withW.ceil().toDouble();
+        const tbBucketSize = 500.0;
+        final orderQty = (withW / tbBucketSize).ceil().toDouble();
         items.add(BomLineItem(
           category: 'Parapet & Termination',
           name: '$tbFastener $tbLength — Termination Bar (${parapet.wallType})',
           orderQty: orderQty,
-          unit: 'each',
-          notes: tbNotes,
+          unit: 'buckets',
+          notes: '${tbBucketSize.toInt()}/bucket — $tbNotes',
           trace: BomTrace(
-            baseDescription: '${_lf(termBarLF)} × 12" ÷ ${spacingIn.toInt()}" o.c.',
+            baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ ${tbBucketSize.toInt()}/bucket',
             baseQty: base,
             wastePercent: wAcc,
             withWaste: withW,
-            packageSize: 1,
+            packageSize: tbBucketSize,
             orderQty: orderQty,
             breakdown: [
               'Wall type:  ${parapet.wallType} → $tbFastener $tbLength',
               'Spacing:    ${spacingIn.toInt()}" o.c.',
               '${_lf(termBarLF)} × 12"/ft ÷ ${spacingIn.toInt()}" = ${base.toStringAsFixed(0)} fasteners',
               'Waste: ${_pct(wAcc)}%',
-              'ORDER QTY: ${orderQty.toInt()} each',
+              'With waste: ${withW.toStringAsFixed(0)} fasteners',
+              'Bucket size: ${tbBucketSize.toInt()}/bucket',
+              'ORDER QTY: ${orderQty.toInt()} buckets',
             ],
           ),
         ));
@@ -796,19 +1194,20 @@ class BomCalculator {
       final edgeFastName  = _fastenerName(systemSpecs.deckType);
       final base          = edgeMetalLF * 12.0 / edgeSpacingIn;
       final withW         = base * (1 + wAcc);
-      final orderQty      = withW.ceil().toDouble();
+      const edgeBucketSize = 500.0;
+      final orderQty      = (withW / edgeBucketSize).ceil().toDouble();
       items.add(BomLineItem(
         category: 'Parapet & Termination',
         name: '$edgeFastName $edgeFastLen — Edge Metal (${metalScope.edgeMetalType})',
         orderQty: orderQty,
-        unit: 'each',
-        notes: '12" o.c. — eave/rake edge attachment',
+        unit: 'buckets',
+        notes: '${edgeBucketSize.toInt()}/bucket — 12" o.c. eave/rake edge attachment',
         trace: BomTrace(
-          baseDescription: '${_lf(edgeMetalLF)} × 12" ÷ 12" o.c.',
+          baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ ${edgeBucketSize.toInt()}/bucket',
           baseQty: base,
           wastePercent: wAcc,
           withWaste: withW,
-          packageSize: 1,
+          packageSize: edgeBucketSize,
           orderQty: orderQty,
           breakdown: [
             'Deck type:  ${systemSpecs.deckType} → $edgeFastName $edgeFastLen',
@@ -816,7 +1215,8 @@ class BomCalculator {
             'Spacing:    12" o.c. per SMACNA standards',
             '${_lf(edgeMetalLF)} × 12"/ft ÷ 12" = ${base.toStringAsFixed(0)} fasteners',
             'Waste: ${_pct(wAcc)}%',
-            'ORDER QTY: ${orderQty.toInt()} each',
+            'Bucket size: ${edgeBucketSize.toInt()}/bucket',
+            'ORDER QTY: ${orderQty.toInt()} buckets',
           ],
         ),
       ));
@@ -926,14 +1326,23 @@ class BomCalculator {
 
     // Pitch pans
     if (penetrations.pitchPanCount > 0) {
-      items.add(_eachItem('Details & Accessories', 'Pitch Pan',
+      items.add(_eachItem('Details & Accessories', 'TPO Molded Sealant Pocket',
           penetrations.pitchPanCount.toDouble(), wAcc, 'each', ''));
     }
 
     // RTU flashing (perimeter rolls)
+    // Use actual curb dimensions from rtuDetails if available, else default 12" curb height.
     if (penetrations.rtuTotalLF > 0) {
-      // RTU curb height typically 12" — add 2× for overlap: 2 × LF × (curb + 12" up wall)
-      final rtuFlashSF = penetrations.rtuTotalLF * 2.0; // 24" effective strip
+      // Strip width = curb height + 12" field overlap + 6" top overlap
+      // Versico spec: min 12" up curb wall + lap onto field membrane
+      double avgCurbHeightIn = 12.0; // default
+      if (penetrations.rtuDetails.isNotEmpty) {
+        final totalHeight = penetrations.rtuDetails.fold(0.0, (sum, r) => sum + r.height);
+        avgCurbHeightIn = totalHeight / penetrations.rtuDetails.length;
+        if (avgCurbHeightIn < 8.0) avgCurbHeightIn = 12.0; // sanity floor
+      }
+      final stripWidthFt = (avgCurbHeightIn + 18.0) / 12.0; // curb + 12" field lap + 6" top
+      final rtuFlashSF = penetrations.rtuTotalLF * stripWidthFt;
       final base       = rtuFlashSF / flashRollCoverage;
       final withW      = base * (1 + wMat);
       final orderQty   = withW.ceil().toDouble();
@@ -942,9 +1351,9 @@ class BomCalculator {
         name: 'TPO Curb Flashing — RTU (6\'×100\')',
         orderQty: orderQty,
         unit: 'rolls',
-        notes: "RTU curbs — ${_lf(penetrations.rtuTotalLF)} curb perimeter",
+        notes: "RTU curbs — ${_lf(penetrations.rtuTotalLF)} perimeter, ${avgCurbHeightIn.toStringAsFixed(0)}\" curb height",
         trace: BomTrace(
-          baseDescription: '${_lf(penetrations.rtuTotalLF)} × 2 ÷ 600 sf/roll',
+          baseDescription: '${_lf(penetrations.rtuTotalLF)} × ${stripWidthFt.toStringAsFixed(1)}\' strip ÷ 600 sf/roll',
           baseQty: base,
           wastePercent: wMat,
           withWaste: withW,
@@ -952,13 +1361,42 @@ class BomCalculator {
           orderQty: orderQty,
           breakdown: [
             'RTU curb LF: ${_lf(penetrations.rtuTotalLF)}',
-            'Strip width est.: 24" (curb up + onto field)',
+            'Avg curb height: ${avgCurbHeightIn.toStringAsFixed(0)}"${penetrations.rtuDetails.isNotEmpty ? " (from ${penetrations.rtuDetails.length} RTU details)" : " (default)"}',
+            'Strip width: ${avgCurbHeightIn.toStringAsFixed(0)}" curb + 12" field + 6" top = ${(avgCurbHeightIn + 18).toStringAsFixed(0)}" (${stripWidthFt.toStringAsFixed(1)}\')',
             'Flash SF: ${rtuFlashSF.toStringAsFixed(0)}',
             'Roll: 600 sf/roll',
             'ORDER QTY: ${orderQty.toInt()} rolls',
           ],
         ),
       ));
+
+      // RTU curb wrap corners — 4 corners per RTU per Versico spec
+      final rtuCornerCount = penetrations.rtuDetails.length * 4;
+      if (rtuCornerCount > 0) {
+        final cwBase = rtuCornerCount.toDouble();
+        final cwWithW = cwBase * (1 + wAcc);
+        final cwOrder = cwWithW.ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Details & Accessories',
+          name: 'TPO Curb Wrap Corners — RTU',
+          orderQty: cwOrder,
+          unit: 'each',
+          notes: '4 corners per RTU — 60-mil reinforced VersiWeld',
+          trace: BomTrace(
+            baseDescription: '${penetrations.rtuDetails.length} RTUs × 4 corners',
+            baseQty: cwBase,
+            wastePercent: wAcc,
+            withWaste: cwWithW,
+            packageSize: 1,
+            orderQty: cwOrder,
+            breakdown: [
+              '${penetrations.rtuDetails.length} RTUs × 4 corners = $rtuCornerCount',
+              'Waste: ${_pct(wAcc)}%',
+              'ORDER QTY: ${cwOrder.toInt()} each',
+            ],
+          ),
+        ));
+      }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -991,6 +1429,42 @@ class BomCalculator {
     if (metalScope.downspoutCount > 0) {
       items.add(_eachItem('Metal Scope', 'Downspout',
           metalScope.downspoutCount.toDouble(), wMet, 'each', ''));
+    }
+
+    // TPO Reinforced Overlayment Strip — needed at all metal-to-membrane transitions
+    // Per Versico: 6" wide strip welded over non-coated metal flanges
+    final totalEdgeMetalLF = metalScope.dripEdgeLF + metalScope.copingLF +
+        metalScope.wallFlashingLF + metalScope.otherEdgeMetalLF;
+    if (totalEdgeMetalLF > 0) {
+      // Overlayment strip: 6" wide, 100' rolls
+      const stripRollLF = 100.0;
+      final stripBase = totalEdgeMetalLF / stripRollLF;
+      final stripWithW = stripBase * (1 + wAcc);
+      final stripOrder = stripWithW.ceil().toDouble();
+      items.add(BomLineItem(
+        category: 'Metal Scope',
+        name: 'TPO Reinforced Overlayment Strip (6" wide)',
+        orderQty: stripOrder,
+        unit: 'rolls',
+        notes: "6\"x100' — seals metal flanges to membrane per Versico spec",
+        trace: BomTrace(
+          baseDescription: '${totalEdgeMetalLF.toStringAsFixed(0)} LF edge metal / 100\'/roll',
+          baseQty: stripBase,
+          wastePercent: wAcc,
+          withWaste: stripWithW,
+          packageSize: 1,
+          orderQty: stripOrder,
+          breakdown: [
+            'Drip edge: ${_lf(metalScope.dripEdgeLF)}',
+            'Coping: ${_lf(metalScope.copingLF)}',
+            'Wall flashing: ${_lf(metalScope.wallFlashingLF)}',
+            'Other: ${_lf(metalScope.otherEdgeMetalLF)}',
+            'Total: ${_lf(totalEdgeMetalLF)}',
+            'Roll: 100\' per roll',
+            'ORDER QTY: ${stripOrder.toInt()} rolls',
+          ],
+        ),
+      ));
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1036,6 +1510,365 @@ class BomCalculator {
           packageSize: 1,
           orderQty: ragBoxes,
           breakdown: ['${_sf(totalArea)} ÷ 2,000 sf/box = ${ragBoxes.toInt()} boxes'],
+        ),
+      ));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 9. VAPOR RETARDER
+    // ══════════════════════════════════════════════════════════════════════════
+    // Only when systemSpecs.vaporRetarder != 'None' — full roof area coverage.
+
+    if (systemSpecs.vaporRetarder != 'None' && totalArea > 0) {
+      // Standard vapor retarder rolls: 10'×100' = 1,000 sf
+      const vrRollSf = 1000.0;
+      final vrBase     = totalArea / vrRollSf;
+      final vrWithW    = vrBase * (1 + wMat);
+      final vrOrder    = vrWithW.ceil().toDouble();
+      items.add(BomLineItem(
+        category: 'Vapor Retarder',
+        name: 'Vapor Retarder — ${systemSpecs.vaporRetarder}',
+        orderQty: vrOrder,
+        unit: 'rolls',
+        notes: "10'×100' rolls (1,000 sf/roll)",
+        trace: BomTrace(
+          baseDescription: '${_sf(totalArea)} ÷ 1,000 sf/roll',
+          baseQty: vrBase,
+          wastePercent: wMat,
+          withWaste: vrWithW,
+          packageSize: 1,
+          orderQty: vrOrder,
+          breakdown: [
+            'Roof area: ${_sf(totalArea)}',
+            'Roll coverage: 1,000 sf/roll (10\'×100\')',
+            'Waste: ${_pct(wMat)}%',
+            'ORDER QTY: ${vrOrder.toInt()} rolls',
+          ],
+        ),
+      ));
+
+      // Self-Adhered vapor retarder needs primer
+      if (systemSpecs.vaporRetarder == 'Self-Adhered') {
+        const vrPrimerCoverage = 250.0; // sf per gallon
+        const vrPrimerGalPerPail = 5.0;
+        final vrPBase   = totalArea / vrPrimerCoverage;
+        final vrPWithW  = vrPBase * (1 + wAcc);
+        final vrPOrder  = (vrPWithW / vrPrimerGalPerPail).ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Vapor Retarder',
+          name: 'Vapor Retarder Primer',
+          orderQty: vrPOrder,
+          unit: 'pails',
+          notes: '5-gal pails, ~250 sf/gal',
+          trace: BomTrace(
+            baseDescription: '${_sf(totalArea)} ÷ 250 sf/gal',
+            baseQty: vrPBase,
+            wastePercent: wAcc,
+            withWaste: vrPWithW,
+            packageSize: vrPrimerGalPerPail,
+            orderQty: vrPOrder,
+            breakdown: [
+              'Roof area: ${_sf(totalArea)}',
+              'Coverage: 250 sf/gal',
+              'Base gallons: ${vrPBase.toStringAsFixed(1)}',
+              'Waste: ${_pct(wAcc)}%',
+              'ORDER QTY: ${vrPOrder.toInt()} pails (5 gal)',
+            ],
+          ),
+        ));
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 10. TPO PRIMER
+    // ══════════════════════════════════════════════════════════════════════════
+    // Required before ALL pressure-sensitive products per Versico spec:
+    //   corners, T-joints, seam tape, RUSS strips, peel & stick products.
+    // Coverage: ~400 sf per gallon (single coat).
+    // Estimate primed area from: corners, T-joints, seam tape laps, parapet RUSS.
+
+    if (totalArea > 0) {
+      // Primed area estimate:
+      //   - Inside/outside corners: ~2 sf each (6"×6" area × 2 sides)
+      //   - T-joint covers: ~0.25 sf each (4.5" diameter disc)
+      //   - Seam tape laps at roll ends: ~0.5 sf per roll
+      //   - Parapet RUSS base strip: parapetLF × 0.5' wide = parapetLF × 0.5 sf
+      final cornerCount = (geometry.insideCorners + geometry.outsideCorners).toDouble();
+      final fieldRolls = (totalArea / membrane.rollCoverage).ceil();
+      final tJointCount = (fieldRolls * 0.75).ceil();
+      final primedArea = (cornerCount * 2.0) +
+          (tJointCount * 0.25) +
+          (fieldRolls * 0.5) +
+          (parapet.hasParapetWalls ? parapet.parapetTotalLF * 0.5 : 0.0);
+
+      if (primedArea > 0) {
+        final String primerName;
+        final double primerCov;
+        final String primerUnit;
+        final double primerPkgSize;
+        switch (membrane.primerType) {
+          case 'TPO Primer (225 sf/gal)':
+            primerName = 'Versico TPO Primer$vocSuffix';
+            primerCov = 225.0;
+            primerUnit = 'gallons';
+            primerPkgSize = 1.0;
+            break;
+          case 'CAV-PRIME Spray (1,760 sf/cyl)':
+            primerName = 'Versico CAV-PRIME Low-VOC Primer$vocSuffix — #32 Cylinder';
+            primerCov = 1760.0;
+            primerUnit = 'cylinders';
+            primerPkgSize = 1.0;
+            break;
+          default: // Low-VOC EPDM/TPO Primer
+            primerName = 'Versico Low-VOC EPDM & TPO Primer$vocSuffix';
+            primerCov = 700.0;
+            primerUnit = 'gallons';
+            primerPkgSize = 1.0;
+        }
+        final primerBase   = primedArea / primerCov;
+        final primerWithW  = primerBase * (1 + wAcc);
+        // Minimum 1 unit
+        final primerOrder  = max(1.0, (primerWithW / primerPkgSize).ceil().toDouble());
+        items.add(BomLineItem(
+          category: 'Adhesives & Sealants',
+          name: primerName,
+          orderQty: primerOrder,
+          unit: primerUnit,
+          notes: '~${primerCov.toInt()} sf/${primerUnit == 'cylinders' ? 'cyl' : 'gal'} — required before all pressure-sensitive products',
+          trace: BomTrace(
+            baseDescription: '${primedArea.toStringAsFixed(0)} sf primed area ÷ ${primerCov.toInt()} sf/${primerUnit == 'cylinders' ? 'cyl' : 'gal'}',
+            baseQty: primerBase,
+            wastePercent: wAcc,
+            withWaste: primerWithW,
+            packageSize: primerPkgSize,
+            orderQty: primerOrder,
+            breakdown: [
+              'Primed areas:',
+              '  Corners (${cornerCount.toInt()}): ${(cornerCount * 2.0).toStringAsFixed(0)} sf',
+              '  T-joints ($tJointCount): ${(tJointCount * 0.25).toStringAsFixed(1)} sf',
+              '  Seam tape laps ($fieldRolls rolls): ${(fieldRolls * 0.5).toStringAsFixed(1)} sf',
+              if (parapet.hasParapetWalls)
+                '  Parapet RUSS base (${_lf(parapet.parapetTotalLF)}): ${(parapet.parapetTotalLF * 0.5).toStringAsFixed(0)} sf',
+              'Total primed area: ${primedArea.toStringAsFixed(0)} sf',
+              'Coverage: ${primerCov.toInt()} sf/${primerUnit == 'cylinders' ? 'cyl' : 'gal'}',
+              'ORDER QTY: ${primerOrder.toInt()} $primerUnit',
+            ],
+          ),
+        ));
+      }
+    }
+
+    // Membrane Cleaner — required accessory per Versico spec
+    if (totalArea > 0) {
+      const cleanerCoverage = 400.0; // sf per gallon
+      final seamLFClean = totalArea / (double.tryParse(membrane.rollWidth.replaceAll("'", '')) ?? 10.0);
+      // Cleaner needed for all seam areas before welding
+      final cleanArea = seamLFClean * 0.5; // ~6" strip on each side of seam
+      final cleanBase = cleanArea / cleanerCoverage;
+      final cleanWithW = cleanBase * (1 + wAcc);
+      final cleanOrder = max(1.0, cleanWithW.ceil().toDouble());
+      items.add(BomLineItem(
+        category: 'Adhesives & Sealants',
+        name: 'Versico Weathered Membrane Cleaner',
+        orderQty: cleanOrder,
+        unit: 'gallons',
+        notes: '~400 sf/gal — clean membrane before welding',
+        trace: BomTrace(
+          baseDescription: '${cleanArea.toStringAsFixed(0)} sf seam area ÷ 400 sf/gal',
+          baseQty: cleanBase,
+          wastePercent: wAcc,
+          withWaste: cleanWithW,
+          packageSize: 1,
+          orderQty: cleanOrder,
+          breakdown: [
+            'Seam LF: ${seamLFClean.toStringAsFixed(0)} LF',
+            'Clean area (~6" each side): ${cleanArea.toStringAsFixed(0)} sf',
+            'Coverage: 400 sf/gal',
+            'ORDER QTY: ${cleanOrder.toInt()} gallons (min 1)',
+          ],
+        ),
+      ));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 11. LAP SEALANT
+    // ══════════════════════════════════════════════════════════════════════════
+    // Separate from cut-edge sealant — needed at T-joint edges, tape overlaps,
+    // flashing edges, and penetration details per Versico spec.
+    // ~50 LF/tube (10 oz cartridge).
+
+    if (totalArea > 0) {
+      final fieldRollsForLap = (totalArea / membrane.rollCoverage).ceil();
+      final tJointsForLap = (fieldRollsForLap * 0.75).ceil();
+      final cornerCountForLap = geometry.insideCorners + geometry.outsideCorners;
+      // Each T-joint: ~12" perimeter, each corner: ~12" perimeter, each penetration: ~12" avg
+      final penetrationCount = penetrations.smallPipeCount +
+          penetrations.largePipeCount +
+          penetrations.skylightCount +
+          penetrations.scupperCount +
+          penetrations.pitchPanCount;
+      final lapLF = (tJointsForLap + cornerCountForLap + penetrationCount) * 1.0; // ~1 LF each
+      if (lapLF > 0) {
+        const lfPerTube = 22.0;
+        final lapBase = lapLF / lfPerTube;
+        final lapWithW = lapBase * (1 + wAcc);
+        final lapOrder = max(1.0, lapWithW.ceil().toDouble());
+        items.add(BomLineItem(
+          category: 'Adhesives & Sealants',
+          name: 'Versico Lap Sealant',
+          orderQty: lapOrder,
+          unit: 'tubes',
+          notes: '11 oz tubes, ~22 LF/tube — 5/16" bead',
+          trace: BomTrace(
+            baseDescription: '${lapLF.toStringAsFixed(0)} LF ÷ 22 LF/tube',
+            baseQty: lapBase,
+            wastePercent: wAcc,
+            withWaste: lapWithW,
+            packageSize: 1,
+            orderQty: lapOrder,
+            breakdown: [
+              'T-joints: $tJointsForLap × 1 LF',
+              'Corners: $cornerCountForLap × 1 LF',
+              'Penetrations: $penetrationCount × 1 LF',
+              'Total: ${lapLF.toStringAsFixed(0)} LF',
+              'ORDER QTY: ${lapOrder.toInt()} tubes',
+            ],
+          ),
+        ));
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 12. RUSS STRIPS (MA PARAPET BASE TRANSITION)
+    // ══════════════════════════════════════════════════════════════════════════
+    // For MA systems: 6" wide VersiWeld Pressure-Sensitive Reinforced Universal
+    // Securement Strip at wall/deck transition. Vertical leg extends 1"–6" up wall.
+    // Fasteners at 12" O.C. max through RUSS into deck.
+    // Per Versico spec: required at all wall-to-deck transitions for MA membrane.
+
+    if (isMA && parapet.hasParapetWalls && parapet.parapetTotalLF > 0) {
+      // RUSS comes in 100' rolls, 6" wide
+      const russRollLF = 100.0;
+      final russBase    = parapet.parapetTotalLF / russRollLF;
+      final russWithW   = russBase * (1 + wAcc);
+      final russOrder   = russWithW.ceil().toDouble();
+      items.add(BomLineItem(
+        category: 'Parapet & Termination',
+        name: 'VersiWeld RUSS Strip (6" wide) — Parapet Base',
+        orderQty: russOrder,
+        unit: 'rolls',
+        notes: "100' rolls — MA wall/deck transition per Versico spec",
+        trace: BomTrace(
+          baseDescription: '${_lf(parapet.parapetTotalLF)} ÷ 100\'/roll',
+          baseQty: russBase,
+          wastePercent: wAcc,
+          withWaste: russWithW,
+          packageSize: 1,
+          orderQty: russOrder,
+          breakdown: [
+            'Parapet LF: ${_lf(parapet.parapetTotalLF)}',
+            'Roll length: 100\'',
+            'Waste: ${_pct(wAcc)}%',
+            'ORDER QTY: ${russOrder.toInt()} rolls',
+          ],
+        ),
+      ));
+
+      // RUSS fasteners — 12" O.C. through RUSS into deck
+      const russSpacing = 12.0;
+      const russBucketSize = 500.0;
+      final russFastBase = parapet.parapetTotalLF * 12.0 / russSpacing;
+      final russFastWithW = russFastBase * (1 + wAcc);
+      final russFastOrder = (russFastWithW / russBucketSize).ceil().toDouble();
+      final russFastName = _fastenerName(systemSpecs.deckType);
+      final russFastLen  = _selectFastenerLen(systemSpecs.deckType, 0); // through RUSS only, no insulation
+      items.add(BomLineItem(
+        category: 'Parapet & Termination',
+        name: '$russFastName $russFastLen — RUSS Strip (12" o.c.)',
+        orderQty: russFastOrder,
+        unit: 'buckets',
+        notes: '${russBucketSize.toInt()}/bucket — 12" o.c. through RUSS into deck',
+        trace: BomTrace(
+          baseDescription: '${russFastBase.toStringAsFixed(0)} fasteners ÷ ${russBucketSize.toInt()}/bucket',
+          baseQty: russFastBase,
+          wastePercent: wAcc,
+          withWaste: russFastWithW,
+          packageSize: russBucketSize,
+          orderQty: russFastOrder,
+          breakdown: [
+            'Parapet LF: ${_lf(parapet.parapetTotalLF)}',
+            'Spacing: 12" o.c.',
+            '${parapet.parapetTotalLF.toStringAsFixed(0)} × 1/ft = ${russFastBase.toStringAsFixed(0)} fasteners',
+            'Waste: ${_pct(wAcc)}%',
+            'Bucket size: ${russBucketSize.toInt()}/bucket',
+            'ORDER QTY: ${russFastOrder.toInt()} buckets',
+          ],
+        ),
+      ));
+
+      // RUSS seam fastening plates — one per RUSS fastener, 1000/box
+      const russPlateBoxSize = 1000.0;
+      final russPlateOrder = (russFastWithW / russPlateBoxSize).ceil().toDouble();
+      items.add(BomLineItem(
+        category: 'Parapet & Termination',
+        name: 'Seam Fastening Plates — RUSS Strip',
+        orderQty: russPlateOrder,
+        unit: 'boxes',
+        notes: '${russPlateBoxSize.toInt()}/box — one plate per RUSS fastener',
+        trace: BomTrace(
+          baseDescription: '${russFastBase.toStringAsFixed(0)} plates ÷ ${russPlateBoxSize.toInt()}/box',
+          baseQty: russFastBase,
+          wastePercent: wAcc,
+          withWaste: russFastWithW,
+          packageSize: russPlateBoxSize,
+          orderQty: russPlateOrder,
+          breakdown: [
+            'One plate per fastener: ${russFastBase.toStringAsFixed(0)} plates',
+            'Box size: ${russPlateBoxSize.toInt()}/box',
+            'ORDER QTY: ${russPlateOrder.toInt()} boxes',
+          ],
+        ),
+      ));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 13. WALKWAY PADS
+    // ══════════════════════════════════════════════════════════════════════════
+    // Heat-weldable TPO walkway pads for HVAC access paths.
+    // Estimated from RTU count: ~20 LF walkway per RTU access path.
+    // Walkway rolls: 3'×50' = 150 sf per roll.
+
+    final rtuCount = penetrations.rtuDetails.length;
+    if (rtuCount > 0 && totalArea > 0) {
+      // Estimate 20 LF of walkway per RTU for maintenance access
+      const walkwayWidthFt = 3.0;
+      const walkwayPerRtu = 20.0; // LF per RTU
+      const rollSf = 150.0; // 3'×50' roll
+      final walkwayLF = rtuCount * walkwayPerRtu;
+      final walkwaySf = walkwayLF * walkwayWidthFt;
+      final walkBase = walkwaySf / rollSf;
+      final walkWithW = walkBase * (1 + wAcc);
+      final walkOrder = max(1.0, walkWithW.ceil().toDouble());
+      items.add(BomLineItem(
+        category: 'Details & Accessories',
+        name: 'TPO Walkway Pads (Heat Weldable)',
+        orderQty: walkOrder,
+        unit: 'rolls',
+        notes: "3'×50' rolls — HVAC access paths (~${walkwayPerRtu.toInt()} LF per RTU)",
+        trace: BomTrace(
+          baseDescription: '$rtuCount RTUs × ${walkwayPerRtu.toInt()} LF × 3\' wide ÷ 150 sf/roll',
+          baseQty: walkBase,
+          wastePercent: wAcc,
+          withWaste: walkWithW,
+          packageSize: 1,
+          orderQty: walkOrder,
+          breakdown: [
+            'RTU count: $rtuCount',
+            'Estimated walkway: ${walkwayPerRtu.toInt()} LF per RTU × 3\' wide',
+            'Total walkway area: ${walkwaySf.toStringAsFixed(0)} sf',
+            'Roll coverage: 150 sf/roll (3\'×50\')',
+            'ORDER QTY: ${walkOrder.toInt()} rolls',
+          ],
         ),
       ));
     }
@@ -1102,15 +1935,35 @@ class BomCalculator {
     }
   }
 
+  /// Insulation fastener density (fasteners per sq ft) by warranty and deck type.
+  /// Source: Versico CSI Design Guide — insulation attachment tables.
+  /// Standard decks (Metal, Wood): density increases with warranty tier.
+  /// Weak decks (Gypsum, Tectum, LW Concrete): always 16/board (0.500/sf), max 20-yr/72 mph.
+  static double _insulationDensity(int warrantyYears, String deckType) {
+    // Weak deck types — always maximum density, limited warranty
+    if (['Gypsum', 'Tectum', 'LW Concrete'].contains(deckType)) {
+      return 0.500; // 16 per 4x8 board
+    }
+    // Standard decks: density by warranty tier
+    switch (warrantyYears) {
+      case 10: return 0.125;  // 4 per 4x8 board
+      case 15: return 0.156;  // 5 per 4x8 board
+      case 20: return 0.188;  // 6 per 4x8 board
+      case 25: return 0.250;  // 8 per 4x8 board
+      case 30: return 0.313;  // 10 per 4x8 board
+      default: return 0.188;  // default to 20-year
+    }
+  }
+
     static String _fastenerName(String deckType) {
     switch (deckType) {
-      case 'Metal':       return '#14 HP';
-      case 'Concrete':    return 'Concrete Anchor';
-      case 'Wood':        return 'Wood Screw';
-      case 'Gypsum':      return 'Gypsum Fastener';
-      case 'Tectum':      return 'Tectum Fastener';
-      case 'LW Concrete': return 'LW Concrete Anchor';
-      default:            return 'Fastener';
+      case 'Metal':       return 'Versico HPVX';
+      case 'Concrete':    return 'Versico MP 14-10';
+      case 'Wood':        return 'Versico HPV';
+      case 'Gypsum':      return 'Versico HPVX';
+      case 'Tectum':      return 'Versico HPVX';
+      case 'LW Concrete': return 'Versico CD-10';
+      default:            return 'Versico Fastener';
     }
   }
 
@@ -1211,7 +2064,7 @@ class BomCalculator {
   ///   3 = full stack incl. cover board (membrane/Rhinobond fastener)
   static double _stackThicknessIn(InsulationSystem ins, int throughLayer) {
     double t = 0;
-    if (throughLayer >= 1) t += ins.layer1.thickness;
+    if (throughLayer >= 1 && ins.numberOfLayers >= 1) t += ins.layer1.thickness;
     if (throughLayer >= 2 && ins.numberOfLayers == 2 && ins.layer2 != null) {
       t += ins.layer2!.thickness;
     }
@@ -1220,6 +2073,13 @@ class BomCalculator {
     }
     return t;
   }
+
+  // Public accessors for sub_instructions_builder
+  static String fastenerNamePublic(String deckType) => _fastenerName(deckType);
+  static String selectFastenerLenPublic(String deckType, double stackIn) =>
+      _selectFastenerLen(deckType, stackIn);
+  static double stackThicknessPublic(InsulationSystem ins, int throughLayer) =>
+      _stackThicknessIn(ins, throughLayer);
 
   static String _ins(double t) => '${t == t.roundToDouble() ? t.toInt() : t}"';
   static String _sf(double v)  => '${v.toStringAsFixed(0)} sf';
@@ -1301,5 +2161,61 @@ class BomCalculator {
         ],
       ),
     );
+  }
+
+  // ─── WIND SPEED HELPERS ─────────────────────────────────────────────────────
+
+  /// Parse wind speed string (e.g. "115 mph") to double.
+  static double _parseWindSpeed(String? windSpeed) {
+    if (windSpeed == null || windSpeed.isEmpty) return 0.0;
+    final match = RegExp(r'(\d+)').firstMatch(windSpeed);
+    return match != null ? double.tryParse(match.group(1)!) ?? 0.0 : 0.0;
+  }
+
+  /// Bump warranty tier for fastening density when wind speed is elevated.
+  /// ≥90 mph: bump one tier (e.g. 20yr → 25yr density).
+  /// ≥130 mph: bump two tiers (hurricane zone).
+  /// Capped at 30-year (maximum density).
+  static int _windAdjustedWarranty(int warrantyYears, double windSpeedMph) {
+    const tiers = [10, 15, 20, 25, 30];
+    var idx = tiers.indexOf(warrantyYears);
+    if (idx < 0) idx = 2; // default to 20-year position
+    if (windSpeedMph >= 130) {
+      idx = min(idx + 2, tiers.length - 1);
+    } else if (windSpeedMph >= 90) {
+      idx = min(idx + 1, tiers.length - 1);
+    }
+    return tiers[idx];
+  }
+
+  /// Estimate total R-value from insulation layers.
+  /// Polyiso: ~5.7 R/inch, EPS: ~3.8 R/inch, XPS: ~5.0 R/inch, other: ~4.0 R/inch.
+  static double _estimateRValue(InsulationSystem ins) {
+    double r = 0;
+    if (ins.numberOfLayers >= 1) r += _layerRValue(ins.layer1.type, ins.layer1.thickness);
+    if (ins.numberOfLayers == 2 && ins.layer2 != null) {
+      r += _layerRValue(ins.layer2!.type, ins.layer2!.thickness);
+    }
+    if (ins.hasCoverBoard && ins.coverBoard != null) {
+      r += _layerRValue(ins.coverBoard!.type, ins.coverBoard!.thickness);
+    }
+    return r;
+  }
+
+  static double _layerRValue(String type, double thicknessInches) {
+    final lower = type.toLowerCase();
+    double rPerInch;
+    if (lower.contains('polyiso')) {
+      rPerInch = 5.7;
+    } else if (lower.contains('xps')) {
+      rPerInch = 5.0;
+    } else if (lower.contains('eps')) {
+      rPerInch = 3.8;
+    } else if (lower.contains('mineral') || lower.contains('rock wool')) {
+      rPerInch = 4.2;
+    } else {
+      rPerInch = 4.0; // generic fallback
+    }
+    return rPerInch * thicknessInches;
   }
 }

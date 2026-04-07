@@ -112,7 +112,7 @@ class BuildingState {
 
   /// True when tapered insulation is enabled but no drains are placed.
   bool get taperedNeedsDrains =>
-      insulationSystem.hasTaperedInsulation && drainCount == 0;
+      insulationSystem.hasTaper && drainCount == 0;
 
   /// True when parapet exists but termination bar LF is 0.
   bool get parapetNeedsTerminationBar =>

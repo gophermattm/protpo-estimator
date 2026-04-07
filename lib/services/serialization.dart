@@ -74,6 +74,7 @@ Map<String, dynamic> _projectInfoToJson(ProjectInfo p) => {
   'wasteMaterial':  p.wasteMaterial,
   'wasteMetal':     p.wasteMetal,
   'wasteAccessory': p.wasteAccessory,
+  'vocRegion':      p.vocRegion,
 };
 
 ProjectInfo _projectInfoFromJson(Map j) => ProjectInfo(
@@ -91,6 +92,7 @@ ProjectInfo _projectInfoFromJson(Map j) => ProjectInfo(
   wasteMaterial:  _d(j['wasteMaterial'], 0.10),
   wasteMetal:     _d(j['wasteMetal'], 0.05),
   wasteAccessory: _d(j['wasteAccessory'], 0.05),
+  vocRegion:      _s(j['vocRegion'], 'Standard'),
 );
 
 // ─── BUILDING STATE ───────────────────────────────────────────────────────────
@@ -199,6 +201,7 @@ Map<String, dynamic> _systemSpecsToJson(SystemSpecs s) => {
   'existingRoofType': s.existingRoofType,
   'existingLayers':   s.existingLayers,
   'moistureScanRequired': s.moistureScanRequired,
+  'sprayFoamThickness': s.sprayFoamThickness,
 };
 
 SystemSpecs _systemSpecsFromJson(Map j) => SystemSpecs(
@@ -208,6 +211,7 @@ SystemSpecs _systemSpecsFromJson(Map j) => SystemSpecs(
   existingRoofType: _s(j['existingRoofType']),
   existingLayers:   _i(j['existingLayers'], 0),
   moistureScanRequired: j['moistureScanRequired'] as bool? ?? false,
+  sprayFoamThickness: _d(j['sprayFoamThickness'], 0.0),
 );
 
 // ─── INSULATION SYSTEM ────────────────────────────────────────────────────────
@@ -216,22 +220,21 @@ Map<String, dynamic> _insulationSystemToJson(InsulationSystem ins) => {
   'numberOfLayers':       ins.numberOfLayers,
   'layer1':               _insLayerToJson(ins.layer1),
   'layer2':               ins.layer2 != null ? _insLayerToJson(ins.layer2!) : null,
-  'hasTaperedInsulation': ins.hasTaperedInsulation,
-  'tapered':              ins.tapered != null ? _taperedToJson(ins.tapered!) : null,
+  'hasTaper': ins.hasTaper,
+  'taperDefaults': null, // placeholder — Task 7 will implement proper serialization
   'hasCoverBoard':        ins.hasCoverBoard,
   'coverBoard':           ins.coverBoard != null ? _coverBoardToJson(ins.coverBoard!) : null,
 };
 
 InsulationSystem _insulationSystemFromJson(Map j) {
   final layer2json = j['layer2'];
-  final taperedJson = j['tapered'];
   final cbJson = j['coverBoard'];
   return InsulationSystem(
     numberOfLayers:       _i(j['numberOfLayers'], 1),
     layer1:               _insLayerFromJson(j['layer1'] as Map? ?? {}),
     layer2:               layer2json != null ? _insLayerFromJson(layer2json as Map) : null,
-    hasTaperedInsulation: j['hasTaperedInsulation'] as bool? ?? false,
-    tapered:              taperedJson != null ? _taperedFromJson(taperedJson as Map) : null,
+    hasTaper: (j['hasTaper'] as bool?) ?? (j['hasTaperedInsulation'] as bool?) ?? false,
+    taperDefaults: null, // placeholder — Task 7 will implement proper deserialization
     hasCoverBoard:        j['hasCoverBoard'] as bool? ?? false,
     coverBoard:           cbJson != null ? _coverBoardFromJson(cbJson as Map) : null,
   );
@@ -249,21 +252,7 @@ InsulationLayer _insLayerFromJson(Map j) => InsulationLayer(
   attachmentMethod: _s(j['attachmentMethod'], 'Mechanically Attached'),
 );
 
-Map<String, dynamic> _taperedToJson(TaperedInsulation t) => {
-  'boardType':           t.boardType,
-  'taperSlope':          t.taperSlope,
-  'minThicknessAtDrain': t.minThicknessAtDrain,
-  'maxThickness':        t.maxThickness,
-  'systemArea':          t.systemArea,
-};
-
-TaperedInsulation _taperedFromJson(Map j) => TaperedInsulation(
-  boardType:           _s(j['boardType']),
-  taperSlope:          _s(j['taperSlope'], '1/4:12'),
-  minThicknessAtDrain: _d(j['minThicknessAtDrain'], 0.5),
-  maxThickness:        _d(j['maxThickness'], 0.0),
-  systemArea:          _d(j['systemArea'], 0.0),
-);
+// _taperedToJson / _taperedFromJson — removed; Task 7 will add TaperDefaults serialization.
 
 Map<String, dynamic> _coverBoardToJson(CoverBoard cb) => {
   'type':             cb.type,
@@ -288,6 +277,8 @@ Map<String, dynamic> _membraneSystemToJson(MembraneSystem m) => {
   'rollWidth':         m.rollWidth,
   'perimeterRollWidth':m.perimeterRollWidth,
   'seamType':          m.seamType,
+  'adhesiveType':      m.adhesiveType,
+  'primerType':        m.primerType,
 };
 
 MembraneSystem _membraneSystemFromJson(Map j) => MembraneSystem(
@@ -299,6 +290,8 @@ MembraneSystem _membraneSystemFromJson(Map j) => MembraneSystem(
   rollWidth:          _s(j['rollWidth'], "10'"),
   perimeterRollWidth: _s(j['perimeterRollWidth'], "6'"),
   seamType:           _s(j['seamType'], 'Hot Air Welded'),
+  adhesiveType:       _s(j['adhesiveType'], 'VersiWeld TPO Bonding Adhesive'),
+  primerType:         _s(j['primerType'], 'Low-VOC EPDM/TPO Primer (700 sf/gal)'),
 );
 
 // ─── PARAPET WALLS ────────────────────────────────────────────────────────────

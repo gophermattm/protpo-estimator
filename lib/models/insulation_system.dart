@@ -4,6 +4,8 @@
 /// Matches INPUT_SPECIFICATIONS.md section 4.
 /// R-value calculations delegate to RValueCalculator in lib/services/.
 
+import 'drainage_zone.dart';
+
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
 const List<String> kInsulationTypes = [
@@ -38,9 +40,14 @@ const List<double> kCoverBoardThicknesses = [
 
 const List<String> kTaperSlopeOptions = [
   '1/8:12',
+  '3/16:12',
   '1/4:12',
+  '3/8:12',
   '1/2:12',
 ];
+
+const List<String> kTaperManufacturers = ['Versico', 'TRI-BUILT'];
+const List<String> kTaperProfileTypes = ['standard', 'extended'];
 
 const List<double> kTaperMinThicknesses = [0.5, 1.0, 1.5];
 
@@ -81,70 +88,6 @@ class InsulationLayer {
 
   @override
   int get hashCode => Object.hash(type, thickness, attachmentMethod);
-}
-
-// ─── TAPERED INSULATION ───────────────────────────────────────────────────────
-
-class TaperedInsulation {
-  /// Board product name from Versico/Tri-Built loading chart.
-  /// [Inference] Exact product list requires Versico catalog — stored as
-  /// free text until the product table is implemented.
-  final String boardType;
-  final String taperSlope;          // from kTaperSlopeOptions
-  final double minThicknessAtDrain; // from kTaperMinThicknesses, inches
-  final double maxThickness;        // user input or calculated, inches
-  final double systemArea;          // sq ft — may be partial roof
-
-  const TaperedInsulation({
-    this.boardType = '',
-    this.taperSlope = '1/4:12',
-    this.minThicknessAtDrain = 0.5,
-    this.maxThickness = 0.0,
-    this.systemArea = 0.0,
-  });
-
-  factory TaperedInsulation.initial() => const TaperedInsulation();
-
-  /// Average R-value uses arithmetic mean thickness.
-  /// Delegates the actual R/inch lookup to be done at the provider level
-  /// (avoids importing the calculator service into the model layer).
-  double get averageThickness =>
-      (minThicknessAtDrain + maxThickness) / 2;
-
-  TaperedInsulation copyWith({
-    String? boardType,
-    String? taperSlope,
-    double? minThicknessAtDrain,
-    double? maxThickness,
-    double? systemArea,
-  }) {
-    return TaperedInsulation(
-      boardType: boardType ?? this.boardType,
-      taperSlope: taperSlope ?? this.taperSlope,
-      minThicknessAtDrain: minThicknessAtDrain ?? this.minThicknessAtDrain,
-      maxThickness: maxThickness ?? this.maxThickness,
-      systemArea: systemArea ?? this.systemArea,
-    );
-  }
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is TaperedInsulation &&
-          boardType == other.boardType &&
-          taperSlope == other.taperSlope &&
-          minThicknessAtDrain == other.minThicknessAtDrain &&
-          maxThickness == other.maxThickness &&
-          systemArea == other.systemArea;
-
-  @override
-  int get hashCode => Object.hash(
-        boardType,
-        taperSlope,
-        minThicknessAtDrain,
-        maxThickness,
-        systemArea,
-      );
 }
 
 // ─── COVER BOARD ─────────────────────────────────────────────────────────────
@@ -189,12 +132,13 @@ class CoverBoard {
 // ─── INSULATION SYSTEM ────────────────────────────────────────────────────────
 
 class InsulationSystem {
-  final int numberOfLayers;     // 1 or 2
+  final int numberOfLayers;     // 0, 1, or 2
   final InsulationLayer layer1;
   final InsulationLayer? layer2; // null when numberOfLayers == 1
 
-  final bool hasTaperedInsulation;
-  final TaperedInsulation? tapered; // null when hasTaperedInsulation == false
+  final bool hasTaper;
+  final TaperDefaults? taperDefaults; // null when hasTaper == false
+  final List<DrainageZoneOverride> zoneOverrides;
 
   final bool hasCoverBoard;
   final CoverBoard? coverBoard;    // null when hasCoverBoard == false
@@ -203,8 +147,9 @@ class InsulationSystem {
     this.numberOfLayers = 1,
     this.layer1 = const InsulationLayer(),
     this.layer2,
-    this.hasTaperedInsulation = false,
-    this.tapered,
+    this.hasTaper = false,
+    this.taperDefaults,
+    this.zoneOverrides = const [],
     this.hasCoverBoard = false,
     this.coverBoard,
   });
@@ -215,8 +160,9 @@ class InsulationSystem {
     int? numberOfLayers,
     InsulationLayer? layer1,
     InsulationLayer? layer2,
-    bool? hasTaperedInsulation,
-    TaperedInsulation? tapered,
+    bool? hasTaper,
+    TaperDefaults? taperDefaults,
+    List<DrainageZoneOverride>? zoneOverrides,
     bool? hasCoverBoard,
     CoverBoard? coverBoard,
   }) {
@@ -224,8 +170,9 @@ class InsulationSystem {
       numberOfLayers: numberOfLayers ?? this.numberOfLayers,
       layer1: layer1 ?? this.layer1,
       layer2: layer2 ?? this.layer2,
-      hasTaperedInsulation: hasTaperedInsulation ?? this.hasTaperedInsulation,
-      tapered: tapered ?? this.tapered,
+      hasTaper: hasTaper ?? this.hasTaper,
+      taperDefaults: taperDefaults ?? this.taperDefaults,
+      zoneOverrides: zoneOverrides ?? this.zoneOverrides,
       hasCoverBoard: hasCoverBoard ?? this.hasCoverBoard,
       coverBoard: coverBoard ?? this.coverBoard,
     );
@@ -240,14 +187,17 @@ class InsulationSystem {
   /// Toggle to 1 layer — preserves layer2 data in case user toggles back.
   InsulationSystem withOneLayer() => copyWith(numberOfLayers: 1);
 
+  /// Toggle to 0 layers — no flat insulation (tapered/cover board only).
+  InsulationSystem withNoLayers() => copyWith(numberOfLayers: 0);
+
   /// Enables tapered insulation — seeds with defaults if not yet set.
-  InsulationSystem withTaperedEnabled() => copyWith(
-        hasTaperedInsulation: true,
-        tapered: tapered ?? TaperedInsulation.initial(),
+  InsulationSystem withTaperEnabled() => copyWith(
+        hasTaper: true,
+        taperDefaults: taperDefaults ?? TaperDefaults.initial(),
       );
 
-  InsulationSystem withTaperedDisabled() =>
-      copyWith(hasTaperedInsulation: false);
+  InsulationSystem withTaperDisabled() =>
+      copyWith(hasTaper: false);
 
   /// Enables cover board — seeds with defaults if not yet set.
   InsulationSystem withCoverBoardEnabled() => copyWith(
@@ -265,8 +215,9 @@ class InsulationSystem {
           numberOfLayers == other.numberOfLayers &&
           layer1 == other.layer1 &&
           layer2 == other.layer2 &&
-          hasTaperedInsulation == other.hasTaperedInsulation &&
-          tapered == other.tapered &&
+          hasTaper == other.hasTaper &&
+          taperDefaults == other.taperDefaults &&
+          _listEquals(zoneOverrides, other.zoneOverrides) &&
           hasCoverBoard == other.hasCoverBoard &&
           coverBoard == other.coverBoard;
 
@@ -275,9 +226,21 @@ class InsulationSystem {
         numberOfLayers,
         layer1,
         layer2,
-        hasTaperedInsulation,
-        tapered,
+        hasTaper,
+        taperDefaults,
+        Object.hashAll(zoneOverrides),
         hasCoverBoard,
         coverBoard,
       );
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+bool _listEquals<T>(List<T> a, List<T> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (int i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }

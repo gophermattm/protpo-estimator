@@ -12,6 +12,7 @@
 ///   - Dropdown values are local Strings seeded from provider, written back on change.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:ui' as ui;
 import 'package:intl/intl.dart';
@@ -19,11 +20,13 @@ import '../theme/app_theme.dart';
 import '../services/zone_width_lookup.dart';
 import 'ui_polish.dart';
 import '../models/roof_geometry.dart';
+import '../models/drainage_zone.dart';
 import '../models/insulation_system.dart';
 import '../models/section_models.dart';
 import '../providers/estimator_providers.dart';
 import '../services/zip_lookup.dart';
 import '../services/firestore_service.dart';
+import '../models/labor_models.dart';
 
 // ─── EDGE LABELS ─────────────────────────────────────────────────────────────
 
@@ -133,7 +136,7 @@ class LeftPanel extends ConsumerStatefulWidget {
 class _LeftPanelState extends ConsumerState<LeftPanel> {
   int _expandedSection = 0;
   final ScrollController _leftScroll = ScrollController();
-  final List<GlobalKey> _secKeys = List.generate(9, (_) => GlobalKey());
+  final List<GlobalKey> _secKeys = List.generate(10, (_) => GlobalKey());
 
   // ── Project Info ─────────────────────────────────────────────────────────────
   final _cProjectName    = TextEditingController();
@@ -141,7 +144,8 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   final _cZipCode        = TextEditingController();
   final _cCustomerName   = TextEditingController();
   final _cEstimatorName  = TextEditingController();
-  String _warrantyYears  = '20';
+  final _cEstimateDate   = TextEditingController();
+  String _warrantyYears  = '20 Year';
   String _estimateDate   = '';
   String? _climateZone, _windSpeed, _requiredRValue;
   bool _zipLoading = false;
@@ -153,11 +157,14 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   final _cDrainCount      = TextEditingController();
   final _cPerimeterWidth  = TextEditingController();
   final _cCornerCount     = TextEditingController(text: '4');
+  final _cInsideCorners   = TextEditingController(text: '0');
+  final _cSprayFoamThickness = TextEditingController();
   bool _zonesOverridden   = false;
 
   // ── System Specs ─────────────────────────────────────────────────────────────
   String _projectType      = 'Tear-off & Replace';
   String _deckType         = 'Metal';
+  String _vocRegion        = 'Standard';
   String _vaporRetarder    = 'None';
   String _existingRoofType = 'BUR';
   final _cExistingLayers   = TextEditingController(text: '1');
@@ -173,6 +180,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   bool   _hasTapered       = false;
   String _taperSlope       = '1/4:12';
   String _taperMinThick    = '1.0';
+  String _taperAttachment  = 'Mechanically Attached';
   final _cTaperBoard       = TextEditingController();
   final _cTaperArea        = TextEditingController();
   bool   _hasCoverBoard    = false;
@@ -187,6 +195,8 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   String _fieldAttach   = 'Mechanically Attached';
   String _rollWidth     = "10'";
   String _seamType      = 'Hot Air Welded';
+  String _adhesiveType  = 'VersiWeld TPO Bonding Adhesive';
+  String _primerType    = 'Low-VOC EPDM/TPO Primer (700 sf/gal)';
   String _perimRollWidth = "6'";
 
   // ── Penetrations ─────────────────────────────────────────────────────────────
@@ -270,6 +280,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   void initState() {
     super.initState();
     _estimateDate = DateFormat('MM/dd/yyyy').format(DateTime.now());
+    _cEstimateDate.text = _estimateDate;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _syncFromState();
     });
@@ -279,8 +290,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   void dispose() {
     _leftScroll.dispose();
     for (final c in [
-      _cProjectName, _cProjectAddress, _cZipCode, _cCustomerName, _cEstimatorName,
-      _cBuildingHeight, _cDrainCount, _cPerimeterWidth, _cCornerCount, _cExistingLayers,
+      _cProjectName, _cProjectAddress, _cZipCode, _cCustomerName, _cEstimatorName, _cEstimateDate,
+      _cBuildingHeight, _cDrainCount, _cPerimeterWidth, _cCornerCount, _cInsideCorners,
+      _cExistingLayers, _cSprayFoamThickness,
       _cTaperBoard, _cTaperArea,
       _cWallHeight, _cWallLF, _cRtuLF, _cDrainCountPen,
       _cSmallPipes, _cLargePipes, _cSkylights, _cScuppers, _cExpJointLF, _cPitchPans,
@@ -319,7 +331,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   void _autosave() {
     final state = ref.read(estimatorProvider);
     if (state.projectInfo.projectName.isEmpty) return; // don't autosave unnamed projects
-    FirestoreService.instance.save(state).catchError((_) {}); // silent autosave on section switch
+    FirestoreService.instance.save(state).catchError((_) => ''); // silent autosave on section switch
   }
 
   void _syncFromState() {
@@ -352,6 +364,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     for (final sh in geo.shapes) { totalCorners += kEdgeCountByShape[sh.shapeType] ?? 4; }
     if (totalCorners == 0) totalCorners = 4;
     _set(_cCornerCount, '$totalCorners');
+    _set(_cInsideCorners, geo.insideCorners > 0 ? '${geo.insideCorners}' : '0');
 
     // Rebuild shape entries
     for (final s in _shapes) s.dispose();
@@ -361,11 +374,11 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
     // ── System Specs ────────────────────────────────────────────────
     _set(_cExistingLayers, specs.existingLayers > 0 ? '${specs.existingLayers}' : '1');
+    _set(_cSprayFoamThickness, specs.sprayFoamThickness > 0 ? specs.sprayFoamThickness.toStringAsFixed(0) : '');
 
     // ── Insulation ──────────────────────────────────────────────────
-    _set(_cTaperBoard, ins.tapered?.boardType ?? '');
-    _set(_cTaperArea,  ins.tapered?.systemArea != null && ins.tapered!.systemArea > 0
-        ? ins.tapered!.systemArea.toStringAsFixed(0) : '');
+    _set(_cTaperBoard, '');
+    _set(_cTaperArea, '');
 
     // ── Penetrations ────────────────────────────────────────────────
     _set(_cRtuLF,        _nz(pen.rtuTotalLF));
@@ -397,7 +410,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     _set(_cDownspouts,  met.downspoutCount > 0 ? '${met.downspoutCount}' : '');
 
     setState(() {
-      _warrantyYears   = '${info.warrantyYears}';
+      _warrantyYears   = '${info.warrantyYears} Year';
       _climateZone     = info.climateZone;
       _windSpeed       = info.designWindSpeed;
       _requiredRValue  = info.requiredRValue != null
@@ -406,18 +419,20 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _zonesOverridden = geo.windZones.perimeterZoneWidth > 0;
       _projectType     = specs.projectType.isNotEmpty ? specs.projectType : 'Tear-off & Replace'; // model default is now Tear-off
       _deckType        = specs.deckType.isNotEmpty    ? specs.deckType    : 'Metal';
+      _vocRegion       = info.vocRegion.isNotEmpty ? info.vocRegion : 'Standard';
       _vaporRetarder   = specs.vaporRetarder.isNotEmpty ? specs.vaporRetarder : 'None';
       _existingRoofType = specs.existingRoofType.isNotEmpty ? specs.existingRoofType : 'BUR';
-      _insLayers       = '${ins.numberOfLayers}';
+      _insLayers       = ins.numberOfLayers == 0 ? 'None' : '${ins.numberOfLayers}';
       _l1Type          = ins.layer1.type;
       _l1Thickness     = ins.layer1.thickness.toString();
       _l1Attachment    = ins.layer1.attachmentMethod;
       _l2Type          = ins.layer2?.type ?? 'Polyiso';
       _l2Thickness     = (ins.layer2?.thickness ?? 2.0).toString();
       _l2Attachment    = ins.layer2?.attachmentMethod ?? 'Mechanically Attached';
-      _hasTapered      = ins.hasTaperedInsulation;
-      _taperSlope      = ins.tapered?.taperSlope ?? '1/4:12';
-      _taperMinThick   = (ins.tapered?.minThicknessAtDrain ?? 1.0).toString();
+      _hasTapered      = ins.hasTaper;
+      _taperSlope      = ins.taperDefaults?.taperRate ?? '1/4:12';
+      _taperMinThick   = (ins.taperDefaults?.minThickness ?? 1.0).toString();
+      _taperAttachment = ins.taperDefaults?.attachmentMethod ?? 'Mechanically Attached';
       _hasCoverBoard   = ins.hasCoverBoard;
       _cbType          = ins.coverBoard?.type ?? 'HD Polyiso';
       _cbThickness     = (ins.coverBoard?.thickness ?? 0.5).toString();
@@ -429,6 +444,8 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _rollWidth       = mem.rollWidth;
       _perimRollWidth  = mem.perimeterRollWidth;
       _seamType        = mem.seamType;
+      _adhesiveType    = mem.adhesiveType;
+      _primerType      = mem.primerType;
       _drainType       = pen.drainType;
       _hasParapet      = par.hasParapetWalls;
       _parapetWallType = par.wallType;
@@ -471,7 +488,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     // Resolve each parameter: use the supplied value, or fall back to current state.
     final h  = height      ?? double.tryParse(_cBuildingHeight.text) ?? 0;
     final ws = windSpeed   ?? _windSpeed ?? '';
-    final wy = warrantyYrs ?? int.tryParse(_warrantyYears) ?? 0;
+    final wy = warrantyYrs ?? int.tryParse(_warrantyYears.split(' ').first) ?? 0;
 
     if (h <= 0) return; // nothing to compute without height
 
@@ -620,7 +637,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         ]),
       ),
       Expanded(
-        child: ListView(controller: _leftScroll, padding: const EdgeInsets.symmetric(vertical: 8), children: [
+        child: Scrollbar(controller: _leftScroll, thumbVisibility: true, child: ListView(controller: _leftScroll, padding: const EdgeInsets.symmetric(vertical: 8), children: [
           InputProgressBar(complete: _completeSectionCount, total: 8),
           _sec(0, Icons.assignment,         'Project Info',              _buildProjectInfo(),    dot: _statusProjectInfo(),   key: _secKeys[0]),
           _sec(1, Icons.square_foot,        'Project Geometry',          _buildGeometry(),       dot: _statusGeometry(),      key: _secKeys[1]),
@@ -630,8 +647,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
           _sec(5, Icons.border_style,       'Perimeters & Penetrations', _buildPenetrations(),   dot: _statusPenetrations(),  key: _secKeys[5]),
           _sec(6, Icons.vertical_align_top, 'Parapet Walls',             _buildParapet(),        dot: _statusParapet(),       key: _secKeys[6]),
           _sec(7, Icons.view_day,           'Metal Scope',               _buildMetalScope(),     dot: _statusMetal(),         key: _secKeys[7]),
-          _sec(8, Icons.recycling,          'Waste Settings',            _buildWasteSettings(),                               key: _secKeys[8]),
-        ]),
+          _sec(8, Icons.engineering,        'Labor',                     _buildLabor(),                                       key: _secKeys[8]),
+          _sec(9, Icons.recycling,          'Waste Settings',            _buildWasteSettings(),                               key: _secKeys[9]),
+        ])),
       ),
     ]);
     });
@@ -653,10 +671,17 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
   DotStatus _statusGeometry() {
     final geo = ref.read(roofGeometryProvider);
+    // All shapes must have all edge lengths > 0 and edge types assigned
+    final shapesValid = geo.shapes.isNotEmpty && geo.shapes.every((s) =>
+        s.edgeLengths.isNotEmpty &&
+        s.edgeLengths.every((e) => e > 0) &&
+        s.edgeTypes.length >= s.edgeLengths.length &&
+        s.edgeTypes.every((t) => t.isNotEmpty));
     return dotStatus([
       geo.totalArea > 0,
       geo.buildingHeight > 0,
       geo.windZones.perimeterZoneWidth > 0,
+      shapesValid,
     ]);
   }
 
@@ -730,9 +755,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       key: key,
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
-        color: open ? AppTheme.primary.withOpacity(0.02) : Colors.transparent,
+        color: open ? AppTheme.primary.withValues(alpha:0.02) : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: open ? AppTheme.primary.withOpacity(0.2) : Colors.transparent),
+        border: Border.all(color: open ? AppTheme.primary.withValues(alpha:0.2) : Colors.transparent),
       ),
       child: Column(children: [
         InkWell(
@@ -776,7 +801,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: open ? AppTheme.primary.withOpacity(0.1) : AppTheme.surfaceAlt,
+                  color: open ? AppTheme.primary.withValues(alpha:0.1) : AppTheme.surfaceAlt,
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Icon(icon, size: 18, color: open ? AppTheme.primary : AppTheme.textSecondary),
@@ -789,7 +814,13 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
             ]),
           ),
         ),
-        if (open) Padding(padding: const EdgeInsets.fromLTRB(12, 0, 12, 12), child: child),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          child: open
+              ? Padding(padding: const EdgeInsets.fromLTRB(12, 0, 12, 12), child: child)
+              : const SizedBox.shrink(),
+        ),
       ]),
     );
   }
@@ -797,18 +828,20 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   // ─── PROJECT INFO ─────────────────────────────────────────────────────────────
   Widget _buildProjectInfo() {
     final n = ref.read(estimatorProvider.notifier);
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    return AutofillGroup(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _tf('Project Name *', 'Enter project name', _cProjectName,
-          onChange: (v) => n.updateProjectName(v)),
+          onChange: (v) => n.updateProjectName(v), required: true),
       _sp12,
       _tf('Project Address *', 'Street address', _cProjectAddress,
-          onChange: (v) => n.updateProjectAddress(v)),
+          onChange: (v) => n.updateProjectAddress(v), required: true),
       _sp12,
       _lbl('ZIP Code *'), _sp4,
       SizedBox(height: 44, child: TextField(
         controller: _cZipCode, keyboardType: TextInputType.number, maxLength: 5,
+        autofillHints: const [AutofillHints.postalCode],
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
         onChanged: (v) { n.updateZipCode(v); _onZipChange(v); },
-        decoration: _dec('00000', counterText: '',
+        decoration: _dec('e.g. 66012', counterText: '',
           suffix: _zipLoading
               ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
               : (_climateZone != null ? Icon(Icons.check_circle, color: AppTheme.accent, size: 18) : null)),
@@ -817,9 +850,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       if (_climateZone != null) ...[
         _sp8,
         Container(padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(color: AppTheme.accent.withOpacity(0.08),
+          decoration: BoxDecoration(color: AppTheme.accent.withValues(alpha:0.08),
               borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: AppTheme.accent.withOpacity(0.2))),
+              border: Border.all(color: AppTheme.accent.withValues(alpha:0.2))),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Auto-Populated from ZIP', style: TextStyle(fontSize: 11,
                 fontWeight: FontWeight.w600, color: AppTheme.accent)),
@@ -837,7 +870,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _sp12,
       _lbl('Estimate Date'), _sp4,
       SizedBox(height: 44, child: TextField(enabled: false,
-          controller: TextEditingController(text: _estimateDate),
+          controller: _cEstimateDate,
           decoration: _dec('', suffix: Icon(Icons.calendar_today, size: 16, color: AppTheme.textMuted), disabled: true),
           style: const TextStyle(fontSize: 14))),
       _sp12,
@@ -845,14 +878,14 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
           ['10','15','20','25','30'].map((y) => '$y Year').toList(), (v) {
         if (v != null) {
           final yr = int.parse(v.split(' ')[0]);
-          setState(() => _warrantyYears = v.split(' ')[0]);
+          setState(() => _warrantyYears = v);
           n.updateWarrantyYears(yr);
           _autoZoneWidth(warrantyYrs: yr);
         }
       }),
       _sp8,
       _info('Warranty level affects fastening density and assembly requirements.'),
-    ]);
+    ]));
   }
 
   void _onZipChange(String zip) {
@@ -964,7 +997,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _responsiveRow([
         _tf('Building Height *', '0', _cBuildingHeight, suffix: 'ft',
-            kb: TextInputType.number, onChange: (v) {
+            kb: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))], onChange: (v) {
               final h = double.tryParse(v) ?? 0;
               n.updateBuildingHeight(h);
               _autoZoneWidth(height: h);
@@ -985,9 +1018,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
           onTap: _addShape,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08),
+            decoration: BoxDecoration(color: AppTheme.primary.withValues(alpha:0.08),
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: AppTheme.primary.withOpacity(0.3))),
+                border: Border.all(color: AppTheme.primary.withValues(alpha:0.3))),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               Icon(Icons.add, size: 13, color: AppTheme.primary), const SizedBox(width: 4),
               Text('Add Shape', style: TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w600)),
@@ -1035,6 +1068,14 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
             }),
       ]),
       _sp8,
+      _responsiveRow([
+        _tf('# Inside Corners', '0', _cInsideCorners, kb: TextInputType.number,
+            onChange: (v) {
+              final cnt = int.tryParse(v) ?? 0;
+              ref.read(estimatorProvider.notifier).updateInsideCorners(cnt);
+            }),
+      ]),
+      _sp8,
       _tf('Number of Drains', '0', _cDrainCount, kb: TextInputType.number, onChange: (v) {
         final cnt = int.tryParse(v) ?? 0;
         final geo = ref.read(estimatorProvider).activeBuilding.roofGeometry;
@@ -1058,16 +1099,16 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isFirst ? AppTheme.primary.withOpacity(0.04) : AppTheme.surfaceAlt,
+        color: isFirst ? AppTheme.primary.withValues(alpha:0.04) : AppTheme.surfaceAlt,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: isFirst ? AppTheme.primary.withOpacity(0.2) : AppTheme.border),
+        border: Border.all(color: isFirst ? AppTheme.primary.withValues(alpha:0.2) : AppTheme.border),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-              color: isFirst ? AppTheme.primary : AppTheme.textSecondary.withOpacity(0.15),
+              color: isFirst ? AppTheme.primary : AppTheme.textSecondary.withValues(alpha:0.15),
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(isFirst ? 'Shape 1 (Primary)' : 'Shape ${idx + 1}',
@@ -1172,9 +1213,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: AppTheme.primary.withOpacity(0.05),
+        color: AppTheme.primary.withValues(alpha:0.05),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: AppTheme.primary.withOpacity(0.15)),
+        border: Border.all(color: AppTheme.primary.withValues(alpha:0.15)),
       ),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Icon(Icons.info_outline, size: 13, color: AppTheme.primary),
@@ -1222,20 +1263,37 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _sp12,
       if (reroof) ...[
         _dd('Existing Roof Type', _existingRoofType,
-            ['BUR','Modified Bitumen','Single-Ply','Metal'], (v) {
+            ['BUR','Modified Bitumen','Single-Ply','Metal','Spray Foam'], (v) {
           setState(() => _existingRoofType = v!);
           n.updateExistingRoofType(v!);
         }),
         _sp12,
-        _tf('Existing Layers', '1', _cExistingLayers, kb: TextInputType.number,
-            onChange: (v) => n.updateExistingLayers(int.tryParse(v) ?? 1)),
-        _sp12,
+        if (_existingRoofType == 'Spray Foam') ...[
+          _tf('Avg Spray Foam Thickness', '0', _cSprayFoamThickness, suffix: 'in',
+              kb: TextInputType.number, onChange: (v) {
+                n.updateSprayFoamThickness(double.tryParse(v) ?? 0);
+              }),
+          if ((double.tryParse(_cSprayFoamThickness.text) ?? 0) > 8)
+            _info('Foam > 8": additional labor for removal in 2" increments above 8".', color: Colors.orange),
+          _sp12,
+        ] else ...[
+          _tf('Existing Layers', '1', _cExistingLayers, kb: TextInputType.number,
+              onChange: (v) => n.updateExistingLayers(int.tryParse(v) ?? 1)),
+          _sp12,
+        ],
       ],
       _dd('Deck Type *', _deckType,
           ['Metal','Concrete','Wood','Gypsum','Tectum','LW Concrete'], (v) {
         setState(() => _deckType = v!);
         n.updateDeckType(v!);
       }),
+      _sp12,
+      _dd('VOC Compliance Region', _vocRegion, ['Standard', 'OTC (<250 gpl)', 'SCAQMD'], (v) {
+        setState(() => _vocRegion = v!);
+        n.updateProjectInfo(ref.read(projectInfoProvider).copyWith(vocRegion: v!));
+      }),
+      if (_vocRegion != 'Standard')
+        _info('Low-VOC products will be selected where available per $_vocRegion requirements.', color: AppTheme.warning),
       _sp12,
       _dd('Vapor Retarder', _vaporRetarder,
           ['None','Self-Adhered','Hot Applied','Mechanically Attached'], (v) {
@@ -1259,27 +1317,29 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         thickness: double.tryParse(_l1Thickness) ?? 2.5, attachmentMethod: _l1Attachment));
     void pushL2() => n.updateLayer2(InsulationLayer(type: _l2Type,
         thickness: double.tryParse(_l2Thickness) ?? 2.0, attachmentMethod: _l2Attachment));
-    void pushTaper() => n.updateTapered(TaperedInsulation(boardType: _cTaperBoard.text,
-        taperSlope: _taperSlope,
-        minThicknessAtDrain: double.tryParse(_taperMinThick) ?? 1.0,
-        maxThickness: ref.read(estimatorProvider).activeBuilding.insulationSystem.tapered?.maxThickness ?? 0,
-        systemArea: double.tryParse(_cTaperArea.text) ?? 0));
+    void pushTaper() => n.updateTaperDefaults(TaperDefaults(
+        taperRate: _taperSlope,
+        minThickness: double.tryParse(_taperMinThick) ?? 1.0,
+        attachmentMethod: _taperAttachment));
     void pushCB() => n.updateCoverBoard(CoverBoard(type: _cbType,
         thickness: double.tryParse(_cbThickness) ?? 0.5, attachmentMethod: _cbAttachment));
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _dd('Number of Insulation Layers', _insLayers, ['1','2'], (v) {
+      _dd('Number of Insulation Layers', _insLayers, ['None','1','2'], (v) {
         setState(() => _insLayers = v!);
-        n.setNumberOfLayers(int.parse(v!));
+        n.setNumberOfLayers(v == 'None' ? 0 : int.parse(v!));
       }),
-      _sp12, _lbl('LAYER 1'), _sp6,
-      _dd('Type', _l1Type, kInsulationTypes, (v) { setState(() => _l1Type = v!); pushL1(); }),
-      _sp8,
-      _dd('Thickness', tLabel(double.tryParse(_l1Thickness) ?? 2.5), thickLabels, (v) {
-        setState(() => _l1Thickness = tVal(v!).toString()); pushL1(); }),
-      _sp8,
-      _dd('Attachment', _l1Attachment, kAttachmentMethods, (v) {
-        setState(() => _l1Attachment = v!); pushL1(); }),
+
+      if (_insLayers != 'None') ...[
+        _sp12, _lbl('LAYER 1'), _sp6,
+        _dd('Type', _l1Type, kInsulationTypes, (v) { setState(() => _l1Type = v!); pushL1(); }),
+        _sp8,
+        _dd('Thickness', tLabel(double.tryParse(_l1Thickness) ?? 2.5), thickLabels, (v) {
+          setState(() => _l1Thickness = tVal(v!).toString()); pushL1(); }),
+        _sp8,
+        _dd('Attachment', _l1Attachment, kAttachmentMethods, (v) {
+          setState(() => _l1Attachment = v!); pushL1(); }),
+      ],
 
       if (_insLayers == '2') ...[
         _sp14, _lbl('LAYER 2'), _sp6,
@@ -1312,6 +1372,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
                   kTaperMinThicknesses.map((v) => v.toString()).toList(), (v) {
                 setState(() => _taperMinThick = v!); pushTaper(); }),
             ]),
+            _sp8,
+            _dd('Attachment', _taperAttachment, kAttachmentMethods, (v) {
+              setState(() => _taperAttachment = v!); pushTaper(); }),
             _sp8,
             _tf('System Area', '0', _cTaperArea, suffix: 'sq ft',
                 kb: TextInputType.number, onChange: (_) => pushTaper()),
@@ -1362,9 +1425,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
+          color: color.withValues(alpha:0.08),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: color.withOpacity(0.25)),
+          border: Border.all(color: color.withValues(alpha:0.25)),
         ),
         child: Row(children: [
           Icon(icon, color: color, size: 20),
@@ -1395,17 +1458,17 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
           decoration: BoxDecoration(
-            color: AppTheme.primary.withOpacity(0.05),
+            color: AppTheme.primary.withValues(alpha:0.05),
             borderRadius: BorderRadius.circular(7),
-            border: Border.all(color: AppTheme.primary.withOpacity(0.15)),
+            border: Border.all(color: AppTheme.primary.withValues(alpha:0.15)),
           ),
           child: Row(children: [
             Icon(Icons.auto_fix_high, size: 14, color: AppTheme.primary),
             const SizedBox(width: 6),
             Expanded(child: Text(
               'Climate zone requires R-${reqR.toStringAsFixed(0)}. '
-              'Defaults set to ${_insLayers == "2" ? "2 layers" : "1 layer"} '
-              'Polyiso ${_l1Thickness}" — edit above as needed.',
+              'Defaults set to ${_insLayers == "2" ? "2 layers" : _insLayers == "None" ? "no insulation" : "1 layer"}'
+              '${_insLayers != "None" ? " Polyiso $_l1Thickness\"" : ""} — edit above as needed.',
               style: TextStyle(fontSize: 11, color: AppTheme.primary),
             )),
           ]),
@@ -1419,7 +1482,8 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     final n = ref.read(estimatorProvider.notifier);
     void pushMem() => n.updateMembraneSystem(MembraneSystem(
         membraneType: _memType, thickness: _memThickness, color: _memColor,
-        fieldAttachment: _fieldAttach, rollWidth: _rollWidth, seamType: _seamType));
+        fieldAttachment: _fieldAttach, rollWidth: _rollWidth, seamType: _seamType,
+        adhesiveType: _adhesiveType, primerType: _primerType));
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _dd('Membrane Type', _memType, ['TPO','PVC','EPDM'], (v) {
@@ -1444,6 +1508,16 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         _sp8,
         _info('Fully Adhered: bonding adhesive applied to both surfaces. '
             'Check climate zone for adhesive temperature limits.', color: AppTheme.warning),
+        _sp8,
+        _dd('Adhesive Type', _adhesiveType, kAdhesiveTypes, (v) {
+          setState(() => _adhesiveType = v!);
+          n.updateMembraneSystem(ref.read(membraneSystemProvider).copyWith(adhesiveType: v!));
+        }),
+        _sp8,
+        _dd('Primer Type', _primerType, kPrimerTypes, (v) {
+          setState(() => _primerType = v!);
+          n.updateMembraneSystem(ref.read(membraneSystemProvider).copyWith(primerType: v!));
+        }),
       ],
       _sp12,
       _dd('Seam Type', _seamType, ['Hot Air Welded','Tape'], (v) {
@@ -1454,9 +1528,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: AppTheme.primary.withOpacity(0.04),
+          color: AppTheme.primary.withValues(alpha:0.04),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppTheme.primary.withOpacity(0.15)),
+          border: Border.all(color: AppTheme.primary.withValues(alpha:0.15)),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('TPO Roll Selection', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
@@ -1488,12 +1562,15 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
           // Perimeter / flashing roll — default 6'×100' per Versico spec, user-overridable
           _lbl('PERIMETER / FLASHING ROLL'), _sp4,
-          _dd('Perimeter Roll Width', _perimRollWidth,
-              ["5'", "6'", "10'", "12'"],
+          _dd('Perimeter / Flashing Roll', _perimRollWidth,
+              ["None", "5'", "6'", "10'", "12'"],
               (v) { if (v != null) { setState(() => _perimRollWidth = v); n.updatePerimRollWidth(v); } }),
           _sp4,
-          Text('Default 6\'×100\' (600 sf) per Versico spec — used for parapet flashing, detail work',
-              style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+          if (_perimRollWidth != 'None')
+            Text(_perimRollWidth == "6'"
+                ? "6'×100' roll (600 sf) — parapet flashing, detail work"
+                : "$_perimRollWidth×100' roll — parapet flashing, detail work",
+                style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
         ]),
       ),
     ]);
@@ -1552,7 +1629,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
             color: AppTheme.textMuted),
         _sp8,
         _responsiveRow([
-          _tf('Parapet Height', '0', _cParapetHeight, suffix: 'in',
+          _tf('Parapet Height (inches)', '0', _cParapetHeight, suffix: 'in',
               kb: TextInputType.number, onChange: (v) {
                 final val = double.tryParse(v) ?? 0;
                 setState(() { _hasParapet = val > 0; });
@@ -1569,18 +1646,26 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         ]),
       ]);
     }
+    // Ensure hasParapetWalls stays true while in expanded view
+    if (!ref.read(parapetWallsProvider).hasParapetWalls) {
+      n.setParapetEnabled(true);
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _sp16,
         _responsiveRow([
-          _tf('Parapet Height *', '0', _cParapetHeight, suffix: 'in',
+          _tf('Parapet Height (inches) *', '0', _cParapetHeight, suffix: 'in',
               kb: TextInputType.number, onChange: (v) {
+                final val = double.tryParse(v) ?? 0;
                 setState(() {});
-                n.updateParapetHeight(double.tryParse(v) ?? 0);
+                n.updateParapetHeight(val);
+                n.setParapetEnabled(val > 0 || _parapetLFval > 0);
               }),
           _tf('Total LF *', '0', _cParapetLF, suffix: 'LF',
               kb: TextInputType.number, onChange: (v) {
+                final val = double.tryParse(v) ?? 0;
                 setState(() { if (!_termBarOverride) _cTermBarLF.text = v; });
-                n.updateParapetTotalLF(double.tryParse(v) ?? 0);
+                n.updateParapetTotalLF(val);
+                n.setParapetEnabled(val > 0 || _parapetHeightVal > 0);
               }),
         ]),
         _sp12,
@@ -1631,9 +1716,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     final adhesiveGal = (_parapetArea / 60).ceil();
     return Container(
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.05),
+      decoration: BoxDecoration(color: AppTheme.primary.withValues(alpha:0.05),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppTheme.primary.withOpacity(0.15))),
+          border: Border.all(color: AppTheme.primary.withValues(alpha:0.15))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Text('BOM IMPACT', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
@@ -1698,6 +1783,405 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   }
 
   // ─── WASTE SETTINGS ───────────────────────────────────────────────────────────
+  // ─── LABOR ────────────────────────────────────────────────────────────────────
+  Widget _buildLabor() {
+    final enabled = ref.watch(laborEnabledProvider);
+    final crews = ref.watch(laborCrewsProvider);
+    final selectedIdx = ref.watch(selectedCrewIndexProvider);
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Enable toggle
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: Text('Include Labor in Estimate',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+        value: enabled,
+        onChanged: (v) => ref.read(laborEnabledProvider.notifier).state = v,
+        activeColor: AppTheme.accent,
+        dense: true,
+      ),
+
+      if (enabled) ...[
+        _sp12,
+
+        // Crew selector
+        Row(children: [
+          Text('Active Crew', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+          const Spacer(),
+          SizedBox(height: 28, child: TextButton.icon(
+            onPressed: _addCrew,
+            icon: const Icon(Icons.add, size: 14),
+            label: const Text('Add Crew', style: TextStyle(fontSize: 11)),
+          )),
+        ]),
+        _sp4,
+        Container(
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppTheme.border),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<int>(
+              value: selectedIdx.clamp(0, crews.length - 1),
+              isExpanded: true,
+              style: TextStyle(fontSize: 14, color: AppTheme.textPrimary),
+              items: crews.asMap().entries.map((e) => DropdownMenuItem(
+                value: e.key,
+                child: Text(e.value.name),
+              )).toList(),
+              onChanged: (v) {
+                if (v != null) ref.read(selectedCrewIndexProvider.notifier).state = v;
+              },
+            ),
+          ),
+        ),
+        _sp12,
+
+        // Edit crew rates button
+        Row(children: [
+          Expanded(child: SizedBox(height: 32, child: OutlinedButton.icon(
+            onPressed: () => _editCrewRates(selectedIdx),
+            icon: const Icon(Icons.edit, size: 14),
+            label: Text('Edit ${crews[selectedIdx.clamp(0, crews.length - 1)].name} Rates',
+                style: const TextStyle(fontSize: 11)),
+          ))),
+          if (crews.length > 1) ...[
+            const SizedBox(width: 8),
+            SizedBox(height: 32, width: 32, child: IconButton(
+              onPressed: () => _deleteCrew(selectedIdx),
+              icon: Icon(Icons.delete_outline, size: 16, color: Colors.red.shade400),
+              padding: EdgeInsets.zero,
+              tooltip: 'Delete crew',
+            )),
+          ],
+        ]),
+        _sp16,
+
+        // Preview: active labor items
+        _laborPreview(),
+      ],
+    ]);
+  }
+
+  void _addCrew() {
+    final crews = List<LaborCrew>.from(ref.read(laborCrewsProvider));
+    final controller = TextEditingController(text: 'Crew ${crews.length + 1}');
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('New Crew', style: TextStyle(fontSize: 16)),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(labelText: 'Crew Name'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) {
+                crews.add(LaborCrew(name: name, rates: Map<String, double>.from(kDefaultLaborRates)));
+                ref.read(laborCrewsProvider.notifier).state = crews;
+                ref.read(selectedCrewIndexProvider.notifier).state = crews.length - 1;
+              }
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _deleteCrew(int idx) {
+    final crews = List<LaborCrew>.from(ref.read(laborCrewsProvider));
+    if (crews.length <= 1) return;
+    crews.removeAt(idx);
+    ref.read(laborCrewsProvider.notifier).state = crews;
+    final selIdx = ref.read(selectedCrewIndexProvider);
+    if (selIdx >= crews.length) {
+      ref.read(selectedCrewIndexProvider.notifier).state = crews.length - 1;
+    }
+  }
+
+  void _editCrewRates(int crewIdx) {
+    final crews = ref.read(laborCrewsProvider);
+    final crew = crews[crewIdx.clamp(0, crews.length - 1)];
+    final controllers = <String, TextEditingController>{};
+    for (final name in kLaborItemNames) {
+      controllers[name] = TextEditingController(text: crew.rateFor(name).toStringAsFixed(2));
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('${crew.name} - Labor Rates', style: const TextStyle(fontSize: 16)),
+        content: SizedBox(
+          width: 400,
+          height: 500,
+          child: ListView(children: kLaborItemNames.map((name) => Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(children: [
+              Expanded(child: Text(name, style: TextStyle(fontSize: 12, color: AppTheme.textPrimary))),
+              SizedBox(width: 80, height: 32, child: TextField(
+                controller: controllers[name],
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                textAlign: TextAlign.right,
+                style: const TextStyle(fontSize: 12),
+                decoration: InputDecoration(
+                  prefixText: '\$ ',
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                  isDense: true,
+                ),
+              )),
+              const SizedBox(width: 4),
+              Text('/${kLaborUnits[name] ?? 'ea'}',
+                  style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+            ]),
+          )).toList()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final newRates = <String, double>{};
+              for (final name in kLaborItemNames) {
+                final val = double.tryParse(controllers[name]!.text) ?? 0;
+                newRates[name] = val;
+              }
+              final updatedCrews = List<LaborCrew>.from(ref.read(laborCrewsProvider));
+              updatedCrews[crewIdx] = crew.copyWith(rates: newRates);
+              ref.read(laborCrewsProvider.notifier).state = updatedCrews;
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    // Dispose controllers after dialog closes
+  }
+
+  Widget _laborPreview() {
+    final items = ref.watch(laborLineItemsProvider);
+    final deleted = ref.watch(laborDeletedItemsProvider);
+    final edits = ref.watch(laborLineEditsProvider);
+    final manualItems = ref.watch(laborManualItemsProvider);
+
+    final activeItems = items.where((i) => i.hasQuantity && !deleted.contains(i.name)).toList();
+    if (activeItems.isEmpty && manualItems.isEmpty) {
+      return _info('No labor items apply yet. Fill in geometry and specs to see labor items.',
+          color: AppTheme.textMuted);
+    }
+
+    double total = 0;
+    for (final i in activeItems) {
+      final e = edits[i.name];
+      final qty = e?.qty ?? i.quantity;
+      final rate = e?.rate ?? i.rate;
+      total += qty * rate;
+    }
+    for (final m in manualItems) total += m.total;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.primary.withValues(alpha:0.04),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.primary.withValues(alpha:0.15)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Text('LABOR ESTIMATE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+              color: AppTheme.primary, letterSpacing: 0.8)),
+          const Spacer(),
+          Text('\$${total.toStringAsFixed(2)}', style: TextStyle(fontSize: 13,
+              fontWeight: FontWeight.w700, color: AppTheme.accent)),
+        ]),
+        const SizedBox(height: 4),
+        // Column headers
+        Row(children: [
+          const SizedBox(width: 20),
+          Expanded(child: Text('Item', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: AppTheme.textMuted))),
+          SizedBox(width: 40, child: Text('Qty', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: AppTheme.textMuted), textAlign: TextAlign.right)),
+          SizedBox(width: 30, child: Text('Unit', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: AppTheme.textMuted), textAlign: TextAlign.center)),
+          SizedBox(width: 45, child: Text('Rate', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: AppTheme.textMuted), textAlign: TextAlign.right)),
+          SizedBox(width: 55, child: Text('Total', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: AppTheme.textMuted), textAlign: TextAlign.right)),
+        ]),
+        const SizedBox(height: 4),
+        // Auto-generated items
+        ...activeItems.map((item) {
+          final e = edits[item.name];
+          final qty = e?.qty ?? item.quantity;
+          final rate = e?.rate ?? item.rate;
+          final lineTotal = qty * rate;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: InkWell(
+              onTap: () => _editLaborItem(item, e),
+              child: Row(children: [
+                SizedBox(width: 20, child: InkWell(
+                  onTap: () => ref.read(laborDeletedItemsProvider.notifier).update((s) => {...s, item.name}),
+                  child: Icon(Icons.close, size: 12, color: Colors.red.shade300),
+                )),
+                Expanded(child: Text(e?.description ?? item.name,
+                    style: TextStyle(fontSize: 11, color: e != null ? Colors.amber.shade800 : AppTheme.textSecondary),
+                    overflow: TextOverflow.ellipsis)),
+                SizedBox(width: 40, child: Text(
+                    qty == qty.roundToDouble() ? qty.toInt().toString() : qty.toStringAsFixed(1),
+                    style: TextStyle(fontSize: 11, color: AppTheme.textMuted), textAlign: TextAlign.right)),
+                SizedBox(width: 30, child: Text(item.unit,
+                    style: TextStyle(fontSize: 9, color: AppTheme.textMuted), textAlign: TextAlign.center)),
+                SizedBox(width: 45, child: Text('\$${rate.toStringAsFixed(2)}',
+                    style: TextStyle(fontSize: 10, color: AppTheme.textMuted), textAlign: TextAlign.right)),
+                SizedBox(width: 55, child: Text('\$${lineTotal.toStringAsFixed(2)}',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.textPrimary),
+                    textAlign: TextAlign.right)),
+              ]),
+            ),
+          );
+        }),
+        // Manual items
+        ...manualItems.map((m) => Padding(
+          padding: const EdgeInsets.only(bottom: 2),
+          child: Row(children: [
+            SizedBox(width: 20, child: InkWell(
+              onTap: () => ref.read(laborManualItemsProvider.notifier).update(
+                  (list) => list.where((i) => i.id != m.id).toList()),
+              child: Icon(Icons.close, size: 12, color: Colors.red.shade300),
+            )),
+            Expanded(child: Text(m.name,
+                style: TextStyle(fontSize: 11, color: AppTheme.accent), overflow: TextOverflow.ellipsis)),
+            SizedBox(width: 40, child: Text(
+                m.quantity == m.quantity.roundToDouble() ? m.quantity.toInt().toString() : m.quantity.toStringAsFixed(1),
+                style: TextStyle(fontSize: 11, color: AppTheme.textMuted), textAlign: TextAlign.right)),
+            SizedBox(width: 30, child: Text(m.unit,
+                style: TextStyle(fontSize: 9, color: AppTheme.textMuted), textAlign: TextAlign.center)),
+            SizedBox(width: 45, child: Text('\$${m.rate.toStringAsFixed(2)}',
+                style: TextStyle(fontSize: 10, color: AppTheme.textMuted), textAlign: TextAlign.right)),
+            SizedBox(width: 55, child: Text('\$${m.total.toStringAsFixed(2)}',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.textPrimary),
+                textAlign: TextAlign.right)),
+          ]),
+        )),
+        const SizedBox(height: 6),
+        // Restore + Add buttons
+        Row(children: [
+          if (deleted.isNotEmpty)
+            TextButton.icon(
+              onPressed: () => ref.read(laborDeletedItemsProvider.notifier).state = {},
+              icon: Icon(Icons.restore, size: 12, color: Colors.amber.shade700),
+              label: Text('Restore (${deleted.length})', style: TextStyle(fontSize: 10, color: Colors.amber.shade700)),
+              style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+            ),
+          const Spacer(),
+          TextButton.icon(
+            onPressed: _addLaborItem,
+            icon: Icon(Icons.add, size: 12, color: AppTheme.accent),
+            label: Text('Add Item', style: TextStyle(fontSize: 10, color: AppTheme.accent)),
+            style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+          ),
+        ]),
+      ]),
+    );
+  }
+
+  void _editLaborItem(LaborLineItem item, LaborLineEdit? existing) {
+    final descCtrl = TextEditingController(text: existing?.description ?? item.name);
+    final qtyCtrl = TextEditingController(text: (existing?.qty ?? item.quantity).toStringAsFixed(
+        (existing?.qty ?? item.quantity) == (existing?.qty ?? item.quantity).roundToDouble() ? 0 : 1));
+    final rateCtrl = TextEditingController(text: (existing?.rate ?? item.rate).toStringAsFixed(2));
+
+    showDialog(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Edit Labor Item', style: TextStyle(fontSize: 16)),
+      content: SizedBox(width: 350, child: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(controller: descCtrl, decoration: const InputDecoration(labelText: 'Description', isDense: true)),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(child: TextField(controller: qtyCtrl, keyboardType: TextInputType.number,
+              decoration: InputDecoration(labelText: 'Qty (${item.unit})', isDense: true))),
+          const SizedBox(width: 10),
+          Expanded(child: TextField(controller: rateCtrl, keyboardType: TextInputType.number,
+              decoration: InputDecoration(labelText: 'Rate (\$/${item.unit})', isDense: true))),
+        ]),
+      ])),
+      actions: [
+        if (existing != null) TextButton(
+          onPressed: () {
+            ref.read(laborLineEditsProvider.notifier).update((m) {
+              final copy = Map<String, LaborLineEdit>.from(m); copy.remove(item.name); return copy;
+            });
+            Navigator.pop(ctx);
+          },
+          child: const Text('Reset'),
+        ),
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () {
+          final newDesc = descCtrl.text != item.name ? descCtrl.text : null;
+          final newQty = double.tryParse(qtyCtrl.text);
+          final newRate = double.tryParse(rateCtrl.text);
+          ref.read(laborLineEditsProvider.notifier).update((m) => {
+            ...m, item.name: LaborLineEdit(
+              description: newDesc,
+              qty: newQty != null && newQty != item.quantity ? newQty : null,
+              rate: newRate != null && newRate != item.rate ? newRate : null,
+            ),
+          });
+          Navigator.pop(ctx);
+        }, child: const Text('Save')),
+      ],
+    ));
+  }
+
+  void _addLaborItem() {
+    final descCtrl = TextEditingController();
+    final qtyCtrl = TextEditingController(text: '1');
+    final unitCtrl = TextEditingController(text: 'SQ');
+    final rateCtrl = TextEditingController(text: '0.00');
+
+    showDialog(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Add Labor Item', style: TextStyle(fontSize: 16)),
+      content: SizedBox(width: 350, child: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(controller: descCtrl, autofocus: true,
+            decoration: const InputDecoration(labelText: 'Description *', isDense: true)),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(child: TextField(controller: qtyCtrl, keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Qty', isDense: true))),
+          const SizedBox(width: 8),
+          Expanded(child: TextField(controller: unitCtrl,
+              decoration: const InputDecoration(labelText: 'Unit', isDense: true))),
+          const SizedBox(width: 8),
+          Expanded(child: TextField(controller: rateCtrl, keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Rate (\$)', isDense: true))),
+        ]),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () {
+          if (descCtrl.text.isEmpty) return;
+          ref.read(laborManualItemsProvider.notifier).update((list) => [...list,
+            ManualLaborItem(
+              id: 'manual_${DateTime.now().millisecondsSinceEpoch}',
+              name: descCtrl.text,
+              unit: unitCtrl.text.isEmpty ? 'each' : unitCtrl.text,
+              quantity: double.tryParse(qtyCtrl.text) ?? 1,
+              rate: double.tryParse(rateCtrl.text) ?? 0,
+            ),
+          ]);
+          Navigator.pop(ctx);
+        }, child: const Text('Add')),
+      ],
+    ));
+  }
+
   Widget _buildWasteSettings() {
     final n = ref.read(estimatorProvider.notifier);
     void pushWaste() {
@@ -1754,9 +2238,11 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   Widget _lbl(String t) => Text(t, style: TextStyle(fontSize: 11,
       fontWeight: FontWeight.w600, color: AppTheme.textSecondary, letterSpacing: 0.3));
 
-  InputDecoration _dec(String hint, {Widget? suffix, bool disabled = false, String? counterText}) =>
+  InputDecoration _dec(String hint, {Widget? suffix, bool disabled = false, String? counterText, String? labelText}) =>
       InputDecoration(
         hintText: hint, hintStyle: TextStyle(color: AppTheme.textMuted, fontSize: 14),
+        labelText: labelText, labelStyle: TextStyle(fontSize: 0, height: 0),
+        floatingLabelBehavior: FloatingLabelBehavior.never,
         suffixIcon: suffix, counterText: counterText,
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         filled: true, fillColor: disabled ? AppTheme.surfaceAlt : Colors.white,
@@ -1765,15 +2251,18 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   Widget _tf(String label, String hint, TextEditingController c, {
     String? suffix, TextInputType kb = TextInputType.text,
     bool enabled = true, ValueChanged<String>? onChange,
+    bool required = false,
+    List<TextInputFormatter>? inputFormatters,
   }) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     _lbl(label), _sp4,
-    SizedBox(height: 44, child: TextField(
-      controller: c, enabled: enabled, keyboardType: kb, onChanged: onChange,
+    _ValidatedField(
+      controller: c, enabled: enabled, keyboardType: kb, onChange: onChange,
       decoration: _dec(hint, suffix: suffix != null
           ? Text(suffix, style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)) : null,
-          disabled: !enabled),
-      style: const TextStyle(fontSize: 14),
-    )),
+          disabled: !enabled, labelText: label),
+      required: required,
+      inputFormatters: inputFormatters,
+    ),
   ]);
 
   Widget _tfHelper(String label, String hint, TextEditingController c, {
@@ -1807,9 +2296,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
-          color: value ? col.withOpacity(0.06) : AppTheme.surfaceAlt,
+          color: value ? col.withValues(alpha:0.06) : AppTheme.surfaceAlt,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: value ? col.withOpacity(0.25) : AppTheme.border),
+          border: Border.all(color: value ? col.withValues(alpha:0.25) : AppTheme.border),
         ),
         child: Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1867,7 +2356,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   Widget _miniCalc(String label, String value) => Expanded(
     child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(color: AppTheme.accent.withOpacity(0.08), borderRadius: BorderRadius.circular(5)),
+      decoration: BoxDecoration(color: AppTheme.accent.withValues(alpha:0.08), borderRadius: BorderRadius.circular(5)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(label, style: TextStyle(fontSize: 9, color: AppTheme.textMuted,
             fontWeight: FontWeight.w600, letterSpacing: 0.4)),
@@ -1880,10 +2369,10 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     final c = color ?? AppTheme.warning;
     return Container(
       padding: const EdgeInsets.all(9),
-      decoration: BoxDecoration(color: c.withOpacity(0.08), borderRadius: BorderRadius.circular(6)),
+      decoration: BoxDecoration(color: c.withValues(alpha:0.08), borderRadius: BorderRadius.circular(6)),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Icon(Icons.info_outline, color: c, size: 14), const SizedBox(width: 7),
-        Expanded(child: Text(msg, style: TextStyle(fontSize: 11, color: c.withOpacity(0.9)))),
+        Expanded(child: Text(msg, style: TextStyle(fontSize: 11, color: c.withValues(alpha:0.9)))),
       ]),
     );
   }
@@ -1891,7 +2380,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   Widget _impactRow(IconData icon, String label, String value) => Padding(
     padding: const EdgeInsets.only(top: 6),
     child: Row(children: [
-      Icon(icon, size: 13, color: AppTheme.primary.withOpacity(0.6)), const SizedBox(width: 6),
+      Icon(icon, size: 13, color: AppTheme.primary.withValues(alpha:0.6)), const SizedBox(width: 6),
       Expanded(child: Text(label, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
       Text(value, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
           color: value == '—' ? AppTheme.textMuted : AppTheme.textPrimary)),
@@ -1909,6 +2398,75 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   );
 }
 
+class _ValidatedField extends StatefulWidget {
+  final TextEditingController controller;
+  final bool enabled;
+  final TextInputType keyboardType;
+  final ValueChanged<String>? onChange;
+  final InputDecoration decoration;
+  final bool required;
+  final List<TextInputFormatter>? inputFormatters;
+
+  const _ValidatedField({
+    required this.controller,
+    required this.enabled,
+    required this.keyboardType,
+    this.onChange,
+    required this.decoration,
+    this.required = false,
+    this.inputFormatters,
+  });
+
+  @override
+  State<_ValidatedField> createState() => _ValidatedFieldState();
+}
+
+class _ValidatedFieldState extends State<_ValidatedField> {
+  bool _touched = false;
+
+  bool get _showError => widget.required && _touched && widget.controller.text.trim().isEmpty;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(height: 44, child: Focus(
+          onFocusChange: (hasFocus) {
+            if (!hasFocus && !_touched) setState(() => _touched = true);
+          },
+          child: TextField(
+            controller: widget.controller,
+            enabled: widget.enabled,
+            keyboardType: widget.keyboardType,
+            inputFormatters: widget.inputFormatters,
+            onChanged: (v) {
+              widget.onChange?.call(v);
+              if (_touched) setState(() {});
+            },
+            decoration: _showError
+                ? widget.decoration.copyWith(
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: AppTheme.error, width: 2),
+                    ),
+                  )
+                : widget.decoration,
+            style: const TextStyle(fontSize: 14),
+          ),
+        )),
+        if (_showError)
+          Padding(
+            padding: const EdgeInsets.only(top: 4, left: 4),
+            child: Text('Required',
+                style: TextStyle(fontSize: 11, color: AppTheme.error)),
+          ),
+      ],
+    );
+  }
+}
+
 // ─── Shape diagram painter ────────────────────────────────────────────────────
 class _ShapeDiagramPainter extends CustomPainter {
   final String shapeType;
@@ -1917,7 +2475,7 @@ class _ShapeDiagramPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFF2563EB).withOpacity(0.7)
+      ..color = const Color(0xFF2563EB).withValues(alpha:0.7)
       ..strokeWidth = 1.5
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
@@ -1925,7 +2483,7 @@ class _ShapeDiagramPainter extends CustomPainter {
     final labelStyle = TextStyle(
       fontSize: 9,
       fontWeight: FontWeight.w600,
-      color: const Color(0xFF2563EB).withOpacity(0.85),
+      color: const Color(0xFF2563EB).withValues(alpha:0.85),
     );
 
     final w = size.width;

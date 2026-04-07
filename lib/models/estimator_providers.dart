@@ -19,6 +19,7 @@ import '../models/building_state.dart';
 import '../models/project_info.dart';
 import '../models/roof_geometry.dart';
 import '../models/system_specs.dart';
+import '../models/drainage_zone.dart';
 import '../models/insulation_system.dart';
 import '../models/section_models.dart';
 import '../services/r_value_calculator.dart';
@@ -111,13 +112,11 @@ final rValueResultProvider = Provider<RValueResult?>((ref) {
             thickness: insulation.layer2!.thickness,
           )
         : null,
-    tapered: insulation.hasTaperedInsulation && insulation.tapered != null
+    tapered: insulation.hasTaper && insulation.taperDefaults != null
         ? TaperedInsulationInput(
-            materialType: insulation.tapered!.boardType.isNotEmpty
-                ? insulation.tapered!.boardType
-                : 'Polyiso',
-            minThicknessAtDrain: insulation.tapered!.minThicknessAtDrain,
-            maxThickness: insulation.tapered!.maxThickness,
+            materialType: 'Polyiso',
+            minThicknessAtDrain: insulation.taperDefaults!.minThickness,
+            maxThickness: 0, // auto-calculated in future phases
           )
         : null,
     coverBoard: insulation.hasCoverBoard && insulation.coverBoard != null
@@ -146,13 +145,11 @@ final rValueValidationProvider = Provider<List<ValidationMessage>>((ref) {
             thickness: insulation.layer2!.thickness,
           )
         : null,
-    tapered: insulation.hasTaperedInsulation && insulation.tapered != null
+    tapered: insulation.hasTaper && insulation.taperDefaults != null
         ? TaperedInsulationInput(
-            materialType: insulation.tapered!.boardType.isNotEmpty
-                ? insulation.tapered!.boardType
-                : 'Polyiso',
-            minThicknessAtDrain: insulation.tapered!.minThicknessAtDrain,
-            maxThickness: insulation.tapered!.maxThickness,
+            materialType: 'Polyiso',
+            minThicknessAtDrain: insulation.taperDefaults!.minThickness,
+            maxThickness: 0, // auto-calculated in future phases
           )
         : null,
     coverBoard: insulation.hasCoverBoard && insulation.coverBoard != null
@@ -426,21 +423,23 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
         (b) => b.copyWith(
           insulationSystem: count == 2
               ? b.insulationSystem.withTwoLayers()
-              : b.insulationSystem.withOneLayer(),
+              : count == 0
+                  ? b.insulationSystem.withNoLayers()
+                  : b.insulationSystem.withOneLayer(),
         ),
       );
 
   void setTaperedEnabled(bool enabled) => _updateActive(
         (b) => b.copyWith(
           insulationSystem: enabled
-              ? b.insulationSystem.withTaperedEnabled()
-              : b.insulationSystem.withTaperedDisabled(),
+              ? b.insulationSystem.withTaperEnabled()
+              : b.insulationSystem.withTaperDisabled(),
         ),
       );
 
-  void updateTapered(TaperedInsulation tapered) => _updateActive(
+  void updateTaperDefaults(TaperDefaults taperDefaults) => _updateActive(
         (b) => b.copyWith(
-            insulationSystem: b.insulationSystem.copyWith(tapered: tapered)),
+            insulationSystem: b.insulationSystem.copyWith(taperDefaults: taperDefaults)),
       );
 
   void setCoverBoardEnabled(bool enabled) => _updateActive(
