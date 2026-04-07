@@ -1,3 +1,5 @@
+import 'drainage_zone.dart';
+
 /// lib/models/roof_geometry.dart
 ///
 /// Immutable data classes for the Roof Geometry section.
@@ -501,6 +503,8 @@ class RoofGeometry {
   final int                insideCorners;
   final int                outsideCorners;
   final WindZones          windZones;
+  final List<ScupperLocation> scupperLocations;
+  final List<DrainageZone> drainageZones;
 
   const RoofGeometry({
     this.shapes                = const [],
@@ -514,6 +518,8 @@ class RoofGeometry {
     this.insideCorners         = 0,
     this.outsideCorners        = 0,
     this.windZones             = const WindZones(),
+    this.scupperLocations      = const [],
+    this.drainageZones         = const [],
   });
 
   factory RoofGeometry.initial() =>
@@ -521,6 +527,7 @@ class RoofGeometry {
 
   int get numberOfShapes => shapes.length;
   int get numberOfDrains => drainLocations.length;
+  int get numberOfScuppers => scupperLocations.length;
 
   double get totalArea {
     if (totalAreaOverride != null) return totalAreaOverride!;
@@ -549,6 +556,8 @@ class RoofGeometry {
     int?                insideCorners,
     int?                outsideCorners,
     WindZones?          windZones,
+    List<ScupperLocation>? scupperLocations,
+    List<DrainageZone>? drainageZones,
   }) => RoofGeometry(
     shapes:                 shapes                ?? List.from(this.shapes),
     buildingHeight:         buildingHeight         ?? this.buildingHeight,
@@ -561,6 +570,8 @@ class RoofGeometry {
     insideCorners:          insideCorners          ?? this.insideCorners,
     outsideCorners:         outsideCorners         ?? this.outsideCorners,
     windZones:              windZones              ?? this.windZones,
+    scupperLocations:       scupperLocations       ?? List.from(this.scupperLocations),
+    drainageZones:          drainageZones          ?? List.from(this.drainageZones),
   );
 
   RoofGeometry clearAreaOverride() => copyWith(totalAreaOverride: null);
@@ -579,13 +590,16 @@ class RoofGeometry {
           perimeterCorners       == other.perimeterCorners &&
           insideCorners          == other.insideCorners &&
           outsideCorners         == other.outsideCorners &&
-          windZones              == other.windZones;
+          windZones              == other.windZones &&
+          _listEquals(scupperLocations, other.scupperLocations) &&
+          _listEquals(drainageZones, other.drainageZones);
 
   @override
   int get hashCode => Object.hash(
       Object.hashAll(shapes), buildingHeight, roofSlope, customSlope,
       Object.hashAll(drainLocations), totalPerimeterOverride, totalAreaOverride,
-      perimeterCorners, insideCorners, outsideCorners, windZones);
+      perimeterCorners, insideCorners, outsideCorners, windZones,
+      Object.hashAll(scupperLocations), Object.hashAll(drainageZones));
 }
 
 // ─── POLYGON BUILDER (shared by left_panel.dart and roof_renderer.dart) ──────
