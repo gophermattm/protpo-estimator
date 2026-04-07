@@ -111,6 +111,29 @@ class TaperedRValueResult {
       'avg(${minThickness}" + ${maxThickness}") ÷ 2 = ${avgThickness.toStringAsFixed(2)}" × R-${rPerInch.toStringAsFixed(1)}/in = R-${averageRValue.toStringAsFixed(1)}';
 }
 
+class TaperedAssemblyResult {
+  final double baseLayersR;
+  final double coverBoardR;
+  final double membraneR;
+  final double taperMinR;
+  final double taperAvgR;
+  final double taperMaxR;
+
+  double get uniformR => baseLayersR + coverBoardR + membraneR;
+  double get totalMinR => uniformR + taperMinR;
+  double get totalAvgR => uniformR + taperAvgR;
+  double get totalMaxR => uniformR + taperMaxR;
+
+  const TaperedAssemblyResult({
+    required this.baseLayersR,
+    required this.coverBoardR,
+    required this.membraneR,
+    required this.taperMinR,
+    required this.taperAvgR,
+    required this.taperMaxR,
+  });
+}
+
 class RValueResult {
   // Individual component results
   final LayerRValueResult layer1;
@@ -290,6 +313,34 @@ class RValueCalculator {
       totalRValue: total,
       requiredRValue: requiredRValue,
       meetsCodeRequirement: meetsCode,
+    );
+  }
+
+  static TaperedAssemblyResult calculateTapered({
+    required InsulationLayerInput layer1,
+    InsulationLayerInput? layer2,
+    CoverBoardInput? coverBoard,
+    required double taperMinThickness,
+    required double taperAvgThickness,
+    required double taperMaxThickness,
+  }) {
+    final r1 = layer1.thickness * rValuePerInch(layer1.materialType);
+    final r2 = layer2 != null
+        ? layer2.thickness * rValuePerInch(layer2.materialType)
+        : 0.0;
+    final rCover = coverBoard != null
+        ? coverBoard.thickness * rValuePerInch(coverBoard.materialType)
+        : 0.0;
+    const rMembrane = 0.5;
+    const taperRPerInch = 5.7; // All tapered panels are polyiso
+
+    return TaperedAssemblyResult(
+      baseLayersR: r1 + r2,
+      coverBoardR: rCover,
+      membraneR: rMembrane,
+      taperMinR: taperMinThickness * taperRPerInch,
+      taperAvgR: taperAvgThickness * taperRPerInch,
+      taperMaxR: taperMaxThickness * taperRPerInch,
     );
   }
 
