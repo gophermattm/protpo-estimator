@@ -180,9 +180,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   bool   _hasTapered       = false;
   String _taperSlope       = '1/4:12';
   String _taperMinThick    = '1.0';
+  String _taperManufacturer = 'Versico';
+  String _taperProfile     = 'extended';
   String _taperAttachment  = 'Mechanically Attached';
-  final _cTaperBoard       = TextEditingController();
-  final _cTaperArea        = TextEditingController();
   bool   _hasCoverBoard    = false;
   String _cbType           = 'HD Polyiso';
   String _cbThickness      = '0.5';
@@ -293,7 +293,6 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _cProjectName, _cProjectAddress, _cZipCode, _cCustomerName, _cEstimatorName, _cEstimateDate,
       _cBuildingHeight, _cDrainCount, _cPerimeterWidth, _cCornerCount, _cInsideCorners,
       _cExistingLayers, _cSprayFoamThickness,
-      _cTaperBoard, _cTaperArea,
       _cWallHeight, _cWallLF, _cRtuLF, _cDrainCountPen,
       _cSmallPipes, _cLargePipes, _cSkylights, _cScuppers, _cExpJointLF, _cPitchPans,
       _cParapetHeight, _cParapetLF, _cTermBarLF,
@@ -377,8 +376,6 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     _set(_cSprayFoamThickness, specs.sprayFoamThickness > 0 ? specs.sprayFoamThickness.toStringAsFixed(0) : '');
 
     // ── Insulation ──────────────────────────────────────────────────
-    _set(_cTaperBoard, '');
-    _set(_cTaperArea, '');
 
     // ── Penetrations ────────────────────────────────────────────────
     _set(_cRtuLF,        _nz(pen.rtuTotalLF));
@@ -432,6 +429,8 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _hasTapered      = ins.hasTaper;
       _taperSlope      = ins.taperDefaults?.taperRate ?? '1/4:12';
       _taperMinThick   = (ins.taperDefaults?.minThickness ?? 1.0).toString();
+      _taperManufacturer = ins.taperDefaults?.manufacturer ?? 'Versico';
+      _taperProfile    = ins.taperDefaults?.profileType ?? 'extended';
       _taperAttachment = ins.taperDefaults?.attachmentMethod ?? 'Mechanically Attached';
       _hasCoverBoard   = ins.hasCoverBoard;
       _cbType          = ins.coverBoard?.type ?? 'HD Polyiso';
@@ -1320,6 +1319,8 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     void pushTaper() => n.updateTaperDefaults(TaperDefaults(
         taperRate: _taperSlope,
         minThickness: double.tryParse(_taperMinThick) ?? 1.0,
+        manufacturer: _taperManufacturer,
+        profileType: _taperProfile,
         attachmentMethod: _taperAttachment));
     void pushCB() => n.updateCoverBoard(CoverBoard(type: _cbType,
         thickness: double.tryParse(_cbThickness) ?? 0.5, attachmentMethod: _cbAttachment));
@@ -1362,8 +1363,21 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
           decoration: BoxDecoration(color: AppTheme.surfaceAlt, borderRadius: BorderRadius.circular(7),
               border: Border.all(color: AppTheme.border)),
           child: Column(children: [
-            _tf('Board Type (Versico/Tri-Built)', 'e.g. Versico Tapered Polyiso', _cTaperBoard,
-                onChange: (_) => pushTaper()),
+            _responsiveRow([
+              _dd('Manufacturer', _taperManufacturer, kTaperManufacturers, (v) {
+                setState(() {
+                  _taperManufacturer = v!;
+                  // TRI-BUILT doesn't have extended profiles — auto-reset
+                  if (v == 'TRI-BUILT' && _taperProfile == 'extended') {
+                    _taperProfile = 'standard';
+                  }
+                });
+                pushTaper();
+              }),
+              _dd('Profile', _taperProfile,
+                  _taperManufacturer == 'TRI-BUILT' ? ['standard'] : kTaperProfileTypes,
+                  (v) { setState(() => _taperProfile = v!); pushTaper(); }),
+            ]),
             _sp8,
             _responsiveRow([
               _dd('Taper Slope', _taperSlope, kTaperSlopeOptions, (v) {
@@ -1375,9 +1389,6 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
             _sp8,
             _dd('Attachment', _taperAttachment, kAttachmentMethods, (v) {
               setState(() => _taperAttachment = v!); pushTaper(); }),
-            _sp8,
-            _tf('System Area', '0', _cTaperArea, suffix: 'sq ft',
-                kb: TextInputType.number, onChange: (_) => pushTaper()),
           ]),
         ),
       ],
