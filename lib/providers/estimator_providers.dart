@@ -22,10 +22,13 @@ import '../models/system_specs.dart';
 import '../models/drainage_zone.dart';
 import '../models/insulation_system.dart';
 import '../models/section_models.dart';
+import 'dart:ui';
 import '../services/r_value_calculator.dart';
 import '../services/bom_calculator.dart';
 import '../services/validation_engine.dart';
 import '../services/qxo_pricing_service.dart';
+import '../services/drain_distance_calculator.dart';
+import '../services/board_schedule_calculator.dart';
 import '../models/labor_models.dart';
 
 // ─── ROOT PROVIDER ────────────────────────────────────────────────────────────
@@ -130,6 +133,7 @@ final subInstructionOverridesProvider =
 final rValueResultProvider = Provider<RValueResult?>((ref) {
   final insulation = ref.watch(insulationSystemProvider);
   final projectInfo = ref.watch(projectInfoProvider);
+  final boardSchedule = ref.watch(boardScheduleProvider);
 
   // No flat insulation layers and no tapered — nothing to calculate
   final hasLayers = insulation.numberOfLayers >= 1 && insulation.layer1.thickness > 0;
@@ -154,7 +158,7 @@ final rValueResultProvider = Provider<RValueResult?>((ref) {
         ? TaperedInsulationInput(
             materialType: 'Polyiso',
             minThicknessAtDrain: insulation.taperDefaults!.minThickness,
-            maxThickness: 0, // auto-calculated in future phases
+            maxThickness: boardSchedule?.maxThicknessAtRidge ?? 0,
           )
         : null,
     coverBoard: insulation.hasCoverBoard && insulation.coverBoard != null
@@ -171,6 +175,7 @@ final rValueResultProvider = Provider<RValueResult?>((ref) {
 final rValueValidationProvider = Provider<List<ValidationMessage>>((ref) {
   final insulation = ref.watch(insulationSystemProvider);
   final projectInfo = ref.watch(projectInfoProvider);
+  final boardSchedule = ref.watch(boardScheduleProvider);
 
   return RValueCalculator.validate(
     layer1: insulation.numberOfLayers >= 1
@@ -189,7 +194,7 @@ final rValueValidationProvider = Provider<List<ValidationMessage>>((ref) {
         ? TaperedInsulationInput(
             materialType: 'Polyiso',
             minThicknessAtDrain: insulation.taperDefaults!.minThickness,
-            maxThickness: 0, // auto-calculated in future phases
+            maxThickness: boardSchedule?.maxThicknessAtRidge ?? 0,
           )
         : null,
     coverBoard: insulation.hasCoverBoard && insulation.coverBoard != null
@@ -200,6 +205,44 @@ final rValueValidationProvider = Provider<List<ValidationMessage>>((ref) {
         : null,
     requiredRValue: projectInfo.requiredRValue,
   );
+});
+
+/// Board schedule result for the active building's tapered insulation.
+/// Returns null when taper is disabled or no drains are placed.
+final boardScheduleProvider = Provider<BoardScheduleResult?>((ref) {
+  final insulation = ref.watch(insulationSystemProvider);
+  final geo = ref.watch(roofGeometryProvider);
+
+  if (!insulation.hasTaper || insulation.taperDefaults == null) return null;
+  if (geo.drainLocations.isEmpty) return null;
+
+  // Build polygon vertices from primary shape
+  final primaryShape = geo.shapes.isNotEmpty ? geo.shapes.first : null;
+  if (primaryShape == null) return null;
+  final vertices = _buildPolygonVertices(primaryShape);
+  if (vertices.isEmpty) return null;
+
+  // Compute taper distance from drains to farthest polygon vertex
+  final distance = DrainDistanceCalculator.bestTaperDistance(
+    polygonVertices: vertices,
+    drainXs: geo.drainLocations.map((d) => d.x).toList(),
+    drainYs: geo.drainLocations.map((d) => d.y).toList(),
+  );
+  if (distance <= 0) return null;
+
+  // Compute roof width for panel count
+  final roofWidth = DrainDistanceCalculator.roofWidthPerpendicular(vertices);
+  if (roofWidth <= 0) return null;
+
+  final defaults = insulation.taperDefaults!;
+  return BoardScheduleCalculator.compute(BoardScheduleInput(
+    distance: distance,
+    taperRate: defaults.taperRate,
+    minThickness: defaults.minThickness,
+    manufacturer: defaults.manufacturer,
+    profileType: defaults.profileType,
+    roofWidthFt: roofWidth,
+  ));
 });
 
 /// Cross-section validation for the active building.
@@ -1270,3 +1313,27 @@ final bomDeletedItemsProvider =
 /// Manually added BOM line items.
 final bomManualItemsProvider =
     StateProvider<List<ManualBomItem>>((ref) => []);
+
+// ─── POLYGON VERTEX BUILDER ──────────────────────────────────────────────────
+
+/// Builds polygon vertices from a RoofShape using the same turn-sequence
+/// algorithm as the roof renderer. Returns world-coordinate Offsets in feet.
+List<Offset> _buildPolygonVertices(RoofShape shape) {
+  final edges = shape.edgeLengths;
+  if (edges.length < 4 || edges.every((e) => e <= 0)) return [];
+  final tmpl = kShapeTemplates[shape.shapeType];
+  if (tmpl == null) return [];
+  final turns = tmpl.turns;
+  const ddx = [1.0, 0.0, -1.0, 0.0];
+  const ddy = [0.0, -1.0, 0.0, 1.0];
+  final pts = <Offset>[Offset.zero];
+  var x = 0.0, y = 0.0, dir = 0;
+  for (int i = 0; i < edges.length; i++) {
+    x += ddx[dir % 4] * edges[i];
+    y += ddy[dir % 4] * edges[i];
+    pts.add(Offset(x, y));
+    if (i < turns.length) dir = (dir + (turns[i] == 1 ? 1 : 3)) % 4;
+  }
+  pts.removeLast();
+  return pts;
+}
