@@ -14,11 +14,19 @@
 import '../models/project_info.dart';
 import '../models/roof_geometry.dart';
 import '../models/insulation_system.dart';
+import '../models/drainage_zone.dart';
 import '../models/section_models.dart';
 import '../models/system_specs.dart';
 import '../models/building_state.dart';
 import '../models/estimator_state.dart';
 import 'package:uuid/uuid.dart';
+
+// ─── PUBLIC ALIASES (for testing) ────────────────────────────────────────────
+
+Map<String, dynamic> insulationSystemToJson(InsulationSystem ins) => _insulationSystemToJson(ins);
+InsulationSystem insulationSystemFromJson(Map j) => _insulationSystemFromJson(j);
+Map<String, dynamic> roofGeometryToJson(RoofGeometry g) => _roofGeometryToJson(g);
+RoofGeometry roofGeometryFromJson(Map j) => _roofGeometryFromJson(j);
 
 // ─── TOP-LEVEL ENTRY POINTS ──────────────────────────────────────────────────
 
@@ -28,7 +36,7 @@ Map<String, dynamic> stateToJson(EstimatorState state, String projectId) {
   return {
     'projectId':   projectId,
     'savedAt':     DateTime.now().toIso8601String(),
-    'schemaVersion': 1,
+    'schemaVersion': 2,
     'projectInfo': _projectInfoToJson(state.projectInfo),
     'buildings':   state.buildings.map(_buildingStateToJson).toList(),
     'activeBuildingIndex': state.activeBuildingIndex,
@@ -137,6 +145,8 @@ Map<String, dynamic> _roofGeometryToJson(RoofGeometry g) => {
   'insideCorners':    g.insideCorners,
   'outsideCorners':   g.outsideCorners,
   'windZones':        _windZonesToJson(g.windZones),
+  'scupperLocations': g.scupperLocations.map(_scupperToJson).toList(),
+  'drainageZones':    g.drainageZones.map(_drainageZoneToJson).toList(),
 };
 
 RoofGeometry _roofGeometryFromJson(Map j) => RoofGeometry(
@@ -155,6 +165,12 @@ RoofGeometry _roofGeometryFromJson(Map j) => RoofGeometry(
   insideCorners:    _i(j['insideCorners'], 0),
   outsideCorners:   _i(j['outsideCorners'], 0),
   windZones:        _windZonesFromJson(j['windZones'] as Map? ?? {}),
+  scupperLocations: (j['scupperLocations'] as List? ?? [])
+      .map((s) => _scupperFromJson(s as Map<String, dynamic>))
+      .toList(),
+  drainageZones: (j['drainageZones'] as List? ?? [])
+      .map((z) => _drainageZoneFromJson(z as Map<String, dynamic>))
+      .toList(),
 );
 
 Map<String, dynamic> _roofShapeToJson(RoofShape s) => {
@@ -192,6 +208,40 @@ WindZones _windZonesFromJson(Map j) => WindZones(
   fieldZoneArea:      _d(j['fieldZoneArea'], 0.0),
 );
 
+// ─── SCUPPER LOCATION ────────────────────────────────────────────────────────
+
+Map<String, dynamic> _scupperToJson(ScupperLocation s) => {
+  'edgeIndex': s.edgeIndex,
+  'position': s.position,
+};
+
+ScupperLocation _scupperFromJson(Map<String, dynamic> j) => ScupperLocation(
+  edgeIndex: _i(j['edgeIndex'], 0),
+  position: _d(j['position'], 0.5),
+);
+
+// ─── DRAINAGE ZONE ───────────────────────────────────────────────────────────
+
+Map<String, dynamic> _drainageZoneToJson(DrainageZone z) => {
+  'id': z.id,
+  'type': z.type,
+  'lowPointIndex': z.lowPointIndex,
+  'taperRateOverride': z.taperRateOverride,
+  'minThicknessOverride': z.minThicknessOverride,
+  'manufacturerOverride': z.manufacturerOverride,
+  'profileTypeOverride': z.profileTypeOverride,
+};
+
+DrainageZone _drainageZoneFromJson(Map<String, dynamic> j) => DrainageZone(
+  id: _s(j['id']),
+  type: _s(j['type'], 'internal_drain'),
+  lowPointIndex: _i(j['lowPointIndex'], 0),
+  taperRateOverride: j['taperRateOverride'] as String?,
+  minThicknessOverride: (j['minThicknessOverride'] as num?)?.toDouble(),
+  manufacturerOverride: j['manufacturerOverride'] as String?,
+  profileTypeOverride: j['profileTypeOverride'] as String?,
+);
+
 // ─── SYSTEM SPECS ─────────────────────────────────────────────────────────────
 
 Map<String, dynamic> _systemSpecsToJson(SystemSpecs s) => {
@@ -220,8 +270,9 @@ Map<String, dynamic> _insulationSystemToJson(InsulationSystem ins) => {
   'numberOfLayers':       ins.numberOfLayers,
   'layer1':               _insLayerToJson(ins.layer1),
   'layer2':               ins.layer2 != null ? _insLayerToJson(ins.layer2!) : null,
-  'hasTaper': ins.hasTaper,
-  'taperDefaults': null, // placeholder — Task 7 will implement proper serialization
+  'hasTaper':             ins.hasTaper,
+  'taperDefaults':        ins.taperDefaults != null ? _taperDefaultsToJson(ins.taperDefaults!) : null,
+  'zoneOverrides':        ins.zoneOverrides.map(_zoneOverrideToJson).toList(),
   'hasCoverBoard':        ins.hasCoverBoard,
   'coverBoard':           ins.coverBoard != null ? _coverBoardToJson(ins.coverBoard!) : null,
 };
@@ -229,12 +280,38 @@ Map<String, dynamic> _insulationSystemToJson(InsulationSystem ins) => {
 InsulationSystem _insulationSystemFromJson(Map j) {
   final layer2json = j['layer2'];
   final cbJson = j['coverBoard'];
+
+  // Read hasTaper from new key or fall back to old v1 key
+  final hasTaper = (j['hasTaper'] as bool?) ?? (j['hasTaperedInsulation'] as bool?) ?? false;
+
+  // Read taperDefaults from new key, or migrate from old 'tapered' key
+  TaperDefaults? taperDefaults;
+  if (j['taperDefaults'] != null) {
+    taperDefaults = _taperDefaultsFromJson(j['taperDefaults'] as Map);
+  } else if (j['tapered'] != null && hasTaper) {
+    final old = j['tapered'] as Map;
+    taperDefaults = TaperDefaults(
+      taperRate: _s(old['taperSlope'], '1/4:12'),
+      minThickness: _d(old['minThicknessAtDrain'], 1.0),
+      manufacturer: 'Versico',
+      profileType: 'extended',
+      attachmentMethod: _s(old['attachmentMethod'], 'Mechanically Attached'),
+    );
+  }
+
+  // Read zone overrides
+  final overridesJson = j['zoneOverrides'] as List?;
+  final zoneOverrides = overridesJson != null
+      ? overridesJson.map((o) => _zoneOverrideFromJson(o as Map)).toList()
+      : <DrainageZoneOverride>[];
+
   return InsulationSystem(
     numberOfLayers:       _i(j['numberOfLayers'], 1),
     layer1:               _insLayerFromJson(j['layer1'] as Map? ?? {}),
     layer2:               layer2json != null ? _insLayerFromJson(layer2json as Map) : null,
-    hasTaper: (j['hasTaper'] as bool?) ?? (j['hasTaperedInsulation'] as bool?) ?? false,
-    taperDefaults: null, // placeholder — Task 7 will implement proper deserialization
+    hasTaper:             hasTaper,
+    taperDefaults:        taperDefaults,
+    zoneOverrides:        zoneOverrides,
     hasCoverBoard:        j['hasCoverBoard'] as bool? ?? false,
     coverBoard:           cbJson != null ? _coverBoardFromJson(cbJson as Map) : null,
   );
@@ -252,7 +329,41 @@ InsulationLayer _insLayerFromJson(Map j) => InsulationLayer(
   attachmentMethod: _s(j['attachmentMethod'], 'Mechanically Attached'),
 );
 
-// _taperedToJson / _taperedFromJson — removed; Task 7 will add TaperDefaults serialization.
+// ─── TAPER DEFAULTS ──────────────────────────────────────────────────────────
+
+Map<String, dynamic> _taperDefaultsToJson(TaperDefaults t) => {
+  'taperRate': t.taperRate,
+  'minThickness': t.minThickness,
+  'manufacturer': t.manufacturer,
+  'profileType': t.profileType,
+  'attachmentMethod': t.attachmentMethod,
+};
+
+TaperDefaults _taperDefaultsFromJson(Map j) => TaperDefaults(
+  taperRate: _s(j['taperRate'], '1/4:12'),
+  minThickness: _d(j['minThickness'], 1.0),
+  manufacturer: _s(j['manufacturer'], 'Versico'),
+  profileType: _s(j['profileType'], 'extended'),
+  attachmentMethod: _s(j['attachmentMethod'], 'Mechanically Attached'),
+);
+
+// ─── DRAINAGE ZONE OVERRIDE ─────────────────────────────────────────────────
+
+Map<String, dynamic> _zoneOverrideToJson(DrainageZoneOverride o) => {
+  'zoneId': o.zoneId,
+  'taperRateOverride': o.taperRateOverride,
+  'minThicknessOverride': o.minThicknessOverride,
+  'manufacturerOverride': o.manufacturerOverride,
+  'profileTypeOverride': o.profileTypeOverride,
+};
+
+DrainageZoneOverride _zoneOverrideFromJson(Map j) => DrainageZoneOverride(
+  zoneId: _s(j['zoneId']),
+  taperRateOverride: j['taperRateOverride'] as String?,
+  minThicknessOverride: (j['minThicknessOverride'] as num?)?.toDouble(),
+  manufacturerOverride: j['manufacturerOverride'] as String?,
+  profileTypeOverride: j['profileTypeOverride'] as String?,
+);
 
 Map<String, dynamic> _coverBoardToJson(CoverBoard cb) => {
   'type':             cb.type,
