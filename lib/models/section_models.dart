@@ -27,6 +27,16 @@ const String kPerimeterRollWidth = "6'";
 
 const List<String> kSeamTypes = ['Hot Air Welded', 'Tape'];
 
+const List<String> kAdhesiveTypes = [
+  'VersiWeld TPO Bonding Adhesive',
+  'CAV-GRIP 3V Spray',
+];
+const List<String> kPrimerTypes = [
+  'Low-VOC EPDM/TPO Primer (700 sf/gal)',
+  'TPO Primer (225 sf/gal)',
+  'CAV-PRIME Spray (1,760 sf/cyl)',
+];
+
 /// Roll coverage in sq ft by roll width (all TPO roll sizes).
 const Map<String, double> kRollCoverage = {
   "5'":  500.0,
@@ -44,6 +54,8 @@ class MembraneSystem {
   final String rollWidth;           // from kRollWidths — FIELD AREA ONLY
   final String perimeterRollWidth;  // always kPerimeterRollWidth = "6'" — stored for BOM
   final String seamType;            // from kSeamTypes
+  final String adhesiveType;      // from kAdhesiveTypes — only relevant for FA
+  final String primerType;        // from kPrimerTypes
 
   const MembraneSystem({
     this.membraneType = 'TPO',
@@ -54,6 +66,8 @@ class MembraneSystem {
     this.rollWidth = "10'",
     this.perimeterRollWidth = "6'",
     this.seamType = 'Hot Air Welded',
+    this.adhesiveType = 'VersiWeld TPO Bonding Adhesive',
+    this.primerType = 'Low-VOC EPDM/TPO Primer (700 sf/gal)',
   });
 
   factory MembraneSystem.initial() => const MembraneSystem();
@@ -61,8 +75,8 @@ class MembraneSystem {
   /// Coverage per field roll.
   double get rollCoverage => kRollCoverage[rollWidth] ?? 1000.0;
 
-  /// Coverage per perimeter/flashing roll (always 600 sq ft).
-  double get perimeterRollCoverage => 600.0;
+  /// Coverage per perimeter/flashing roll based on selected width.
+  double get perimeterRollCoverage => kRollCoverage[perimeterRollWidth] ?? 600.0;
 
   /// True when membrane requires bonding adhesive for field attachment.
   bool get requiresAdhesive => fieldAttachment == 'Fully Adhered';
@@ -76,6 +90,8 @@ class MembraneSystem {
     String? rollWidth,
     String? perimeterRollWidth,
     String? seamType,
+    String? adhesiveType,
+    String? primerType,
   }) {
     return MembraneSystem(
       membraneType: membraneType ?? this.membraneType,
@@ -86,6 +102,8 @@ class MembraneSystem {
       rollWidth: rollWidth ?? this.rollWidth,
       perimeterRollWidth: perimeterRollWidth ?? this.perimeterRollWidth,
       seamType: seamType ?? this.seamType,
+      adhesiveType: adhesiveType ?? this.adhesiveType,
+      primerType: primerType ?? this.primerType,
     );
   }
 
@@ -100,12 +118,15 @@ class MembraneSystem {
           fieldAttachment == other.fieldAttachment &&
           rollWidth == other.rollWidth &&
           perimeterRollWidth == other.perimeterRollWidth &&
-          seamType == other.seamType;
+          seamType == other.seamType &&
+          adhesiveType == other.adhesiveType &&
+          primerType == other.primerType;
 
   @override
   int get hashCode => Object.hash(
         membraneType, thickness, color, manufacturer,
         fieldAttachment, rollWidth, perimeterRollWidth, seamType,
+        adhesiveType, primerType,
       );
 }
 
@@ -337,7 +358,15 @@ class Penetrations {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const List<String> kCopingWidths = ['8"', '10"', '12"', '14"', '16"'];
-const List<String> kEdgeMetalTypes = ['ES-1 (Low Profile)', 'ES-2 (High Profile)', 'Gravel Stop', 'Drip Edge', 'Fascia', 'Counter Flashing'];
+const List<String> kEdgeMetalTypes = [
+  'TPO-Coated Drip Edge',
+  'ES-1 (Low Profile)',
+  'ES-2 (High Profile)',
+  'Gravel Stop',
+  'Drip Edge (Standard)',
+  'Fascia',
+  'Counter Flashing',
+];
 const List<String> kGutterSizes = ['5"', '6"', '7"', '8"'];
 
 // Edge type → metal bucket mapping

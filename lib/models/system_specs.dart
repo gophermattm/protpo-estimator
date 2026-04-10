@@ -32,6 +32,7 @@ const List<String> kExistingRoofTypes = [
   'Modified Bitumen',
   'Single-Ply',
   'Metal',
+  'Spray Foam',
 ];
 
 /// Returns valid fastener options for a given deck type.
@@ -66,6 +67,7 @@ class SystemSpecs {
   final String existingRoofType;   // from kExistingRoofTypes
   final int existingLayers;        // 1–5
   final bool moistureScanRequired; // defaults to true for recover/tear-off
+  final double sprayFoamThickness; // inches — only relevant when existingRoofType == 'Spray Foam'
 
   const SystemSpecs({
     this.projectType = 'Tear-off & Replace',
@@ -74,6 +76,7 @@ class SystemSpecs {
     this.existingRoofType = 'BUR',
     this.existingLayers = 1,
     this.moistureScanRequired = true,  // true by default since default is Tear-off
+    this.sprayFoamThickness = 0.0,
   });
 
   factory SystemSpecs.initial() => const SystemSpecs();
@@ -95,6 +98,7 @@ class SystemSpecs {
     String? existingRoofType,
     int? existingLayers,
     bool? moistureScanRequired,
+    double? sprayFoamThickness,
   }) {
     return SystemSpecs(
       projectType: projectType ?? this.projectType,
@@ -103,6 +107,7 @@ class SystemSpecs {
       existingRoofType: existingRoofType ?? this.existingRoofType,
       existingLayers: existingLayers ?? this.existingLayers,
       moistureScanRequired: moistureScanRequired ?? this.moistureScanRequired,
+      sprayFoamThickness: sprayFoamThickness ?? this.sprayFoamThickness,
     );
   }
 
@@ -125,7 +130,8 @@ class SystemSpecs {
           vaporRetarder == other.vaporRetarder &&
           existingRoofType == other.existingRoofType &&
           existingLayers == other.existingLayers &&
-          moistureScanRequired == other.moistureScanRequired;
+          moistureScanRequired == other.moistureScanRequired &&
+          sprayFoamThickness == other.sprayFoamThickness;
 
   @override
   int get hashCode => Object.hash(
@@ -135,5 +141,6 @@ class SystemSpecs {
         existingRoofType,
         existingLayers,
         moistureScanRequired,
+        sprayFoamThickness,
       );
 }

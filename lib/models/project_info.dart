@@ -27,6 +27,9 @@ class ProjectInfo {
   final double wasteMetal;        // Coping, edge metal, gutter, term bar (default 5%)
   final double wasteAccessory;    // Fasteners, adhesive, sealants (default 5%)
 
+  // VOC compliance region — affects product selection labels
+  final String vocRegion;         // 'Standard', 'OTC (<250 gpl)', 'SCAQMD'
+
   const ProjectInfo({
     this.projectName = '',
     this.projectAddress = '',
@@ -42,6 +45,7 @@ class ProjectInfo {
     this.wasteMaterial = 0.10,
     this.wasteMetal = 0.05,
     this.wasteAccessory = 0.05,
+    this.vocRegion = 'Standard',
   });
 
   factory ProjectInfo.initial() => ProjectInfo(
@@ -70,6 +74,7 @@ class ProjectInfo {
     double? wasteMaterial,
     double? wasteMetal,
     double? wasteAccessory,
+    String? vocRegion,
   }) {
     return ProjectInfo(
       projectName: projectName ?? this.projectName,
@@ -86,6 +91,7 @@ class ProjectInfo {
       wasteMaterial: wasteMaterial ?? this.wasteMaterial,
       wasteMetal: wasteMetal ?? this.wasteMetal,
       wasteAccessory: wasteAccessory ?? this.wasteAccessory,
+      vocRegion: vocRegion ?? this.vocRegion,
     );
   }
 
@@ -104,6 +110,7 @@ class ProjectInfo {
         wasteMaterial: wasteMaterial,
         wasteMetal: wasteMetal,
         wasteAccessory: wasteAccessory,
+        vocRegion: vocRegion,
       );
 
   @override
@@ -123,7 +130,8 @@ class ProjectInfo {
           stateCounty == other.stateCounty &&
           wasteMaterial == other.wasteMaterial &&
           wasteMetal == other.wasteMetal &&
-          wasteAccessory == other.wasteAccessory;
+          wasteAccessory == other.wasteAccessory &&
+          vocRegion == other.vocRegion;
 
   @override
   int get hashCode => Object.hash(
@@ -132,5 +140,6 @@ class ProjectInfo {
         warrantyYears, climateZone, designWindSpeed,
         requiredRValue, stateCounty,
         wasteMaterial, wasteMetal, wasteAccessory,
+        vocRegion,
       );
 }
