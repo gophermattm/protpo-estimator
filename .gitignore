@@ -7,6 +7,9 @@
 .buildlog/
 .history
 
+# Firebase CLI local deploy cache
+.firebase/
+
 
 
 # Flutter repo-specific

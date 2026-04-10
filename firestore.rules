@@ -1,0 +1,63 @@
+rules_version = '2';
+
+// ProTPO Firestore security rules.
+//
+// NOTE: The Flutter client does not currently use Firebase Auth. These rules
+// therefore cannot require `request.auth != null` without breaking the app.
+// What they do instead:
+//   1. Leave protpo_projects and protpo_settings readable/writable by
+//      anyone who can reach the Firebase project (client access is needed
+//      for the unauthenticated app to function).
+//   2. Apply lightweight payload validation so a drive-by attacker can't
+//      replace documents with garbage or balloon them beyond sane sizes.
+//   3. Fully DENY client access to qxo_auth and qxo_price_cache. Those
+//      collections are only read/written by Firebase Cloud Functions using
+//      the Admin SDK, which bypasses these rules entirely.
+//   4. Default-deny everything else.
+//
+// TODO: When Firebase Auth (anonymous or email) is wired into the Flutter
+// client, tighten protpo_projects and protpo_settings to `if request.auth != null`
+// and scope ownership by request.auth.uid.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── ProTPO project documents ──────────────────────────────────────────
+    // Used by FirestoreService.save / load / list. Unauthenticated client.
+    match /protpo_projects/{docId} {
+      allow read: if true;
+      allow create, update: if
+        request.resource.data.keys().hasAny(['projectName', 'savedAt']) &&
+        request.resource.size() < 900 * 1024;  // < 900KB, below Firestore 1MB limit
+      allow delete: if true;
+    }
+
+    // ── Company profile + logo ───────────────────────────────────────────
+    // Used by FirestoreService.saveCompanyProfile / saveCompanyLogo.
+    // Logo is stored base64 in a document — cap at 900KB to protect the
+    // 1MB-per-document Firestore limit.
+    match /protpo_settings/{docId} {
+      allow read: if true;
+      allow create, update: if request.resource.size() < 900 * 1024;
+      allow delete: if true;
+    }
+
+    // ── QXO authentication tokens ────────────────────────────────────────
+    // Server-side only. Cloud Functions use the Admin SDK and bypass rules.
+    // Client has no reason to ever touch this collection.
+    match /qxo_auth/{docId} {
+      allow read, write: if false;
+    }
+
+    // ── QXO pricing cache ────────────────────────────────────────────────
+    // Server-side only, same reason as qxo_auth.
+    match /qxo_price_cache/{docId} {
+      allow read, write: if false;
+    }
+
+    // ── Default deny ─────────────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
