@@ -6,7 +6,7 @@
 ///   - SectionDot       — green/amber/gray completion indicator for left panel headers
 ///   - AppSnackbar      — consistent success/error/info feedback
 ///   - BomEmptyState    — context-aware empty state for BOM tab
-///   - BlockerBanner    — red banner for BLOCKER messages
+///   - BlockerBanner    — red banner for REQUIRED messages
 ///   - WarningBanner    — amber banner for WARNING messages
 ///   - UnsavedDot       — small indicator that project has unsaved changes
 ///   - SkeletonRow      — shimmer-style placeholder row for loading states
@@ -163,10 +163,10 @@ class BomEmptyState extends StatelessWidget {
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: AppTheme.primary.withOpacity(0.08),
+            color: AppTheme.primary.withValues(alpha:0.08),
             shape: BoxShape.circle,
           ),
-          child: Icon(icon, size: 32, color: AppTheme.primary.withOpacity(0.6)),
+          child: Icon(icon, size: 32, color: AppTheme.primary.withValues(alpha:0.6)),
         ),
         const SizedBox(height: 14),
         Text(title,
@@ -191,7 +191,7 @@ class BomEmptyState extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// BLOCKER & WARNING BANNERS
+// REQUIRED & WARNING BANNERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Renders a list of BOM warnings with correct visual hierarchy:
@@ -228,7 +228,7 @@ class _BomWarningListState extends State<BomWarningList> {
         message: b.replaceFirst('BLOCKER: ', ''),
         color:   AppTheme.error,
         icon:    Icons.block,
-        prefix:  'BLOCKER',
+        prefix:  'REQUIRED',
       )),
       if (showAll) ...[
         ...warnings.map((w) => _Banner(
@@ -250,9 +250,9 @@ class _BomWarningListState extends State<BomWarningList> {
             margin: const EdgeInsets.only(top: 4),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: AppTheme.warning.withOpacity(0.08),
+              color: AppTheme.warning.withValues(alpha:0.08),
               borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: AppTheme.warning.withOpacity(0.25)),
+              border: Border.all(color: AppTheme.warning.withValues(alpha:0.25)),
             ),
             child: Row(children: [
               Icon(Icons.warning_amber_outlined, size: 14, color: AppTheme.warning),
@@ -286,9 +286,9 @@ class _Banner extends StatelessWidget {
     margin: const EdgeInsets.only(bottom: 6),
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
     decoration: BoxDecoration(
-      color: color.withOpacity(0.07),
+      color: color.withValues(alpha:0.07),
       borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: color.withOpacity(0.3)),
+      border: Border.all(color: color.withValues(alpha:0.3)),
     ),
     child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Icon(icon, size: 15, color: color),

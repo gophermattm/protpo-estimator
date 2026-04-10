@@ -119,6 +119,7 @@ class BomCalculator {
     final wMet  = projectInfo.wasteMetal;      // e.g. 0.05
     final wAcc  = projectInfo.wasteAccessory;  // e.g. 0.05
     final vocSuffix = projectInfo.vocRegion != 'Standard' ? ' (Low-VOC)' : '';
+    final taperMaxIn = boardSchedule?.maxThicknessAtRidge ?? 0.0;
 
     final totalArea      = geometry.totalArea;
     final fieldArea      = geometry.windZones.fieldZoneArea;
@@ -316,8 +317,8 @@ class BomCalculator {
               category: 'Insulation',
               name: 'Tapered Polyiso — Panel $letter (${taper.manufacturer} ${taper.taperRate})',
               orderQty: orderQty,
-              unit: 'panels',
-              notes: "4'×4' tapered panels, ${taper.attachmentMethod}",
+              unit: 'boards',
+              notes: "4'×4' tapered boards, ${taper.attachmentMethod}",
               trace: BomTrace(
                 baseDescription: '$count panels (Panel $letter) from board schedule',
                 baseQty: count.toDouble(),
@@ -438,7 +439,7 @@ class BomCalculator {
       final orderQty = (withW / boxSize).ceil().toDouble();
 
       final fastenerName = _fastenerName(systemSpecs.deckType);
-      final memStackIn   = _stackThicknessIn(insulation, 3);
+      final memStackIn   = _stackThicknessIn(insulation, 3, taperMaxThickness: taperMaxIn);
       final memFastLen   = _selectFastenerLen(systemSpecs.deckType, memStackIn);
 
       items.add(BomLineItem(
@@ -556,7 +557,7 @@ class BomCalculator {
       ));
 
       // ── Fasteners for Rhinobond plates (one per plate, through insulation to deck) ─
-      final memStackIn   = _stackThicknessIn(insulation, 3);
+      final memStackIn   = _stackThicknessIn(insulation, 3, taperMaxThickness: taperMaxIn);
       final rbFastName   = _fastenerName(systemSpecs.deckType);
       final rbFastLen    = _selectFastenerLen(systemSpecs.deckType, memStackIn);
       const rbFastBox    = 500.0;
@@ -710,9 +711,74 @@ class BomCalculator {
         ));
       }
 
+      // Tapered insulation MA: fastener passes through flat layers + tapered max
+      final taperMA = insulation.hasTaper &&
+          insulation.taperDefaults != null &&
+          insulation.taperDefaults!.attachmentMethod == 'Mechanically Attached' &&
+          taperMaxIn > 0;
+      if (taperMA) {
+        // Stack = flat layers + tapered max thickness (no cover board)
+        double taperStackIn = 0;
+        if (insulation.numberOfLayers >= 1) taperStackIn += insulation.layer1.thickness;
+        if (insulation.numberOfLayers == 2 && insulation.layer2 != null) taperStackIn += insulation.layer2!.thickness;
+        taperStackIn += taperMaxIn;
+        final taperLen  = _selectFastenerLen(systemSpecs.deckType, taperStackIn);
+        final taperSF   = boardSchedule?.totalTaperedSF ?? totalArea;
+        final base      = taperSF * insDensity;
+        final withW     = base * (1 + wAcc);
+        final orderQty  = (withW / insBoxSize).ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Fasteners & Plates',
+          name: '${_fastenerName(systemSpecs.deckType)} $taperLen — Tapered Insulation (max)',
+          orderQty: orderQty,
+          unit: 'boxes',
+          notes: '500/box — sized for max thickness ${_ins(taperMaxIn)} at ridge',
+          trace: BomTrace(
+            baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ 500/box',
+            baseQty: base,
+            wastePercent: wAcc,
+            withWaste: withW,
+            packageSize: insBoxSize,
+            orderQty: orderQty,
+            breakdown: [
+              _fastenerBreakdown(systemSpecs.deckType, taperStackIn, 'Tapered ISO fastener (at max thickness)'),
+              'Note: Fastener length based on max taper thickness ${_ins(taperMaxIn)} at ridge',
+              '${_sf(taperSF)} tapered area × $insDensity/sf = ${base.toStringAsFixed(0)} fasteners',
+              'Waste: ${_pct(wAcc)}%',
+              'ORDER QTY: ${orderQty.toInt()} boxes (500/box)',
+            ],
+          ),
+        ));
+
+        // Insulation plates for tapered — one plate per fastener
+        const taperPlateBoxSize = 1000.0;
+        final taperPlateOrder = (withW / taperPlateBoxSize).ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Fasteners & Plates',
+          name: '3" Insulation Plates — Tapered Insulation',
+          orderQty: taperPlateOrder,
+          unit: 'boxes',
+          notes: '1,000/box — one plate per tapered insulation fastener',
+          trace: BomTrace(
+            baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/box',
+            baseQty: base,
+            wastePercent: wAcc,
+            withWaste: withW,
+            packageSize: taperPlateBoxSize,
+            orderQty: taperPlateOrder,
+            breakdown: [
+              'One 3" galv plate per tapered insulation fastener',
+              '${_sf(taperSF)} tapered area × $insDensity/sf = ${base.toStringAsFixed(0)} plates',
+              'Waste: ${_pct(wAcc)}%',
+              'ORDER QTY: ${taperPlateOrder.toInt()} boxes (1,000/box)',
+            ],
+          ),
+        ));
+      }
+
       // Cover board MA: passes through cover board + insulation stack
       if (cbMA) {
-        final cbStackIn = _stackThicknessIn(insulation, 3); // full stack
+        final cbStackIn = _stackThicknessIn(insulation, 3, taperMaxThickness: taperMaxIn); // full stack
         final cbLen     = _selectFastenerLen(systemSpecs.deckType, cbStackIn);
         final base      = totalArea * insDensity;
         final withW     = base * (1 + wAcc);
@@ -2123,16 +2189,25 @@ class BomCalculator {
     return '$purpose: ${parts.join(' + ')} = ${_fmtIn(r.minNeeded)} min → ${r.label}';
   }
 
-  /// Total insulation stack thickness in inches (all MA + adhered layers + cover board).
+  /// Total insulation stack thickness in inches (all MA + adhered layers +
+  /// tapered insulation + cover board).
   /// [throughLayer] controls how deep the fastener must pass:
   ///   1 = only layer 1 (insulation fastener for layer 1)
   ///   2 = layer 1 + layer 2 (insulation fastener for layer 2)
-  ///   3 = full stack incl. cover board (membrane/Rhinobond fastener)
-  static double _stackThicknessIn(InsulationSystem ins, int throughLayer) {
+  ///   3 = full stack incl. tapered + cover board (membrane/Rhinobond fastener)
+  /// [taperMaxThickness] is the max tapered insulation thickness at the ridge
+  /// (from BoardScheduleResult.maxThicknessAtRidge). When present, fasteners
+  /// must be long enough for the worst-case (thickest) point on the roof.
+  static double _stackThicknessIn(InsulationSystem ins, int throughLayer,
+      {double taperMaxThickness = 0}) {
     double t = 0;
     if (throughLayer >= 1 && ins.numberOfLayers >= 1) t += ins.layer1.thickness;
     if (throughLayer >= 2 && ins.numberOfLayers == 2 && ins.layer2 != null) {
       t += ins.layer2!.thickness;
+    }
+    // Tapered insulation sits on top of flat layers, below cover board
+    if (throughLayer >= 3 && ins.hasTaper && taperMaxThickness > 0) {
+      t += taperMaxThickness;
     }
     if (throughLayer >= 3 && ins.hasCoverBoard && ins.coverBoard != null) {
       t += ins.coverBoard!.thickness;

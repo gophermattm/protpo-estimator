@@ -16,7 +16,10 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_theme.dart';
 import '../models/roof_geometry.dart';
+import '../models/drainage_zone.dart';
+import '../models/section_models.dart';
 import '../providers/estimator_providers.dart';
+import '../data/board_schedules.dart';
 
 // ─── EDGE TYPE COLORS ─────────────────────────────────────────────────────────
 
@@ -45,7 +48,16 @@ class RoofRenderer extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final geo = ref.watch(roofGeometryProvider);
     if (geo.shapes.isEmpty || geo.totalArea <= 0) return _emptyState();
-    return _RendererBody(geo: geo, maxWidth: maxWidth);
+    final metalScope = ref.watch(metalScopeProvider);
+    final parapet = ref.watch(parapetWallsProvider);
+    // Coping is active when copingLF is populated AND parapet fields are filled
+    final copingActive = metalScope.copingLF > 0 &&
+        parapet.hasParapetWalls && parapet.parapetHeight > 0 && parapet.parapetTotalLF > 0;
+    final copingWidthFt = copingActive
+        ? (double.tryParse(metalScope.copingWidth.replaceAll('"', '')) ?? 12) / 12
+        : 0.0;
+    return _RendererBody(geo: geo, maxWidth: maxWidth,
+        copingWidthFt: copingWidthFt, copingActive: copingActive);
   }
 
   Widget _emptyState() => Container(
@@ -71,7 +83,10 @@ class RoofRenderer extends ConsumerWidget {
 class _RendererBody extends ConsumerStatefulWidget {
   final RoofGeometry geo;
   final double?      maxWidth;
-  const _RendererBody({required this.geo, this.maxWidth});
+  final double       copingWidthFt;
+  final bool         copingActive;
+  const _RendererBody({required this.geo, this.maxWidth,
+      this.copingWidthFt = 0.0, this.copingActive = false});
 
   @override
   ConsumerState<_RendererBody> createState() => _RendererBodyState();
@@ -100,6 +115,22 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
   @override
   Widget build(BuildContext context) {
     final geo = widget.geo;
+    final watershedZones = ref.watch(watershedZonesProvider);
+    final insulation = ref.watch(insulationSystemProvider);
+    final showWatershed = insulation.hasTaper && watershedZones.isNotEmpty;
+
+    // Look up panel sequence for banding visualization
+    PanelSequence? panelSequence;
+    double minThickness = 1.0;
+    if (showWatershed && insulation.taperDefaults != null) {
+      final d = insulation.taperDefaults!;
+      panelSequence = lookupPanelSequence(
+        manufacturer: d.manufacturer,
+        taperRate: d.taperRate,
+        profileType: d.profileType,
+      );
+      minThickness = d.minThickness;
+    }
 
     return LayoutBuilder(builder: (ctx, constraints) {
       final availWidth =
@@ -169,19 +200,16 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: AppTheme.border),
               ),
-              child: InteractiveViewer(
-                transformationController: _xfCtrl,
-                minScale: 0.5,
-                maxScale: 4.0,
-                onInteractionEnd: (d) =>
-                    setState(() => _zoom = _xfCtrl.value.getMaxScaleOnAxis()),
-                child: GestureDetector(
-                  onTapUp: (d) {
-                    // Adjust tap for current zoom/pan transform
-                    final Matrix4 inv = Matrix4.inverted(_xfCtrl.value);
-                    final tf = MatrixUtils.transformPoint(inv, d.localPosition);
-                    _onTap(tf, bounds, scale, labelPad, geo);
-                  },
+              // Stack: InteractiveViewer for zoom/pan, transparent Listener
+              // on top for tap-to-place drains. Listener bypasses gesture
+              // disambiguation so taps always register on Flutter web.
+              child: Stack(children: [
+                InteractiveViewer(
+                  transformationController: _xfCtrl,
+                  minScale: 0.5,
+                  maxScale: 4.0,
+                  onInteractionEnd: (d) =>
+                      setState(() => _zoom = _xfCtrl.value.getMaxScaleOnAxis()),
                   child: CustomPaint(
                     size: Size(availWidth, canvasH),
                     painter: _RoofPainter(
@@ -191,10 +219,32 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
                       offset:    Offset(labelPad, labelPad),
                       windZones: geo.windZones,
                       drains:    geo.drainLocations,
+                      scuppers:  geo.scupperLocations,
+                      showWatershed: showWatershed,
+                      lowPointCount: geo.drainLocations.length +
+                          geo.scupperLocations.length,
+                      panelSequence: panelSequence,
+                      taperMinThickness: minThickness,
+                      copingWidthFt: widget.copingWidthFt,
+                      copingActive: widget.copingActive,
                     ),
                   ),
                 ),
-              ),
+                // Transparent tap layer — captures single taps for drain placement
+                Positioned.fill(
+                  child: Listener(
+                    behavior: HitTestBehavior.translucent,
+                    onPointerUp: (event) {
+                      // Use pointer position directly in container coordinates,
+                      // then apply inverse zoom/pan to get canvas coordinates.
+                      final Matrix4 inv = Matrix4.inverted(_xfCtrl.value);
+                      final canvasPos = MatrixUtils.transformPoint(
+                          inv, event.localPosition);
+                      _onTap(canvasPos, bounds, scale, labelPad, geo);
+                    },
+                  ),
+                ),
+              ]),
             ),
           ),
         ),
@@ -204,18 +254,20 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
           _edgeTypeLegend(usedTypes.toList()..sort()),
         ],
 
-        if (_showDrainHint && geo.drainLocations.isEmpty)
+        if (_showDrainHint && geo.drainLocations.isEmpty && geo.scupperLocations.isEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Row(children: [
               Icon(Icons.touch_app, size: 13, color: AppTheme.textMuted),
               const SizedBox(width: 5),
-              Text('Tap the roof plan to place drains.',
-                  style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+              Expanded(child: Text(
+                'Tap inside the roof for internal drains. Tap near an edge to place a scupper.',
+                style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
+              )),
             ]),
           ),
 
-        if (geo.drainLocations.isNotEmpty) ...[
+        if (geo.drainLocations.isNotEmpty || geo.scupperLocations.isNotEmpty) ...[
           const SizedBox(height: 8),
           _drainList(geo),
         ],
@@ -249,9 +301,15 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
     final roofY = (tapPos.dy - labelPad) / scale + bounds.top;
     final notifier = ref.read(estimatorProvider.notifier);
 
+    // Size removal/edge thresholds proportional to building dimensions
+    final maxDim = max(bounds.width, bounds.height);
+    final removeRadius = max(1.5, maxDim * 0.03); // 3% of max dim, min 1.5 ft
+    final edgeThreshold = max(3.0, maxDim * 0.06); // 6% of max dim, min 3 ft
+
+    // Check existing drains for removal
     for (int i = 0; i < geo.drainLocations.length; i++) {
       final d = geo.drainLocations[i];
-      if (sqrt(pow(d.x - roofX, 2) + pow(d.y - roofY, 2)) < 2.0) {
+      if (sqrt(pow(d.x - roofX, 2) + pow(d.y - roofY, 2)) < removeRadius) {
         notifier.removeDrain(i);
         return;
       }
@@ -259,9 +317,63 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
 
     final primaryPoly = _buildPolygon(geo.shapes.first);
     if (primaryPoly == null) return;
+
+    // Check existing scuppers for removal
+    for (int i = 0; i < geo.scupperLocations.length; i++) {
+      final s = geo.scupperLocations[i];
+      if (s.edgeIndex >= primaryPoly.length) continue;
+      final a = primaryPoly[s.edgeIndex];
+      final b = primaryPoly[(s.edgeIndex + 1) % primaryPoly.length];
+      final sx = a.dx + (b.dx - a.dx) * s.position;
+      final sy = a.dy + (b.dy - a.dy) * s.position;
+      if (sqrt(pow(sx - roofX, 2) + pow(sy - roofY, 2)) < removeRadius) {
+        notifier.removeScupper(i);
+        return;
+      }
+    }
+
+    // Find nearest polygon edge to tap position
+    int nearestEdgeIdx = -1;
+    double nearestEdgeDist = double.infinity;
+    double nearestEdgePos = 0.0;
+    for (int i = 0; i < primaryPoly.length; i++) {
+      final a = primaryPoly[i];
+      final b = primaryPoly[(i + 1) % primaryPoly.length];
+      final (dist, pos) = _pointToSegment(Offset(roofX, roofY), a, b);
+      if (dist < nearestEdgeDist) {
+        nearestEdgeDist = dist;
+        nearestEdgeIdx = i;
+        nearestEdgePos = pos;
+      }
+    }
+
+    // If tap is close to an edge, place a scupper there
+    if (nearestEdgeIdx >= 0 && nearestEdgeDist < edgeThreshold) {
+      notifier.addScupper(ScupperLocation(
+        edgeIndex: nearestEdgeIdx,
+        position: nearestEdgePos,
+      ));
+      setState(() => _showDrainHint = false);
+      return;
+    }
+
+    // Otherwise place an internal drain (must be inside polygon bounds)
     if (!_computeBounds(primaryPoly).contains(Offset(roofX, roofY))) return;
     notifier.addDrain(DrainLocation(x: roofX, y: roofY));
     setState(() => _showDrainHint = false);
+  }
+
+  /// Returns (distance from point to segment, parameter t where 0=a, 1=b).
+  (double, double) _pointToSegment(Offset p, Offset a, Offset b) {
+    final dx = b.dx - a.dx;
+    final dy = b.dy - a.dy;
+    final lenSq = dx * dx + dy * dy;
+    if (lenSq < 1e-9) return ((p - a).distance, 0.0);
+    final t = (((p.dx - a.dx) * dx + (p.dy - a.dy) * dy) / lenSq).clamp(0.0, 1.0);
+    final closestX = a.dx + dx * t;
+    final closestY = a.dy + dy * t;
+    final dist = sqrt(pow(p.dx - closestX, 2) + pow(p.dy - closestY, 2));
+    return (dist, t);
   }
 
   Widget _zoneLegend(RoofGeometry geo) => Wrap(spacing: 12, runSpacing: 6, children: [
@@ -269,6 +381,7 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
     _chip('Perimeter Zone', _kPerimColor,  _kOutlineColor),
     _chip('Corner Zone',    _kCornerColor, Colors.white),
     if (geo.drainLocations.isNotEmpty) _chip('Drain', _kDrainColor, Colors.white),
+    if (geo.scupperLocations.isNotEmpty) _chip('Scupper', const Color(0xFF8B5CF6), Colors.white),
   ]);
 
   Widget _chip(String label, Color fill, Color textColor) => Row(
@@ -279,7 +392,7 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
         decoration: BoxDecoration(
           color: fill,
           borderRadius: BorderRadius.circular(3),
-          border: Border.all(color: _kOutlineColor.withOpacity(0.3)),
+          border: Border.all(color: _kOutlineColor.withValues(alpha:0.3)),
         ),
       ),
       const SizedBox(width: 5),
@@ -323,9 +436,9 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
-            color: _kDrainColor.withOpacity(0.1),
+            color: _kDrainColor.withValues(alpha:0.1),
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: _kDrainColor.withOpacity(0.3)),
+            border: Border.all(color: _kDrainColor.withValues(alpha:0.3)),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(Icons.water_drop, size: 12, color: _kDrainColor),
@@ -337,6 +450,27 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
             GestureDetector(
               onTap: () => ref.read(estimatorProvider.notifier).removeDrain(i),
               child: Icon(Icons.close, size: 12, color: _kDrainColor),
+            ),
+          ]),
+        ),
+      for (int i = 0; i < geo.scupperLocations.length; i++)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFF8B5CF6).withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: const Color(0xFF8B5CF6).withValues(alpha: 0.3)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.arrow_outward, size: 12, color: const Color(0xFF8B5CF6)),
+            const SizedBox(width: 4),
+            Text('Scupper ${i + 1} (edge ${geo.scupperLocations[i].edgeIndex + 1})',
+                style: TextStyle(fontSize: 11, color: const Color(0xFF8B5CF6),
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: () => ref.read(estimatorProvider.notifier).removeScupper(i),
+              child: Icon(Icons.close, size: 12, color: const Color(0xFF8B5CF6)),
             ),
           ]),
         ),
@@ -390,6 +524,13 @@ class _RoofPainter extends CustomPainter {
   final Offset              offset;
   final WindZones           windZones;
   final List<DrainLocation> drains;
+  final List<ScupperLocation> scuppers;
+  final bool                showWatershed;
+  final int                 lowPointCount;
+  final PanelSequence?      panelSequence;
+  final double              taperMinThickness;
+  final double              copingWidthFt;
+  final bool                copingActive;
 
   const _RoofPainter({
     required this.polygons,
@@ -398,15 +539,328 @@ class _RoofPainter extends CustomPainter {
     required this.offset,
     required this.windZones,
     required this.drains,
+    this.scuppers = const [],
+    this.showWatershed = false,
+    this.lowPointCount = 0,
+    this.panelSequence,
+    this.taperMinThickness = 1.0,
+    this.copingWidthFt = 0.0,
+    this.copingActive = false,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     _drawZones(canvas);
+    if (showWatershed && lowPointCount > 0) {
+      _drawWatershedRegions(canvas);
+    }
     _drawEdges(canvas);
+    if (copingActive && copingWidthFt > 0) _drawCoping(canvas);
     _drawMeasurements(canvas);
+    if (showWatershed && lowPointCount > 0) {
+      _drawFlowArrows(canvas);
+    }
     _drawDrains(canvas);
+    _drawScuppers(canvas);
     _drawCompass(canvas, size);
+  }
+
+  /// Resolves all low points (drains + scuppers) to world coordinates.
+  List<Offset> _lowPointsWorld() {
+    final pts = <Offset>[];
+    for (final d in drains) {
+      pts.add(Offset(d.x, d.y));
+    }
+    if (polygons.isNotEmpty) {
+      final primary = polygons.first.points;
+      for (final s in scuppers) {
+        if (s.edgeIndex >= primary.length) continue;
+        final a = primary[s.edgeIndex];
+        final b = primary[(s.edgeIndex + 1) % primary.length];
+        pts.add(Offset(
+          a.dx + (b.dx - a.dx) * s.position,
+          a.dy + (b.dy - a.dy) * s.position,
+        ));
+      }
+    }
+    return pts;
+  }
+
+  /// Zone base colors (used at full taper thickness — farthest point).
+  /// Drains: blue/green/orange; scuppers: purple/pink/cyan.
+  static const _zoneColorsRGB = [
+    [59, 130, 246],  // blue
+    [139, 92, 246],  // purple
+    [16, 185, 129],  // green
+    [245, 158, 11],  // orange
+    [236, 72, 153],  // pink
+    [6, 182, 212],   // cyan
+  ];
+
+  /// Draws concentric row bands per zone. Each cell is colored by the panel
+  /// letter that would be installed there (based on row = distance / 4 ft).
+  /// Multiple zones get different base hues; within each zone the bands
+  /// progress from light (near low point) to dark (ridge).
+  void _drawWatershedRegions(Canvas canvas) {
+    if (polygons.isEmpty) return;
+    final primary = polygons.first.points;
+    if (primary.length < 3) return;
+    final lows = _lowPointsWorld();
+    if (lows.isEmpty) return;
+
+    canvas.save();
+    canvas.clipPath(_polyPath(primary));
+
+    double minX = primary.first.dx, maxX = minX;
+    double minY = primary.first.dy, maxY = minY;
+    for (final p in primary) {
+      if (p.dx < minX) minX = p.dx;
+      if (p.dx > maxX) maxX = p.dx;
+      if (p.dy < minY) minY = p.dy;
+      if (p.dy > maxY) maxY = p.dy;
+    }
+    final w = maxX - minX;
+    final h = maxY - minY;
+    if (w <= 0 || h <= 0) {
+      canvas.restore();
+      return;
+    }
+
+    const panelWidthFt = 4.0;
+    const gridN = 80;
+    final stepX = w / gridN;
+    final stepY = h / gridN;
+    final cellW = stepX * scale + 2;
+    final cellH = stepY * scale + 2;
+
+    // First pass: determine per-zone max row to normalize band darkness
+    final zoneMaxRow = List.filled(lows.length, 0);
+    final nearestIdxGrid = List.generate(
+        gridN, (_) => List.filled(gridN, 0));
+    final rowGrid = List.generate(
+        gridN, (_) => List.filled(gridN, 0));
+    for (int ix = 0; ix < gridN; ix++) {
+      for (int iy = 0; iy < gridN; iy++) {
+        final cx = minX + (ix + 0.5) * stepX;
+        final cy = minY + (iy + 0.5) * stepY;
+        int nearestIdx = 0;
+        double nearestDist = _dist(cx, cy, lows[0].dx, lows[0].dy);
+        for (int i = 1; i < lows.length; i++) {
+          final d = _dist(cx, cy, lows[i].dx, lows[i].dy);
+          if (d < nearestDist) {
+            nearestDist = d;
+            nearestIdx = i;
+          }
+        }
+        final row = (nearestDist / panelWidthFt).floor();
+        nearestIdxGrid[ix][iy] = nearestIdx;
+        rowGrid[ix][iy] = row;
+        if (row > zoneMaxRow[nearestIdx]) {
+          zoneMaxRow[nearestIdx] = row;
+        }
+      }
+    }
+
+    // Second pass: draw each cell with banded color
+    for (int ix = 0; ix < gridN; ix++) {
+      for (int iy = 0; iy < gridN; iy++) {
+        final nearestIdx = nearestIdxGrid[ix][iy];
+        final row = rowGrid[ix][iy];
+        final maxRow = zoneMaxRow[nearestIdx];
+        // Discrete band intensity: each row is a distinct step
+        final rowFrac = maxRow > 0 ? (row / maxRow).clamp(0.0, 1.0) : 0.0;
+        // 25 (nearest drain) → 130 (ridge), discrete per row
+        final alpha = (25 + rowFrac * 105).round();
+        final rgb = _zoneColorsRGB[nearestIdx % _zoneColorsRGB.length];
+        final color = Color.fromARGB(alpha, rgb[0], rgb[1], rgb[2]);
+
+        final cx = minX + (ix + 0.5) * stepX;
+        final cy = minY + (iy + 0.5) * stepY;
+        final sc = _ts(cx - stepX / 2, cy - stepY / 2);
+        canvas.drawRect(
+          Rect.fromLTWH(sc.dx - 1, sc.dy - 1, cellW, cellH),
+          Paint()..color = color..style = PaintingStyle.fill,
+        );
+      }
+    }
+
+    // Third pass: draw band boundary lines between cells of different rows
+    // in the same zone (concentric ring outlines)
+    final ringPaint = Paint()
+      ..color = const Color(0xFF1E40AF).withValues(alpha: 0.35)
+      ..strokeWidth = 0.8
+      ..style = PaintingStyle.stroke;
+
+    for (int ix = 0; ix < gridN; ix++) {
+      for (int iy = 0; iy < gridN; iy++) {
+        final row = rowGrid[ix][iy];
+        final zone = nearestIdxGrid[ix][iy];
+        final cx = minX + (ix + 0.5) * stepX;
+        final cy = minY + (iy + 0.5) * stepY;
+        final sc = _ts(cx - stepX / 2, cy - stepY / 2);
+        // Check right neighbor
+        if (ix + 1 < gridN &&
+            nearestIdxGrid[ix + 1][iy] == zone &&
+            rowGrid[ix + 1][iy] != row) {
+          canvas.drawLine(
+            Offset(sc.dx + cellW - 1, sc.dy),
+            Offset(sc.dx + cellW - 1, sc.dy + cellH),
+            ringPaint,
+          );
+        }
+        // Check bottom neighbor
+        if (iy + 1 < gridN &&
+            nearestIdxGrid[ix][iy + 1] == zone &&
+            rowGrid[ix][iy + 1] != row) {
+          canvas.drawLine(
+            Offset(sc.dx, sc.dy + cellH - 1),
+            Offset(sc.dx + cellW, sc.dy + cellH - 1),
+            ringPaint,
+          );
+        }
+      }
+    }
+
+    canvas.restore();
+
+    // Draw panel letter labels per band, along the line from low point to
+    // farthest vertex in that zone. Labels drawn outside clip path so they
+    // don't get clipped by the polygon edge at shallow bands.
+    if (panelSequence != null) {
+      _drawBandLabels(canvas, primary, lows);
+    }
+  }
+
+  /// Labels each panel band with its panel letter, placed along the line from
+  /// the low point to the farthest polygon vertex in that zone.
+  void _drawBandLabels(Canvas canvas, List<Offset> primary, List<Offset> lows) {
+    final seq = panelSequence!;
+    const panelWidthFt = 4.0;
+
+    for (int i = 0; i < lows.length; i++) {
+      final lp = lows[i];
+
+      // Find farthest vertex in this zone
+      double farDist = 0;
+      Offset farVertex = lp;
+      for (final v in primary) {
+        int nearestIdx = 0;
+        double nearestDist = _dist(v.dx, v.dy, lows[0].dx, lows[0].dy);
+        for (int j = 1; j < lows.length; j++) {
+          final d = _dist(v.dx, v.dy, lows[j].dx, lows[j].dy);
+          if (d < nearestDist) {
+            nearestDist = d;
+            nearestIdx = j;
+          }
+        }
+        if (nearestIdx == i && nearestDist > farDist) {
+          farDist = nearestDist;
+          farVertex = v;
+        }
+      }
+
+      if (farDist < panelWidthFt) continue;
+
+      final numRows = (farDist / panelWidthFt).ceil();
+      // Unit vector from low point toward farthest vertex
+      final dx = farVertex.dx - lp.dx;
+      final dy = farVertex.dy - lp.dy;
+      final len = sqrt(dx * dx + dy * dy);
+      if (len < 1e-6) continue;
+      final ux = dx / len;
+      final uy = dy / len;
+
+      for (int r = 0; r < numRows; r++) {
+        final seqIdx = r % seq.panels.length;
+        final cycle = r ~/ seq.panels.length;
+        final panel = seq.panels[seqIdx];
+
+        // Midpoint of this band along the primary axis
+        final bandDist = (r + 0.5) * panelWidthFt;
+        final lx = lp.dx + ux * bandDist;
+        final ly = lp.dy + uy * bandDist;
+        final screenPos = _ts(lx, ly);
+
+        final label = cycle > 0
+            ? '${panel.letter}${cycle > 0 ? '*' : ''}' // * = flat fill cycle
+            : panel.letter;
+
+        _drawText(
+          canvas,
+          label,
+          screenPos,
+          color: const Color(0xFF1E3A8A),
+          fontSize: 10,
+          bold: true,
+        );
+      }
+    }
+  }
+
+  /// Draws flow arrows from far corners of each zone toward the low point.
+  /// Simple heuristic: use polygon vertices; each vertex gets an arrow to its
+  /// nearest low point.
+  void _drawFlowArrows(Canvas canvas) {
+    if (polygons.isEmpty) return;
+    final primary = polygons.first.points;
+    if (primary.length < 3) return;
+    final lows = _lowPointsWorld();
+    if (lows.isEmpty) return;
+
+    final arrowPaint = Paint()
+      ..color = const Color(0xFF1E40AF).withValues(alpha: 0.55)
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    for (final v in primary) {
+      int nearestIdx = 0;
+      double nearestDist = _dist(v.dx, v.dy, lows[0].dx, lows[0].dy);
+      for (int i = 1; i < lows.length; i++) {
+        final d = _dist(v.dx, v.dy, lows[i].dx, lows[i].dy);
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearestIdx = i;
+        }
+      }
+
+      // Draw a short arrow from vertex-side toward the low point
+      // Pull start a bit inward from vertex so it doesn't overlap edge
+      final target = lows[nearestIdx];
+      final dx = target.dx - v.dx;
+      final dy = target.dy - v.dy;
+      final len = sqrt(dx * dx + dy * dy);
+      if (len < 1e-6) continue;
+      final ux = dx / len;
+      final uy = dy / len;
+
+      // Start at ~20% from vertex toward target; end at ~55% (short arrow)
+      final startR = Offset(v.dx + ux * len * 0.20, v.dy + uy * len * 0.20);
+      final endR = Offset(v.dx + ux * len * 0.55, v.dy + uy * len * 0.55);
+      final s = _pt(startR);
+      final e = _pt(endR);
+      canvas.drawLine(s, e, arrowPaint);
+
+      // Arrowhead at the end — two small lines at 30° angles
+      final headLen = 5.0;
+      final ang = atan2(e.dy - s.dy, e.dx - s.dx);
+      final h1 = Offset(
+        e.dx - headLen * cos(ang - 0.5),
+        e.dy - headLen * sin(ang - 0.5),
+      );
+      final h2 = Offset(
+        e.dx - headLen * cos(ang + 0.5),
+        e.dy - headLen * sin(ang + 0.5),
+      );
+      canvas.drawLine(e, h1, arrowPaint);
+      canvas.drawLine(e, h2, arrowPaint);
+    }
+  }
+
+  double _dist(double x1, double y1, double x2, double y2) {
+    final dx = x1 - x2;
+    final dy = y1 - y2;
+    return sqrt(dx * dx + dy * dy);
   }
 
   Offset _ts(double rx, double ry) => Offset(
@@ -476,7 +930,7 @@ class _RoofPainter extends CustomPainter {
       final inset = _insetPolygon(polygons.first.points, w);
       if (inset.isNotEmpty) {
         _drawDashedPoly(canvas, inset,
-            _kOutlineColor.withOpacity(0.35), 1.0, 6, 4);
+            _kOutlineColor.withValues(alpha:0.35), 1.0, 6, 4);
       }
     }
 
@@ -498,6 +952,61 @@ class _RoofPainter extends CustomPainter {
             ..style = PaintingStyle.stroke
             ..strokeCap = StrokeCap.round,
         );
+      }
+    }
+  }
+
+  /// Draw a shaded coping strip on the OUTSIDE of Parapet-tagged edges.
+  void _drawCoping(Canvas canvas) {
+    final copingPx = copingWidthFt * scale; // convert feet → screen pixels
+    if (copingPx < 1) return;
+
+    final fillPaint = Paint()
+      ..color = const Color(0xFF6366F1).withValues(alpha:0.15) // parapet purple, light fill
+      ..style = PaintingStyle.fill;
+    final strokePaint = Paint()
+      ..color = const Color(0xFF6366F1).withValues(alpha:0.45)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+
+    for (final poly in polygons) {
+      final pts = poly.points;
+      final shape = poly.shape;
+      final n = pts.length;
+
+      // Compute centroid for outward normal
+      final screenPts = List.generate(n, (i) => _pt(pts[i]));
+      final cx = screenPts.fold(0.0, (s, p) => s + p.dx) / n;
+      final cy = screenPts.fold(0.0, (s, p) => s + p.dy) / n;
+
+      for (int i = 0; i < n; i++) {
+        final edgeType = (i < shape.edgeTypes.length) ? shape.edgeTypes[i] : 'Eave';
+        if (edgeType != 'Parapet') continue;
+
+        final a = screenPts[i];
+        final b = screenPts[(i + 1) % n];
+        final dir = b - a;
+        final dist = dir.distance;
+        if (dist < 1) continue;
+
+        // Outward normal
+        Offset norm = Offset(-dir.dy, dir.dx) / dist;
+        final mid = (a + b) / 2;
+        if ((norm.dx * (cx - mid.dx) + norm.dy * (cy - mid.dy)) > 0) {
+          norm = -norm; // flip to point outward
+        }
+
+        // Draw coping strip as a quad: a→b on inside, offset outward by copingPx
+        final ao = a + norm * copingPx;
+        final bo = b + norm * copingPx;
+        final path = Path()
+          ..moveTo(a.dx, a.dy)
+          ..lineTo(b.dx, b.dy)
+          ..lineTo(bo.dx, bo.dy)
+          ..lineTo(ao.dx, ao.dy)
+          ..close();
+        canvas.drawPath(path, fillPaint);
+        canvas.drawPath(path, strokePaint);
       }
     }
   }
@@ -576,6 +1085,82 @@ class _RoofPainter extends CustomPainter {
     }
   }
 
+  void _drawScuppers(Canvas canvas) {
+    if (polygons.isEmpty) return;
+    final primary = polygons.first.points;
+    const scupperColor = Color(0xFF8B5CF6); // purple
+
+    for (int i = 0; i < scuppers.length; i++) {
+      final s = scuppers[i];
+      if (s.edgeIndex >= primary.length) continue;
+      final a = primary[s.edgeIndex];
+      final b = primary[(s.edgeIndex + 1) % primary.length];
+
+      // Compute scupper position on edge in roof coords
+      final rx = a.dx + (b.dx - a.dx) * s.position;
+      final ry = a.dy + (b.dy - a.dy) * s.position;
+      final sc = _ts(rx, ry);
+
+      // Compute outward normal to the edge (away from polygon centroid)
+      final cx = primary.fold(0.0, (sum, p) => sum + p.dx) / primary.length;
+      final cy = primary.fold(0.0, (sum, p) => sum + p.dy) / primary.length;
+      final dx = b.dx - a.dx;
+      final dy = b.dy - a.dy;
+      final edgeLen = sqrt(dx * dx + dy * dy);
+      if (edgeLen < 1e-6) continue;
+      double nx = -dy / edgeLen;
+      double ny = dx / edgeLen;
+      // Flip if pointing toward centroid (we want outward)
+      final midToCent = Offset(cx - rx, cy - ry);
+      if (nx * midToCent.dx + ny * midToCent.dy > 0) {
+        nx = -nx;
+        ny = -ny;
+      }
+
+      // Edge direction in screen coords (perpendicular to normal)
+      // Scupper rectangle: 18px wide along edge, 10px deep outward
+      const halfW = 9.0;
+      const depth = 10.0;
+      final tx = -ny; // tangent along edge
+      final ty = nx;
+      final p1 = Offset(sc.dx + tx * halfW, sc.dy + ty * halfW);
+      final p2 = Offset(sc.dx - tx * halfW, sc.dy - ty * halfW);
+      final p3 = Offset(p2.dx + nx * depth, p2.dy + ny * depth);
+      final p4 = Offset(p1.dx + nx * depth, p1.dy + ny * depth);
+
+      final path = Path()
+        ..moveTo(p1.dx, p1.dy)
+        ..lineTo(p2.dx, p2.dy)
+        ..lineTo(p3.dx, p3.dy)
+        ..lineTo(p4.dx, p4.dy)
+        ..close();
+
+      canvas.drawPath(path, Paint()..color = Colors.white..style = PaintingStyle.fill);
+      canvas.drawPath(path,
+          Paint()
+            ..color = scupperColor
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2);
+
+      // Arrow pointing outward through the scupper (showing water flow out)
+      final arrowStart = sc;
+      final arrowEnd = Offset(sc.dx + nx * (depth + 4), sc.dy + ny * (depth + 4));
+      canvas.drawLine(
+        arrowStart,
+        arrowEnd,
+        Paint()
+          ..color = scupperColor
+          ..strokeWidth = 2
+          ..strokeCap = StrokeCap.round,
+      );
+
+      // Label
+      final labelPos = Offset(sc.dx + nx * (depth + 16), sc.dy + ny * (depth + 16));
+      _drawText(canvas, 'S${i + 1}', labelPos,
+          color: scupperColor, fontSize: 9, bold: true);
+    }
+  }
+
   void _drawCompass(Canvas canvas, Size size) {
     final cx = size.width  - 24.0;
     final cy = size.height - 24.0;
@@ -631,9 +1216,14 @@ class _RoofPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_RoofPainter old) =>
-      polygons  != old.polygons  ||
-      windZones != old.windZones ||
-      drains    != old.drains;
+      polygons          != old.polygons  ||
+      windZones         != old.windZones ||
+      drains            != old.drains    ||
+      scuppers          != old.scuppers  ||
+      showWatershed     != old.showWatershed ||
+      lowPointCount     != old.lowPointCount ||
+      panelSequence     != old.panelSequence ||
+      taperMinThickness != old.taperMinThickness;
 }
 
 // ─── TEMPLATE-BASED POLYGON WALK ─────────────────────────────────────────────

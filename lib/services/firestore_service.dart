@@ -9,6 +9,7 @@
 /// fields (projectName, customerName, savedAt, totalArea) for efficient
 /// list-view rendering without deserialising the whole document.
 
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
 import '../models/estimator_state.dart';
@@ -134,5 +135,48 @@ class FirestoreService {
       ),
     );
     return save(copied);
+  }
+
+  // ── Company Profile (user-level settings) ──────────────────────────────
+
+  static const _settingsCol = 'protpo_settings';
+  static const _profileDocId = 'company_profile';
+
+  /// Saves company profile (without logo bytes — those are stored separately).
+  Future<void> saveCompanyProfile(Map<String, dynamic> profileJson) async {
+    await _db.collection(_settingsCol).doc(_profileDocId).set({
+      ...profileJson,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Saves the logo bytes as a separate document (Firestore 1MB limit per doc).
+  Future<void> saveCompanyLogo(List<int> logoBytes) async {
+    // Store as base64 string to fit in a Firestore document
+    final base64 = base64Encode(logoBytes);
+    await _db.collection(_settingsCol).doc('company_logo').set({
+      'data': base64,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> deleteCompanyLogo() async {
+    await _db.collection(_settingsCol).doc('company_logo').delete();
+  }
+
+  /// Loads company profile JSON (without logo).
+  Future<Map<String, dynamic>?> loadCompanyProfile() async {
+    final snap = await _db.collection(_settingsCol).doc(_profileDocId).get();
+    return snap.data();
+  }
+
+  /// Loads company logo bytes.
+  Future<List<int>?> loadCompanyLogo() async {
+    final snap = await _db.collection(_settingsCol).doc('company_logo').get();
+    final data = snap.data();
+    if (data == null) return null;
+    final b64 = data['data'] as String?;
+    if (b64 == null || b64.isEmpty) return null;
+    return base64Decode(b64);
   }
 }

@@ -26,6 +26,7 @@ import '../models/insulation_system.dart';
 import '../services/platform_utils.dart';
 import '../services/r_value_calculator.dart';
 import '../services/board_schedule_calculator.dart';
+import '../services/watershed_calculator.dart';
 import '../widgets/roof_renderer.dart';
 import 'package:intl/intl.dart';
 import '../services/qxo_pricing_service.dart';
@@ -1995,7 +1996,35 @@ class _ThermalCodeTab extends ConsumerWidget {
           _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _cardHeader('Board Schedule', Icons.view_column),
             const SizedBox(height: 8),
-            _scheduleRow('Taper Distance', '${boardSchedule.rows.last.distanceEnd.toStringAsFixed(1)} ft'),
+            // Per-zone watershed breakdown
+            Consumer(builder: (context, ref, _) {
+              final zones = ref.watch(watershedZonesProvider);
+              if (zones.length < 2) return const SizedBox.shrink();
+              final drainCount = ref.watch(roofGeometryProvider).drainLocations.length;
+              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Drainage Zones (${zones.length})',
+                    style: TextStyle(fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textSecondary)),
+                const SizedBox(height: 4),
+                ...zones.asMap().entries.map((e) {
+                  final idx = e.key;
+                  final zone = e.value;
+                  final isDrain = idx < drainCount;
+                  final label = isDrain
+                      ? '  Drain ${idx + 1}'
+                      : '  Scupper ${idx - drainCount + 1}';
+                  return _scheduleRow(
+                    label,
+                    '${zone.maxDistance.toStringAsFixed(1)} ft run • '
+                        '${zone.area.toStringAsFixed(0)} sf',
+                  );
+                }),
+                const SizedBox(height: 6),
+                const Divider(height: 8),
+                const SizedBox(height: 4),
+              ]);
+            }),
             _scheduleRow('Max Thickness', '${boardSchedule.maxThicknessAtRidge.toStringAsFixed(2)}"'),
             _scheduleRow('Avg Taper Thickness', '${boardSchedule.avgTaperThickness.toStringAsFixed(2)}"'),
             const Divider(height: 16),
@@ -2164,16 +2193,23 @@ class _ThermalCodeTab extends ConsumerWidget {
     double? required,
     bool hasZip,
   ) {
+    // Derive all R-values from rResult to stay consistent with the
+    // R-Value Breakdown card below.
     final l1R = (rResult?.layer1.rValue ?? 0);
     final l2R = (rResult?.layer2?.rValue ?? 0);
     final cbR = (rResult?.coverBoard?.rValue ?? 0);
-    const memR = 0.5;
+    final memR = rResult?.membraneContribution ?? 0.5;
     final uniformR = l1R + l2R + cbR + memR;
 
-    const taperRPerInch = 5.7;
-    final minR = uniformR + (schedule.minThicknessAtDrain * taperRPerInch);
-    final avgR = uniformR + (schedule.avgTaperThickness * taperRPerInch);
-    final maxR = uniformR + (schedule.maxThicknessAtRidge * taperRPerInch);
+    final tapered = rResult?.tapered;
+    final rPerInch = tapered?.rPerInch ?? 5.7;
+    final taperMinR = (tapered?.minThickness ?? 0) * rPerInch;
+    final taperAvgR = tapered?.averageRValue ?? 0;
+    final taperMaxR = (tapered?.maxThickness ?? 0) * rPerInch;
+
+    final minR = uniformR + taperMinR;
+    final avgR = uniformR + taperAvgR;
+    final maxR = uniformR + taperMaxR;
 
     final passesMin = required == null ? null : minR >= required;
 

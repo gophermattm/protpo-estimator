@@ -233,7 +233,7 @@ class _ProjectCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppTheme.border),
         boxShadow: [BoxShadow(
-            color: Colors.black.withOpacity(0.03),
+            color: Colors.black.withValues(alpha:0.03),
             blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -244,7 +244,7 @@ class _ProjectCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(9),
               decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.08),
+                  color: AppTheme.primary.withValues(alpha:0.08),
                   borderRadius: BorderRadius.circular(8)),
               child: Icon(Icons.roofing, color: AppTheme.primary, size: 20),
             ),

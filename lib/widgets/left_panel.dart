@@ -26,6 +26,7 @@ import '../models/section_models.dart';
 import '../providers/estimator_providers.dart';
 import '../services/zip_lookup.dart';
 import '../services/firestore_service.dart';
+import '../services/r_value_calculator.dart';
 import '../models/labor_models.dart';
 
 // ─── EDGE LABELS ─────────────────────────────────────────────────────────────
@@ -622,6 +623,30 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         });
       }
     });
+    // Detect project load (new building id even at same index) → resync
+    ref.listen<String>(
+      estimatorProvider.select((s) => s.activeBuilding.id),
+      (prev, next) {
+        if (prev != null && prev != next) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _syncFromState();
+          });
+        }
+      },
+    );
+    // Detect project-info change from load (e.g. project name changed)
+    ref.listen<String>(
+      estimatorProvider.select((s) => s.projectInfo.projectName),
+      (prev, next) {
+        // On project load the name changes from the default; resync text
+        // fields to pick up the loaded values.
+        if (prev != null && prev != next) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _syncFromState();
+          });
+        }
+      },
+    );
 
     return LayoutBuilder(builder: (context, constraints) {
     _panelWidth = constraints.maxWidth;
@@ -1359,6 +1384,27 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       }),
       if (_hasTapered) ...[
         _sp10,
+        // Guidance: explain flat layer + taper relationship
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFEF3C7),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: const Color(0xFFFCD34D)),
+          ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(Icons.info_outline, size: 14, color: const Color(0xFFD97706)),
+            const SizedBox(width: 6),
+            Expanded(child: Text(
+              'Tapered panels are installed on top of the flat insulation layers above. '
+              'The flat layers provide the base R-value; tapered panels add slope to drains. '
+              'Fastener lengths are calculated for the full stack (flat + tapered + cover board). '
+              'Place drains on the roof plan to generate the board schedule.',
+              style: TextStyle(fontSize: 11, color: const Color(0xFF92400E), height: 1.3),
+            )),
+          ]),
+        ),
+        _sp8,
         Container(padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(color: AppTheme.surfaceAlt, borderRadius: BorderRadius.circular(7),
               border: Border.all(color: AppTheme.border)),
@@ -1391,6 +1437,8 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
               setState(() => _taperAttachment = v!); pushTaper(); }),
           ]),
         ),
+        _sp8,
+        _buildTaperRecommendation(),
       ],
 
       _sp12,
@@ -1487,6 +1535,109 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       ],
     ]);
   }
+
+  /// Shows R-value recommendation when tapered insulation is active.
+  /// Breaks down: taper contribution (avg), flat layer contribution, gap to code.
+  Widget _buildTaperRecommendation() {
+    // Single source of truth: rValueResultProvider. This ensures the left
+    // panel, the Thermal & Code hero, and the R-Value Breakdown all show
+    // identical numbers.
+    final rResult = ref.watch(rValueResultProvider);
+    final info = ref.watch(projectInfoProvider);
+    final reqR = info.requiredRValue;
+    final insul = ref.watch(insulationSystemProvider);
+
+    final flatR = (rResult?.layer1.rValue ?? 0) + (rResult?.layer2?.rValue ?? 0);
+    final cbR = rResult?.coverBoard?.rValue ?? 0;
+    final memR = rResult?.membraneContribution ?? 0.5;
+
+    final tapered = rResult?.tapered;
+    final hasBoardSchedule = tapered != null;
+    final rPerInch = tapered?.rPerInch ?? 5.7;
+    final taperMinR = (tapered?.minThickness ?? 0) * rPerInch;
+    final taperAvgR = tapered?.averageRValue ?? 0;
+
+    final totalAvgR = flatR + taperAvgR + cbR + memR;
+    final totalMinR = flatR + taperMinR + cbR + memR;
+
+    // What flat R is needed to meet code at the minimum point (drain)?
+    final neededFlatR = reqR != null ? (reqR - taperMinR - cbR - memR) : null;
+    final flatGap = neededFlatR != null ? neededFlatR - flatR : null;
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppTheme.primary.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.15)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('TAPERED ASSEMBLY R-VALUE',
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                color: AppTheme.textMuted, letterSpacing: 0.5)),
+        const SizedBox(height: 6),
+
+        _taperRRow('Flat layers', 'R-${flatR.toStringAsFixed(1)}'),
+        _taperRRow('Taper ${hasBoardSchedule ? "(avg)" : "(est)"}',
+            'R-${taperAvgR.toStringAsFixed(1)}'),
+        if (cbR > 0) _taperRRow('Cover board', 'R-${cbR.toStringAsFixed(1)}'),
+        _taperRRow('Membrane', 'R-${memR.toStringAsFixed(1)}'),
+        const Divider(height: 12),
+        _taperRRow('Total (avg)', 'R-${totalAvgR.toStringAsFixed(1)}', bold: true),
+        _taperRRow('Total (min @ drain)', 'R-${totalMinR.toStringAsFixed(1)}'),
+
+        if (reqR != null) ...[
+          const SizedBox(height: 6),
+          _taperRRow('Code required', 'R-${reqR.toStringAsFixed(0)}'),
+          if (flatGap != null && flatGap > 0.5) ...[
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: AppTheme.warning.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                'Flat layers need R-${neededFlatR!.toStringAsFixed(1)} to meet code at drain. '
+                'Current flat layers provide R-${flatR.toStringAsFixed(1)} — '
+                'add ${flatGap.toStringAsFixed(1)} R. '
+                'Consider ${(neededFlatR / 5.7).toStringAsFixed(1)}" total polyiso.',
+                style: TextStyle(fontSize: 10, color: AppTheme.warning, height: 1.3),
+              ),
+            ),
+          ] else if (flatGap != null && flatGap <= 0.5) ...[
+            const SizedBox(height: 4),
+            Row(children: [
+              Icon(Icons.check_circle, size: 12, color: AppTheme.accent),
+              const SizedBox(width: 4),
+              Text('Meets code requirement at drain',
+                  style: TextStyle(fontSize: 10, color: AppTheme.accent)),
+            ]),
+          ],
+        ],
+
+        if (!hasBoardSchedule) ...[
+          const SizedBox(height: 6),
+          Text('Place drains on roof plan for exact taper R-values.',
+              style: TextStyle(fontSize: 10, color: AppTheme.textMuted, fontStyle: FontStyle.italic)),
+        ],
+      ]),
+    );
+  }
+
+  Widget _taperRRow(String label, String value, {bool bold = false}) => Padding(
+    padding: const EdgeInsets.only(bottom: 2),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary,
+            fontWeight: bold ? FontWeight.w600 : FontWeight.normal)),
+        Text(value, style: TextStyle(fontSize: 11,
+            fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
+            color: bold ? AppTheme.primary : AppTheme.textPrimary)),
+      ],
+    ),
+  );
 
   // ─── MEMBRANE ─────────────────────────────────────────────────────────────────
   Widget _buildMembrane() {

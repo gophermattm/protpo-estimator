@@ -29,6 +29,7 @@ import '../services/validation_engine.dart';
 import '../services/qxo_pricing_service.dart';
 import '../services/drain_distance_calculator.dart';
 import '../services/board_schedule_calculator.dart';
+import '../services/watershed_calculator.dart';
 import '../models/labor_models.dart';
 
 // ─── ROOT PROVIDER ────────────────────────────────────────────────────────────
@@ -212,37 +213,33 @@ final rValueValidationProvider = Provider<List<ValidationMessage>>((ref) {
 final boardScheduleProvider = Provider<BoardScheduleResult?>((ref) {
   final insulation = ref.watch(insulationSystemProvider);
   final geo = ref.watch(roofGeometryProvider);
+  return _computeBoardSchedule(geo, insulation);
+});
 
-  if (!insulation.hasTaper || insulation.taperDefaults == null) return null;
-  if (geo.drainLocations.isEmpty) return null;
+/// Watershed zones for the active building — one per drain/scupper when
+/// tapered insulation is active. Used by the UI to show per-zone breakdown.
+final watershedZonesProvider = Provider<List<ZoneWatershed>>((ref) {
+  final insulation = ref.watch(insulationSystemProvider);
+  final geo = ref.watch(roofGeometryProvider);
 
-  // Build polygon vertices from primary shape
+  if (!insulation.hasTaper) return [];
+  if (geo.drainLocations.isEmpty && geo.scupperLocations.isEmpty) return [];
+
   final primaryShape = geo.shapes.isNotEmpty ? geo.shapes.first : null;
-  if (primaryShape == null) return null;
+  if (primaryShape == null) return [];
   final vertices = _buildPolygonVertices(primaryShape);
-  if (vertices.isEmpty) return null;
+  if (vertices.isEmpty) return [];
 
-  // Compute taper distance from drains to farthest polygon vertex
-  final distance = DrainDistanceCalculator.bestTaperDistance(
+  final lowPoints = <Offset>[
+    ...geo.drainLocations.map((d) => Offset(d.x, d.y)),
+    ...geo.scupperLocations.map((s) => scupperWorldPosition(s, vertices)),
+  ];
+
+  return WatershedCalculator.computeZones(
     polygonVertices: vertices,
-    drainXs: geo.drainLocations.map((d) => d.x).toList(),
-    drainYs: geo.drainLocations.map((d) => d.y).toList(),
+    lowPoints: lowPoints,
+    totalPolygonArea: geo.totalArea,
   );
-  if (distance <= 0) return null;
-
-  // Compute roof width for panel count
-  final roofWidth = DrainDistanceCalculator.roofWidthPerpendicular(vertices);
-  if (roofWidth <= 0) return null;
-
-  final defaults = insulation.taperDefaults!;
-  return BoardScheduleCalculator.compute(BoardScheduleInput(
-    distance: distance,
-    taperRate: defaults.taperRate,
-    minThickness: defaults.minThickness,
-    manufacturer: defaults.manufacturer,
-    profileType: defaults.profileType,
-    roofWidthFt: roofWidth,
-  ));
 });
 
 /// Cross-section validation for the active building.
@@ -439,6 +436,28 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
       _updateActive(
         (b) => b.copyWith(
             roofGeometry: b.roofGeometry.copyWith(drainLocations: drains)),
+      );
+    }
+  }
+
+  void addScupper(ScupperLocation location) {
+    final scuppers = List<ScupperLocation>.from(
+        state.activeBuilding.roofGeometry.scupperLocations);
+    scuppers.add(location);
+    _updateActive(
+      (b) => b.copyWith(
+          roofGeometry: b.roofGeometry.copyWith(scupperLocations: scuppers)),
+    );
+  }
+
+  void removeScupper(int index) {
+    final scuppers = List<ScupperLocation>.from(
+        state.activeBuilding.roofGeometry.scupperLocations);
+    if (index >= 0 && index < scuppers.length) {
+      scuppers.removeAt(index);
+      _updateActive(
+        (b) => b.copyWith(
+            roofGeometry: b.roofGeometry.copyWith(scupperLocations: scuppers)),
       );
     }
   }
@@ -801,6 +820,7 @@ final allBuildingBomsProvider = Provider<List<BomResult>>((ref) {
     parapet:      b.parapetWalls,
     penetrations: b.penetrations,
     metalScope:   b.metalScope,
+    boardSchedule: _computeBoardSchedule(b.roofGeometry, b.insulationSystem),
   )).toList();
 });
 
@@ -1317,6 +1337,169 @@ final bomManualItemsProvider =
     StateProvider<List<ManualBomItem>>((ref) => []);
 
 // ─── POLYGON VERTEX BUILDER ──────────────────────────────────────────────────
+
+/// Converts a ScupperLocation (edge index + position fraction) to world
+/// coordinates using the provided polygon vertices.
+Offset scupperWorldPosition(ScupperLocation scupper, List<Offset> vertices) {
+  if (vertices.isEmpty || scupper.edgeIndex >= vertices.length) {
+    return Offset.zero;
+  }
+  final a = vertices[scupper.edgeIndex];
+  final b = vertices[(scupper.edgeIndex + 1) % vertices.length];
+  return Offset(
+    a.dx + (b.dx - a.dx) * scupper.position,
+    a.dy + (b.dy - a.dy) * scupper.position,
+  );
+}
+
+/// Computes a BoardScheduleResult for a given building's geometry and insulation.
+///
+/// Uses watershed geometry: divides the roof into drainage zones around each
+/// drain/scupper, computes a board schedule per zone, and aggregates the
+/// results. Falls back to single-zone worst-case when watershed fails or
+/// only one low point exists.
+///
+/// Returns null if taper is disabled, no low points, or no valid polygon.
+BoardScheduleResult? _computeBoardSchedule(RoofGeometry geo, InsulationSystem insulation) {
+  if (!insulation.hasTaper || insulation.taperDefaults == null) return null;
+  if (geo.drainLocations.isEmpty && geo.scupperLocations.isEmpty) return null;
+
+  final primaryShape = geo.shapes.isNotEmpty ? geo.shapes.first : null;
+  if (primaryShape == null) return null;
+  final vertices = _buildPolygonVertices(primaryShape);
+  if (vertices.isEmpty) return null;
+
+  // Combine drain and scupper world positions as low points
+  final lowPoints = <Offset>[
+    ...geo.drainLocations.map((d) => Offset(d.x, d.y)),
+    ...geo.scupperLocations.map((s) => scupperWorldPosition(s, vertices)),
+  ];
+  if (lowPoints.isEmpty) return null;
+
+  final totalArea = geo.totalArea;
+  if (totalArea <= 0) return null;
+
+  final defaults = insulation.taperDefaults!;
+
+  // Compute watershed zones
+  final zones = WatershedCalculator.computeZones(
+    polygonVertices: vertices,
+    lowPoints: lowPoints,
+    totalPolygonArea: totalArea,
+  );
+
+  if (zones.isEmpty || zones.every((z) => z.maxDistance <= 0)) {
+    // Fall back to single-zone worst-case
+    final distance = DrainDistanceCalculator.bestTaperDistance(
+      polygonVertices: vertices,
+      drainXs: lowPoints.map((p) => p.dx).toList(),
+      drainYs: lowPoints.map((p) => p.dy).toList(),
+    );
+    if (distance <= 0) return null;
+    final roofWidth = DrainDistanceCalculator.roofWidthPerpendicular(vertices);
+    if (roofWidth <= 0) return null;
+    return BoardScheduleCalculator.compute(BoardScheduleInput(
+      distance: distance,
+      taperRate: defaults.taperRate,
+      minThickness: defaults.minThickness,
+      manufacturer: defaults.manufacturer,
+      profileType: defaults.profileType,
+      roofWidthFt: roofWidth,
+    ));
+  }
+
+  // Compute per-zone schedules and aggregate
+  final zoneResults = <BoardScheduleResult>[];
+  for (final zone in zones) {
+    if (zone.maxDistance <= 0 || zone.effectiveWidth <= 0) continue;
+    final result = BoardScheduleCalculator.compute(BoardScheduleInput(
+      distance: zone.maxDistance,
+      taperRate: defaults.taperRate,
+      minThickness: defaults.minThickness,
+      manufacturer: defaults.manufacturer,
+      profileType: defaults.profileType,
+      roofWidthFt: zone.effectiveWidth,
+    ));
+    zoneResults.add(result);
+  }
+
+  if (zoneResults.isEmpty) return null;
+  if (zoneResults.length == 1) return zoneResults.first;
+
+  return _aggregateZoneResults(zoneResults, zones);
+}
+
+/// Aggregates multiple per-zone BoardScheduleResults into one combined result.
+BoardScheduleResult _aggregateZoneResults(
+    List<BoardScheduleResult> zoneResults, List<ZoneWatershed> zones) {
+  final taperedCounts = <String, int>{};
+  final flatFillCounts = <double, int>{};
+  int totalTapered = 0;
+  int totalFlatFill = 0;
+  double totalTaperedSF = 0;
+  double totalFlatFillSF = 0;
+  double maxThickness = 0;
+  double minThickness = double.infinity;
+  double weightedAvgThicknessSum = 0;
+  double totalZoneArea = 0;
+  final allWarnings = <String>{};
+
+  for (int i = 0; i < zoneResults.length; i++) {
+    final r = zoneResults[i];
+    final zone = i < zones.length ? zones[i] : null;
+    final zoneArea = zone?.area ?? 0;
+
+    r.taperedPanelCounts.forEach((letter, count) {
+      taperedCounts[letter] = (taperedCounts[letter] ?? 0) + count;
+    });
+    r.flatFillCounts.forEach((thickness, count) {
+      flatFillCounts[thickness] = (flatFillCounts[thickness] ?? 0) + count;
+    });
+    totalTapered += r.totalTaperedPanels;
+    totalFlatFill += r.totalFlatFillPanels;
+    totalTaperedSF += r.totalTaperedSF;
+    totalFlatFillSF += r.totalFlatFillSF;
+    if (r.maxThicknessAtRidge > maxThickness) {
+      maxThickness = r.maxThicknessAtRidge;
+    }
+    if (r.minThicknessAtDrain < minThickness) {
+      minThickness = r.minThicknessAtDrain;
+    }
+    weightedAvgThicknessSum += r.avgTaperThickness * zoneArea;
+    totalZoneArea += zoneArea;
+    for (final w in r.warnings) {
+      allWarnings.add(w);
+    }
+  }
+
+  final totalPanels = totalTapered + totalFlatFill;
+  // Use the waste factor from the first result (should be consistent)
+  final totalWithWaste = (totalPanels * 1.10).ceil();
+
+  final avgThickness = totalZoneArea > 0
+      ? weightedAvgThicknessSum / totalZoneArea
+      : 0.0;
+
+  // Combine all rows (for display — ordering by zone)
+  final allRows = zoneResults.expand((r) => r.rows).toList();
+
+  return BoardScheduleResult(
+    rows: allRows,
+    maxThickness: maxThickness,
+    taperedPanelCounts: taperedCounts,
+    flatFillCounts: flatFillCounts,
+    totalTaperedPanels: totalTapered,
+    totalFlatFillPanels: totalFlatFill,
+    totalPanels: totalPanels,
+    totalPanelsWithWaste: totalWithWaste,
+    totalTaperedSF: totalTaperedSF,
+    totalFlatFillSF: totalFlatFillSF,
+    minThicknessAtDrain: minThickness == double.infinity ? 0 : minThickness,
+    avgTaperThickness: avgThickness,
+    maxThicknessAtRidge: maxThickness,
+    warnings: allWarnings.toList(),
+  );
+}
 
 /// Builds polygon vertices from a RoofShape using the same turn-sequence
 /// algorithm as the roof renderer. Returns world-coordinate Offsets in feet.

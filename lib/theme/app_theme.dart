@@ -7,7 +7,8 @@ class AppTheme {
   static const Color primaryDark = Color(0xFF1E40AF);
   static const Color secondary = Color(0xFF0EA5E9);     // Sky blue
   static const Color accent = Color(0xFF10B981);        // Green (success)
-  static const Color warning = Color(0xFFF59E0B);       // Amber
+  static const Color warning = Color(0xFFD97706);       // Amber (decorative/bg)
+  static const Color warningText = Color(0xFF92400E);   // Amber dark (text on white, 6.5:1)
   static const Color error = Color(0xFFEF4444);         // Red
   
   // Neutral Colors
@@ -17,7 +18,7 @@ class AppTheme {
   static const Color border = Color(0xFFE2E8F0);
   static const Color textPrimary = Color(0xFF0F172A);
   static const Color textSecondary = Color(0xFF64748B);
-  static const Color textMuted = Color(0xFF94A3B8);
+  static const Color textMuted = Color(0xFF6B7280);
 
   // Panel Colors
   static const Color leftPanelBg = Color(0xFFFFFFFF);
@@ -94,6 +95,16 @@ class AppTheme {
           borderRadius: BorderRadius.circular(8),
           borderSide: BorderSide(color: primary, width: 2),
         ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: error, width: 2),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: error, width: 2),
+        ),
+        errorStyle: TextStyle(color: error, fontSize: 12),
+        hintStyle: TextStyle(color: textMuted),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       ),
       cardTheme: CardThemeData(

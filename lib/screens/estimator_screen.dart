@@ -8,8 +8,7 @@
 ///   button at the end. Tapping a tab calls setActiveBuilding(index).
 ///   Double-tapping a tab name lets the user rename it inline.
 
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_theme.dart';
@@ -22,6 +21,10 @@ import '../models/estimator_state.dart';
 import '../services/firestore_service.dart';
 import 'project_list_screen.dart';
 import '../services/export_service.dart';
+import '../models/labor_models.dart';
+import '../widgets/settings_dialog.dart';
+import '../services/validation_engine.dart';
+import '../services/platform_utils.dart';
 
 class EstimatorScreen extends ConsumerStatefulWidget {
   const EstimatorScreen({super.key});
@@ -43,12 +46,29 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
   void initState() {
     super.initState();
     // Warn browser before tab close if there are unsaved changes
-    html.window.onBeforeUnload.listen((event) {
-      if (_hasUnsavedChanges) {
-        (event as html.BeforeUnloadEvent).returnValue =
-            'You have unsaved changes. Are you sure you want to leave?';
+    registerBeforeUnload(() => _hasUnsavedChanges);
+    // Load company profile from Firestore
+    _loadCompanyProfile();
+  }
+
+  Future<void> _loadCompanyProfile() async {
+    try {
+      final fs = FirestoreService.instance;
+      final json = await fs.loadCompanyProfile();
+      if (json != null) {
+        var profile = CompanyProfile.fromJson(json);
+        // Load logo separately
+        final logoBytes = await fs.loadCompanyLogo();
+        if (logoBytes != null) {
+          profile = profile.copyWith(logoBytes: logoBytes);
+        }
+        if (mounted) {
+          ref.read(companyProfileProvider.notifier).state = profile;
+        }
       }
-    });
+    } catch (e) {
+      debugPrint('[Settings] Failed to load company profile: $e');
+    }
   }
 
   /// Called by ref.listen whenever state changes — triggers autosave
@@ -80,19 +100,30 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
 
   Future<void> _saveProject() async {
     if (_isSaving) return;
+    debugPrint('[SAVE] Starting save...');
     setState(() { _isSaving = true; _saveSuccess = false; });
     try {
       final state = ref.read(estimatorProvider);
+      debugPrint('[SAVE] Saving project: ${state.projectInfo.projectName}, id: $_currentProjectId');
       final id = await FirestoreService.instance.save(state, projectId: _currentProjectId);
+      debugPrint('[SAVE] Save succeeded, id: $id');
       setState(() { _currentProjectId = id; _isSaving = false; _saveSuccess = true; _hasUnsavedChanges = false; _lastSavedState = ref.read(estimatorProvider).hashCode; });
+      if (mounted) {
+        final name = state.projectInfo.projectName.isNotEmpty
+            ? state.projectInfo.projectName
+            : 'Untitled Project';
+        AppSnackbar.success(context, 'Saved "$name"');
+      }
       // Clear success badge after 2 seconds
       Future.delayed(const Duration(seconds: 2), () {
         if (mounted) setState(() => _saveSuccess = false);
       });
-    } catch (e) {
+    } catch (e, stack) {
+      debugPrint('[SAVE] Save failed: $e');
+      debugPrint('[SAVE] Stack: $stack');
       setState(() => _isSaving = false);
       if (mounted) {
-        AppSnackbar.error(context, 'Save failed: \$e');
+        AppSnackbar.error(context, 'Save failed: $e');
       }
     }
   }
@@ -110,28 +141,170 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
 
   Future<void> _export(String format) async {
     if (_isExporting) return;
+    if (format == 'csv') {
+      setState(() => _isExporting = true);
+      try {
+        final state = ref.read(estimatorProvider);
+        final bom = ref.read(bomProvider);
+        await ExportService.downloadCsv(state, bom);
+      } catch (e) {
+        if (mounted) AppSnackbar.error(context, 'Export failed: $e');
+      } finally {
+        if (mounted) setState(() => _isExporting = false);
+      }
+      return;
+    }
+
+    // PDF — ask for view type
+    final viewType = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('PDF View Type', style: TextStyle(fontSize: 16)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            leading: const Icon(Icons.engineering),
+            title: const Text('Contractor View'),
+            subtitle: const Text('Includes cost, margin, and sell price'),
+            onTap: () => Navigator.of(ctx).pop('contractor'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.person),
+            title: const Text('Customer View'),
+            subtitle: const Text('Shows only unit price and line totals'),
+            onTap: () => Navigator.of(ctx).pop('customer'),
+          ),
+        ]),
+      ),
+    );
+    if (viewType == null || !mounted) return;
+
+    // Second dialog: let user pick which pages to include
+    final sections = await _showPdfSectionsDialog();
+    if (sections == null || !mounted) return;
+
     setState(() => _isExporting = true);
     try {
-      final state  = ref.read(estimatorProvider);
-      final bom    = ref.read(bomProvider);
+      final state = ref.read(estimatorProvider);
+      final bom = ref.read(bomProvider);
       final rValue = ref.read(rValueResultProvider);
-      if (format == 'csv') {
-        await ExportService.downloadCsv(state, bom);
-      } else {
-        final logo = ref.read(companyLogoProvider);
-        await ExportService.downloadPdf(state, bom, rValue: rValue, logoBytes: logo);
-      }
+      final profile = ref.read(companyProfileProvider);
+      final pricedItems = ref.read(pricedItemsProvider);
+      final globalMargin = ref.read(globalMarginProvider);
+      final itemOverrides = ref.read(itemMarginOverridesProvider);
+      final laborItems = ref.read(laborLineItemsProvider);
+      final bomEdits = ref.read(bomLineEditsProvider);
+      final bomDeleted = ref.read(bomDeletedItemsProvider);
+      final bomManual = ref.read(bomManualItemsProvider);
+      await ExportService.downloadPdf(state, bom,
+          rValue: rValue, logoBytes: profile.logoBytes, pricedItems: pricedItems,
+          globalMargin: globalMargin, itemMarginOverrides: itemOverrides,
+          viewType: viewType,
+          laborItems: laborItems.isNotEmpty ? laborItems : null,
+          companyProfile: profile,
+          bomEdits: bomEdits, bomDeleted: bomDeleted, bomManualItems: bomManual,
+          sections: sections);
     } catch (e) {
-      if (mounted) {
-        AppSnackbar.error(context, 'Export failed: \$e');
-      }
+      if (mounted) AppSnackbar.error(context, 'Export failed: $e');
     } finally {
       if (mounted) setState(() => _isExporting = false);
     }
   }
+
+  /// Shows a dialog with checkboxes for each optional PDF page.
+  /// Returns null if cancelled, else a PdfSections with user selections.
+  Future<PdfSections?> _showPdfSectionsDialog() async {
+    bool materialsTakeoff = true;
+    bool fasteningSchedule = true;
+    bool thermalCode = true;
+    bool scopeOfWork = true;
+    bool installInstructions = true;
+
+    return showDialog<PdfSections>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Include Pages', style: TextStyle(fontSize: 16)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Text('Cover page and roof plan are always included.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey)),
+              ),
+              CheckboxListTile(
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Materials Takeoff'),
+                subtitle: const Text('BOM line items and totals',
+                    style: TextStyle(fontSize: 11)),
+                value: materialsTakeoff,
+                onChanged: (v) => setLocal(() => materialsTakeoff = v ?? false),
+              ),
+              CheckboxListTile(
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Fastening Schedule'),
+                subtitle: const Text('Fasteners & plates category in the BOM',
+                    style: TextStyle(fontSize: 11)),
+                value: fasteningSchedule,
+                onChanged: materialsTakeoff
+                    ? (v) => setLocal(() => fasteningSchedule = v ?? false)
+                    : null,
+              ),
+              CheckboxListTile(
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Thermal & Code Compliance'),
+                subtitle: const Text('R-value breakdown and code check',
+                    style: TextStyle(fontSize: 11)),
+                value: thermalCode,
+                onChanged: (v) => setLocal(() => thermalCode = v ?? false),
+              ),
+              CheckboxListTile(
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Scope of Work'),
+                subtitle: const Text('Customer-facing project narrative',
+                    style: TextStyle(fontSize: 11)),
+                value: scopeOfWork,
+                onChanged: (v) => setLocal(() => scopeOfWork = v ?? false),
+              ),
+              CheckboxListTile(
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Installation Instructions'),
+                subtitle: const Text('Subcontractor install guide',
+                    style: TextStyle(fontSize: 11)),
+                value: installInstructions,
+                onChanged: (v) => setLocal(() => installInstructions = v ?? false),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(PdfSections(
+                materialsTakeoff: materialsTakeoff,
+                fasteningSchedule: fasteningSchedule,
+                thermalCode: thermalCode,
+                scopeOfWork: scopeOfWork,
+                installInstructions: installInstructions,
+              )),
+              child: const Text('Export'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
+    final screenWidth = MediaQuery.sizeOf(context).width;
     final isDesktop = screenWidth > 1200;
     final isTablet = screenWidth > 768 && screenWidth <= 1200;
 
@@ -147,6 +320,8 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
     });
 
     final isMobile = screenWidth <= 768;
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final isLandscapeTight = isMobile && screenHeight < 500;
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -154,8 +329,8 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
       appBar: _buildAppBar(isMobile),
       body: Column(
         children: [
-          // Building tab bar — always visible above the 3-panel layout
-          const BuildingTabBar(),
+          // Hide building tab bar in tight landscape to save vertical space
+          if (!isLandscapeTight) const BuildingTabBar(),
           // 3-panel body
           Expanded(
             child: isDesktop
@@ -170,6 +345,10 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
   }
 
   PreferredSizeWidget _buildAppBar(bool isMobile) {
+    final profile = ref.watch(companyProfileProvider);
+    final hasCompany = profile.hasName;
+    final brandColor = Color(profile.brandColorValue);
+
     return AppBar(
       backgroundColor: Colors.white,
       elevation: 0,
@@ -177,23 +356,52 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
       titleSpacing: isMobile ? 8 : null,
       title: Row(
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: AppTheme.primary.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
+          // Logo or default icon
+          if (profile.hasLogo)
+            Container(
+              height: isMobile ? 32 : 36,
+              constraints: BoxConstraints(maxWidth: isMobile ? 80 : 120),
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: brandColor.withValues(alpha:0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Image.memory(
+                Uint8List.fromList(profile.logoBytes!),
+                fit: BoxFit.contain,
+              ),
+            )
+          else
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: (hasCompany ? brandColor : AppTheme.primary).withValues(alpha:0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(Icons.roofing,
+                  color: hasCompany ? brandColor : AppTheme.primary,
+                  size: isMobile ? 20 : 24),
             ),
-            child: Icon(Icons.roofing, color: AppTheme.primary, size: isMobile ? 20 : 24),
-          ),
           const SizedBox(width: 8),
-          Text('ProTPO', style: TextStyle(color: AppTheme.textPrimary,
-              fontWeight: FontWeight.w700, fontSize: isMobile ? 16 : 20)),
+          // Company name or ProTPO
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(hasCompany ? profile.companyName : 'ProTPO',
+                  style: TextStyle(color: hasCompany ? brandColor : AppTheme.textPrimary,
+                      fontWeight: FontWeight.w700, fontSize: isMobile ? 14 : 18)),
+              if (hasCompany && profile.tagline.isNotEmpty && !isMobile)
+                Text(profile.tagline, style: TextStyle(
+                    color: AppTheme.textMuted, fontSize: 10, fontWeight: FontWeight.w400)),
+            ],
+          ),
           UnsavedDot(visible: _hasUnsavedChanges && _currentProjectId != null),
           if (!isMobile) ...[
             const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(color: AppTheme.accent.withOpacity(0.1),
+              decoration: BoxDecoration(color: AppTheme.accent.withValues(alpha:0.1),
                   borderRadius: BorderRadius.circular(4)),
               child: Text('ESTIMATOR', style: TextStyle(color: AppTheme.accent,
                   fontWeight: FontWeight.w600, fontSize: 10, letterSpacing: 1)),
@@ -223,6 +431,11 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
                   color: _saveSuccess ? AppTheme.accent : AppTheme.textSecondary),
               tooltip: _saveSuccess ? 'Saved!' : 'Save',
             ),
+          IconButton(
+            onPressed: () => SettingsDialog.show(context),
+            icon: Icon(Icons.settings, size: 20, color: AppTheme.textSecondary),
+            tooltip: 'Company Settings',
+          ),
           PopupMenuButton<String>(
             onSelected: _export,
             icon: Icon(Icons.download, size: 20, color: AppTheme.primary),
@@ -242,6 +455,8 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
           ),
         ] else ...[
           // Full labels on desktop/tablet
+          const _ProjectHealthChip(),
+          const SizedBox(width: 8),
           TextButton.icon(
             onPressed: _openProject,
             icon: const Icon(Icons.folder_open, size: 18),
@@ -263,6 +478,12 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
               label: Text(_saveSuccess ? 'Saved!' : 'Save',
                   style: TextStyle(color: _saveSuccess ? AppTheme.accent : null)),
             ),
+          const SizedBox(width: 4),
+          TextButton.icon(
+            onPressed: () => SettingsDialog.show(context),
+            icon: Icon(Icons.settings, size: 18, color: AppTheme.textSecondary),
+            label: Text('Settings', style: TextStyle(color: AppTheme.textSecondary)),
+          ),
           const SizedBox(width: 8),
           if (_isExporting)
             const Padding(
@@ -318,13 +539,13 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
             color: AppTheme.leftPanelBg,
             border: Border(right: BorderSide(color: AppTheme.border)),
           ),
-          child: const LeftPanel(),
+          child: FocusTraversalGroup(child: const LeftPanel()),
         ),
         Expanded(
           flex: 3,
           child: Container(
             color: AppTheme.centerPanelBg,
-            child: const CenterPanel(),
+            child: FocusTraversalGroup(child: const CenterPanel()),
           ),
         ),
         Container(
@@ -333,7 +554,7 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
             color: AppTheme.rightPanelBg,
             border: Border(left: BorderSide(color: AppTheme.border)),
           ),
-          child: const RightPanel(),
+          child: FocusTraversalGroup(child: const RightPanel()),
         ),
       ],
     );
@@ -348,9 +569,9 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
             color: AppTheme.leftPanelBg,
             border: Border(right: BorderSide(color: AppTheme.border)),
           ),
-          child: const LeftPanel(),
+          child: FocusTraversalGroup(child: const LeftPanel()),
         ),
-        const Expanded(child: CenterPanel()),
+        Expanded(child: FocusTraversalGroup(child: const CenterPanel())),
       ],
     );
   }
@@ -373,7 +594,7 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
               tabs: const [
                 Tab(height: 44, text: 'Inputs'),
                 Tab(height: 44, text: 'Estimate'),
-                Tab(height: 44, text: 'Summary'),
+                Tab(height: 44, text: 'VersiBot'),
               ],
             ),
           ),
@@ -448,6 +669,48 @@ class _BuildingTabBarState extends ConsumerState<BuildingTabBar> {
     final activeIndex = ref.watch(activeBuildingIndexProvider);
     final notifier = ref.read(estimatorProvider.notifier);
     final canDelete = buildings.length > 1;
+    final isMobile = MediaQuery.sizeOf(context).width <= 768;
+
+    // Mobile: compact dropdown instead of full tab strip
+    if (isMobile) {
+      return Container(
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border(bottom: BorderSide(color: AppTheme.border)),
+        ),
+        child: Row(children: [
+          Icon(Icons.domain, size: 14, color: AppTheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<int>(
+                value: activeIndex,
+                isDense: true,
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textPrimary),
+                items: buildings.asMap().entries.map((e) =>
+                  DropdownMenuItem(value: e.key, child: Text(e.value.buildingName)),
+                ).toList(),
+                onChanged: (i) { if (i != null) notifier.setActiveBuilding(i); },
+              ),
+            ),
+          ),
+          OutlinedButton.icon(
+            onPressed: () => notifier.addBuilding(),
+            icon: const Icon(Icons.add, size: 12),
+            label: const Text('Add'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppTheme.primary,
+              side: BorderSide(color: AppTheme.primary.withValues(alpha: 0.4)),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 30),
+              textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ]),
+      );
+    }
 
     return Container(
       height: 44,
@@ -498,7 +761,7 @@ class _BuildingTabBarState extends ConsumerState<BuildingTabBar> {
                           Icons.domain,
                           size: 14,
                           color: isActive
-                              ? Colors.white.withOpacity(0.8)
+                              ? Colors.white.withValues(alpha:0.8)
                               : AppTheme.textMuted,
                         ),
                         const SizedBox(width: 6),
@@ -540,16 +803,22 @@ class _BuildingTabBarState extends ConsumerState<BuildingTabBar> {
 
                         // Delete button — only when > 1 building
                         if (canDelete) ...[
-                          const SizedBox(width: 6),
-                          GestureDetector(
-                            onTap: () => _confirmDelete(context, index,
-                                building.buildingName, notifier),
-                            child: Icon(
-                              Icons.close,
-                              size: 13,
-                              color: isActive
-                                  ? Colors.white.withOpacity(0.7)
-                                  : AppTheme.textMuted,
+                          const SizedBox(width: 4),
+                          SizedBox(
+                            width: 36, height: 36,
+                            child: IconButton(
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                              iconSize: 13,
+                              tooltip: 'Remove building',
+                              onPressed: () => _confirmDelete(context, index,
+                                  building.buildingName, notifier),
+                              icon: Icon(
+                                Icons.close,
+                                color: isActive
+                                    ? Colors.white.withValues(alpha: 0.7)
+                                    : AppTheme.textMuted,
+                              ),
                             ),
                           ),
                         ],
@@ -570,10 +839,10 @@ class _BuildingTabBarState extends ConsumerState<BuildingTabBar> {
               label: const Text('Add Building'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: AppTheme.primary,
-                side: BorderSide(color: AppTheme.primary.withOpacity(0.4)),
+                side: BorderSide(color: AppTheme.primary.withValues(alpha:0.4)),
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-                minimumSize: const Size(0, 32),
+                minimumSize: const Size(0, 44),
                 textStyle: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -619,4 +888,162 @@ class _BuildingTabBarState extends ConsumerState<BuildingTabBar> {
       notifier.removeBuilding(index);
     }
   }
+}
+
+// ─── PROJECT HEALTH CHIP ─────────────────────────────────────────────────────
+
+class _ProjectHealthChip extends ConsumerWidget {
+  const _ProjectHealthChip();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final vr = ref.watch(validationResultProvider);
+    final score = vr.healthScore;
+
+    final Color color;
+    final IconData icon;
+    if (score >= 85) {
+      color = const Color(0xFF10B981); // green
+      icon = Icons.check_circle;
+    } else if (score >= 60) {
+      color = const Color(0xFFF59E0B); // amber
+      icon = Icons.warning_amber_rounded;
+    } else {
+      color = const Color(0xFFEF4444); // red
+      icon = Icons.error;
+    }
+
+    final issueCount = vr.errorCount + vr.warningCount + vr.missingItems.length;
+
+    return InkWell(
+      onTap: () => _showHealthDetail(context, vr),
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha:0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withValues(alpha:0.3)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text('$score%', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color)),
+          if (issueCount > 0) ...[
+            const SizedBox(width: 4),
+            Text('($issueCount)', style: TextStyle(fontSize: 10, color: color.withValues(alpha:0.7))),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  void _showHealthDetail(BuildContext context, ValidationResult vr) {
+    showDialog(context: context, builder: (ctx) => AlertDialog(
+      title: Row(children: [
+        Icon(Icons.health_and_safety, size: 22, color: vr.healthScore >= 85
+            ? const Color(0xFF10B981) : vr.healthScore >= 60
+            ? const Color(0xFFF59E0B) : const Color(0xFFEF4444)),
+        const SizedBox(width: 10),
+        Text('Project Health: ${vr.healthScore}%', style: const TextStyle(fontSize: 18)),
+      ]),
+      content: SizedBox(
+        width: 550, height: 500,
+        child: SingleChildScrollView(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (vr.errorCount > 0) ...[
+              _sectionLabel('ERRORS', const Color(0xFFEF4444)),
+              ...vr.issues.where((i) => i.severity == IssueSeverity.error).map((i) =>
+                  _issueTile(i, const Color(0xFFEF4444))),
+              const SizedBox(height: 12),
+            ],
+            if (vr.warningCount > 0) ...[
+              _sectionLabel('WARNINGS', const Color(0xFFF59E0B)),
+              ...vr.issues.where((i) => i.severity == IssueSeverity.warning).map((i) =>
+                  _issueTile(i, const Color(0xFFF59E0B))),
+              const SizedBox(height: 12),
+            ],
+            if (vr.missingItems.isNotEmpty) ...[
+              _sectionLabel('MISSING VERSICO SPEC ITEMS', const Color(0xFFEF4444)),
+              ...vr.missingItems.map((m) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: (m.isCritical ? const Color(0xFFEF4444) : const Color(0xFFF59E0B)).withValues(alpha:0.06),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: (m.isCritical ? const Color(0xFFEF4444) : const Color(0xFFF59E0B)).withValues(alpha:0.2)),
+                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      Icon(m.isCritical ? Icons.error : Icons.warning_amber, size: 14,
+                          color: m.isCritical ? const Color(0xFFEF4444) : const Color(0xFFF59E0B)),
+                      const SizedBox(width: 6),
+                      Expanded(child: Text(m.missingItem, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+                    ]),
+                    const SizedBox(height: 4),
+                    Text('Required by: ${m.triggerItem}', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                    const SizedBox(height: 2),
+                    Text(m.reason, style: TextStyle(fontSize: 11, color: Colors.grey.shade700)),
+                  ]),
+                ),
+              )),
+              const SizedBox(height: 12),
+            ],
+            if (vr.okCount > 0) ...[
+              _sectionLabel('PASSING', const Color(0xFF10B981)),
+              ...vr.issues.where((i) => i.severity == IssueSeverity.ok).map((i) =>
+                  _issueTile(i, const Color(0xFF10B981))),
+              const SizedBox(height: 12),
+            ],
+            if (vr.issues.where((i) => i.severity == IssueSeverity.info).isNotEmpty) ...[
+              _sectionLabel('INFO', Colors.blue),
+              ...vr.issues.where((i) => i.severity == IssueSeverity.info).map((i) =>
+                  _issueTile(i, Colors.blue)),
+            ],
+          ],
+        )),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+      ],
+    ));
+  }
+
+  Widget _sectionLabel(String text, Color color) => Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Text(text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+        color: color, letterSpacing: 1)),
+  );
+
+  Widget _issueTile(ValidationIssue issue, Color color) => Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha:0.06),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha:0.2)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+            decoration: BoxDecoration(color: color.withValues(alpha:0.15), borderRadius: BorderRadius.circular(4)),
+            child: Text(issue.category, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: color)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Text(issue.message, style: const TextStyle(fontSize: 12))),
+        ]),
+        if (issue.fix != null) ...[
+          const SizedBox(height: 4),
+          Row(children: [
+            Icon(Icons.lightbulb, size: 12, color: Colors.amber.shade700),
+            const SizedBox(width: 4),
+            Expanded(child: Text(issue.fix!, style: TextStyle(fontSize: 11, color: Colors.amber.shade800, fontStyle: FontStyle.italic))),
+          ]),
+        ],
+      ]),
+    ),
+  );
 }
