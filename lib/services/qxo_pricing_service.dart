@@ -20,16 +20,44 @@ class QxoPricingService {
     final resolvedItems = <String, QxoItem>{}; // bomName → QxoItem
 
     // Step 1: Search for each BOM item sequentially (avoid flooding the API)
+    final confidences = <String, double>{};
     for (final bomName in bomItemNames) {
       try {
         final query = _buildSearchQuery(bomName);
+        final isDirectSku = RegExp(r'^\d{6}$').hasMatch(query);
         debugPrint('[QXO] Searching: "$query" (for "$bomName")');
         final searchResult = await _api.searchItems(query);
-        if (searchResult.items.isNotEmpty) {
-          resolvedItems[bomName] = searchResult.items.first;
-          debugPrint('[QXO]   → Found: ${searchResult.items.first.itemNumber} ${searchResult.items.first.productName}');
-        } else {
+        if (searchResult.items.isEmpty) {
           debugPrint('[QXO]   → No results');
+          continue;
+        }
+
+        // Direct-SKU lookups (fastener length map) return the exact item
+        // by number — no scoring needed, treat as full confidence.
+        if (isDirectSku) {
+          resolvedItems[bomName] = searchResult.items.first;
+          confidences[bomName] = 1.0;
+          debugPrint('[QXO]   → SKU match: ${searchResult.items.first.itemNumber} '
+              '${searchResult.items.first.productName}');
+          continue;
+        }
+
+        // Otherwise score the top candidates and pick the best match.
+        final best = _selectBest(searchResult.items, bomName, query);
+        if (best == null) {
+          debugPrint('[QXO]   → No scoreable candidates');
+          continue;
+        }
+        resolvedItems[bomName] = best.$1;
+        confidences[bomName] = best.$2;
+
+        final scoreStr = best.$2.toStringAsFixed(2);
+        if (best.$2 < kLowConfidenceThreshold) {
+          debugPrint('[QXO]   → LOW CONFIDENCE ($scoreStr): '
+              '${best.$1.itemNumber} ${best.$1.productName} — verify manually');
+        } else {
+          debugPrint('[QXO]   → Match ($scoreStr): '
+              '${best.$1.itemNumber} ${best.$1.productName}');
         }
       } catch (e) {
         debugPrint('[QXO]   → Search error: $e');
@@ -88,10 +116,144 @@ class QxoPricingService {
         uom: uom,
         packQty: item.packQty,
         orderQty: orderQty,
+        confidence: confidences[bomName],
       );
     }
 
     return result;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CANDIDATE SCORING
+  //
+  // QXO search often returns 10+ items for a query. The original implementation
+  // blindly took items.first, which produced frequent mismatches (e.g. searching
+  // for "scupper" returned the first scupper-adjacent product rather than the
+  // actual TPO roof scupper we wanted).
+  //
+  // The scorer below ranks candidates by: token overlap between BOM name and
+  // product name, brand match against the query's implied brand, membrane
+  // thickness (mil), and roll width. The best-scoring candidate wins, and a
+  // normalized score in [0,1] is returned so low-confidence matches can be
+  // surfaced to the user.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Scores [items] against [bomName] and returns (best_item, score) or
+  /// null if the list is empty. Only the top 10 candidates are considered
+  /// to keep the work bounded for large QXO result sets.
+  (QxoItem, double)? _selectBest(List<QxoItem> items, String bomName, String query) {
+    if (items.isEmpty) return null;
+    QxoItem? best;
+    double bestScore = -1;
+    for (final item in items.take(10)) {
+      final s = _scoreCandidate(item, bomName, query);
+      if (s > bestScore) {
+        best = item;
+        bestScore = s;
+      }
+    }
+    if (best == null) return null;
+    return (best, bestScore.clamp(0.0, 1.0));
+  }
+
+  /// Returns a score in approximately [0,1] for how well [item] matches
+  /// the BOM line [bomName]. Higher is better.
+  double _scoreCandidate(QxoItem item, String bomName, String query) {
+    final bomTokens = _tokenize(bomName).toSet();
+    final productText = '${item.brand} ${item.productName} ${item.internalName}';
+    final productTokens = _tokenize(productText).toSet();
+
+    if (bomTokens.isEmpty || productTokens.isEmpty) return 0.0;
+
+    // Jaccard token overlap as the base signal.
+    final intersection = bomTokens.intersection(productTokens);
+    final union = bomTokens.union(productTokens);
+    double score = union.isEmpty ? 0.0 : intersection.length / union.length;
+
+    // Brand boost: reward exact matches on brands we explicitly asked for,
+    // penalize mismatches. Uses the QUERY (which our _buildSearchQuery
+    // heuristics enrich with brand hints) rather than the raw BOM name.
+    final queryLower = query.toLowerCase();
+    final brandLower = '${item.brand} ${item.productName}'.toLowerCase();
+    const brandHints = {
+      'versico': ['versico'],
+      'tri-built': ['tri-built', 'tribuilt', 'tri built'],
+      'carlisle': ['carlisle'],
+      'johns manville': ['johns manville', 'jm'],
+      'firestone': ['firestone'],
+      'gaf': ['gaf'],
+    };
+    for (final entry in brandHints.entries) {
+      if (queryLower.contains(entry.key)) {
+        final matches = entry.value.any((alias) => brandLower.contains(alias));
+        if (matches) {
+          score += 0.15;
+        } else {
+          score -= 0.10;
+        }
+        break; // only one brand hint should apply
+      }
+    }
+
+    // Membrane thickness — reward exact "60 mil" match, penalize a
+    // different mil value in the candidate.
+    final milMatch = RegExp(r'(\d+)\s*mil').firstMatch(bomName.toLowerCase());
+    if (milMatch != null) {
+      final mil = milMatch.group(1)!;
+      if (RegExp('${RegExp.escape(mil)}\\s*mil').hasMatch(productText.toLowerCase())) {
+        score += 0.10;
+      } else if (RegExp(r'\d+\s*mil').hasMatch(productText.toLowerCase())) {
+        score -= 0.10;
+      }
+    }
+
+    // Roll width — 6' vs 10' for TPO rolls.
+    final widthMatch = RegExp(r"(\d+)'").firstMatch(bomName);
+    if (widthMatch != null) {
+      final w = widthMatch.group(1)!;
+      final hasWidth = productText.contains("$w'") ||
+          productText.toLowerCase().contains('$w ft') ||
+          productText.toLowerCase().contains('$w foot');
+      if (hasWidth) score += 0.10;
+    }
+
+    // Rigid insulation thickness — "1.5\"" or "2\"" should match same value.
+    final inchMatch = RegExp(r'(\d+(?:\.\d+)?)\s*["\u201d]').firstMatch(bomName);
+    if (inchMatch != null) {
+      final inches = inchMatch.group(1)!;
+      if (productText.contains('$inches"') ||
+          productText.toLowerCase().contains('$inches in')) {
+        score += 0.08;
+      }
+    }
+
+    // Tapered panel letter — "Panel X" in BOM should map to a product that
+    // mentions the same letter. Uses word boundaries to avoid false hits.
+    final panelMatch = RegExp(r'Panel\s+([A-Z]{1,2})\b').firstMatch(bomName);
+    if (panelMatch != null) {
+      final letter = panelMatch.group(1)!;
+      if (RegExp('\\b$letter\\b').hasMatch(productText)) {
+        score += 0.12;
+      }
+    }
+
+    return score;
+  }
+
+  /// Lowercases, strips punctuation, removes short words and generic
+  /// stopwords, and returns the token list for Jaccard comparison.
+  List<String> _tokenize(String s) {
+    const stop = {
+      'the', 'and', 'for', 'with', 'from', 'roofing', 'inch', 'inches',
+      'each', 'per', 'box', 'case', 'pack', 'bundle', 'roll', 'sheet',
+      'item', 'layer', 'sf', 'lf',
+    };
+    return s
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\s-]'), ' ')
+        .split(RegExp(r'\s+'))
+        .where((t) => t.length >= 2 && !stop.contains(t))
+        .toList();
   }
 
   /// Extracts meaningful search terms from a BOM item name.
@@ -405,6 +567,12 @@ class QxoPricedItem {
   final int? packQty;    // units per package (e.g. 250 screws/bucket)
   final int? orderQty;   // packages needed to cover BOM quantity
 
+  /// Match confidence 0.0-1.0, where 1.0 = perfect match.
+  /// Null when confidence is not available (e.g. fastener direct-SKU lookup).
+  /// Values below [kLowConfidenceThreshold] should be surfaced in the UI
+  /// so the user can verify the match manually.
+  final double? confidence;
+
   const QxoPricedItem({
     required this.bomName,
     required this.qxoItemNumber,
@@ -414,9 +582,20 @@ class QxoPricedItem {
     this.uom,
     this.packQty,
     this.orderQty,
+    this.confidence,
   });
 
   /// Total cost = unitPrice * orderQty (or null if either is missing)
   double? get totalCost =>
       unitPrice != null && orderQty != null ? unitPrice! * orderQty! : null;
+
+  /// True when [confidence] is below the low-confidence threshold.
+  /// Items flagged as low confidence should be reviewed by the user
+  /// before trusting the price.
+  bool get isLowConfidence =>
+      confidence != null && confidence! < kLowConfidenceThreshold;
 }
+
+/// Match scores below this threshold are considered low confidence and
+/// should be surfaced to the user for manual verification.
+const double kLowConfidenceThreshold = 0.35;
