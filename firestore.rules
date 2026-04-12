@@ -55,6 +55,50 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ── Customers ────────────────────────────────────────────────────────
+    // Used by FirestoreService.createCustomer / updateCustomer / etc.
+    match /protpo_customers/{docId} {
+      allow read: if true;
+      allow create, update: if
+        request.resource.data.keys().hasAny(['name', 'customerType']) &&
+        request.resource.size() < 50 * 1024;
+      allow delete: if true;
+    }
+
+    // ── Jobs and their subcollections ────────────────────────────────────
+    // Estimates and versions carry full EstimatorState so they share the
+    // same 900KB cap as the legacy protpo_projects collection.
+    match /protpo_jobs/{jobId} {
+      allow read: if true;
+      allow create, update: if
+        request.resource.data.keys().hasAny(['jobName', 'customerId']) &&
+        request.resource.size() < 100 * 1024;
+      allow delete: if true;
+
+      match /estimates/{estimateId} {
+        allow read: if true;
+        allow create, update: if request.resource.size() < 900 * 1024;
+        allow delete: if true;
+
+        match /versions/{versionId} {
+          allow read: if true;
+          allow create: if request.resource.size() < 900 * 1024;
+          // Versions are immutable — no updates permitted.
+          allow update: if false;
+          allow delete: if true;
+        }
+      }
+
+      match /activities/{activityId} {
+        allow read: if true;
+        allow create: if request.resource.size() < 50 * 1024;
+        // Only task activities can be updated (completion toggle).
+        allow update: if request.resource.data.type == 'task' &&
+                         request.resource.size() < 50 * 1024;
+        allow delete: if true;
+      }
+    }
+
     // ── Default deny ─────────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;
