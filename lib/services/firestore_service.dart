@@ -14,6 +14,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
 import '../models/estimator_state.dart';
 import 'serialization.dart';
+import '../models/customer.dart';
+import '../models/job.dart';
+import '../models/estimate.dart';
+import '../models/estimate_version.dart';
+import '../models/activity.dart';
 
 // ─── PROJECT SUMMARY ─────────────────────────────────────────────────────────
 // Lightweight snapshot used in the project list screen.
@@ -60,6 +65,12 @@ class FirestoreService {
   final _db       = FirebaseFirestore.instance;
   final _uuid     = const Uuid();
   final _colName  = 'protpo_projects';
+
+  static const _customersCol = 'protpo_customers';
+  static const _jobsCol = 'protpo_jobs';
+  static const _estimatesSubcol = 'estimates';
+  static const _versionsSubcol = 'versions';
+  static const _activitiesSubcol = 'activities';
 
   CollectionReference<Map<String, dynamic>> get _col => _db.collection(_colName);
 
@@ -178,5 +189,234 @@ class FirestoreService {
     final b64 = data['data'] as String?;
     if (b64 == null || b64.isEmpty) return null;
     return base64Decode(b64);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CUSTOMERS
+  // ═══════════════════════════════════════════════════════════════════════
+
+  CollectionReference<Map<String, dynamic>> get _customers =>
+      _db.collection(_customersCol);
+
+  Future<String> createCustomer(Customer c) async {
+    final id = c.id.isNotEmpty ? c.id : _uuid.v4();
+    await _customers.doc(id).set({
+      ...c.toJson(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    return id;
+  }
+
+  Future<void> updateCustomer(Customer c) async {
+    await _customers.doc(c.id).set({
+      ...c.toJson(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> deleteCustomer(String customerId) async {
+    await _customers.doc(customerId).delete();
+  }
+
+  Future<Customer?> getCustomer(String customerId) async {
+    final snap = await _customers.doc(customerId).get();
+    if (!snap.exists) return null;
+    final data = snap.data();
+    if (data == null) return null;
+    return Customer.fromJson(snap.id, data);
+  }
+
+  Stream<List<Customer>> streamCustomers() {
+    return _customers.orderBy('name').snapshots().map((s) =>
+        s.docs.map((d) => Customer.fromJson(d.id, d.data())).toList());
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // JOBS
+  // ═══════════════════════════════════════════════════════════════════════
+
+  CollectionReference<Map<String, dynamic>> get _jobs =>
+      _db.collection(_jobsCol);
+
+  Future<String> createJob(Job j) async {
+    final id = j.id.isNotEmpty ? j.id : _uuid.v4();
+    await _jobs.doc(id).set({
+      ...j.toJson(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    return id;
+  }
+
+  Future<void> updateJob(Job j) async {
+    await _jobs.doc(j.id).set({
+      ...j.toJson(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> deleteJobCascade(String jobId) async {
+    final jobRef = _jobs.doc(jobId);
+
+    final estimates = await jobRef.collection(_estimatesSubcol).get();
+    for (final est in estimates.docs) {
+      final versions = await est.reference.collection(_versionsSubcol).get();
+      for (final v in versions.docs) {
+        await v.reference.delete();
+      }
+      await est.reference.delete();
+    }
+
+    final activities = await jobRef.collection(_activitiesSubcol).get();
+    for (final a in activities.docs) {
+      await a.reference.delete();
+    }
+
+    await jobRef.delete();
+  }
+
+  Future<Job?> getJob(String jobId) async {
+    final snap = await _jobs.doc(jobId).get();
+    if (!snap.exists) return null;
+    final data = snap.data();
+    if (data == null) return null;
+    return Job.fromJson(snap.id, data);
+  }
+
+  Stream<Job?> streamJob(String jobId) {
+    return _jobs.doc(jobId).snapshots().map((s) {
+      if (!s.exists) return null;
+      final data = s.data();
+      if (data == null) return null;
+      return Job.fromJson(s.id, data);
+    });
+  }
+
+  Stream<List<Job>> streamJobs() {
+    return _jobs
+        .orderBy('updatedAt', descending: true)
+        .limit(200)
+        .snapshots()
+        .map((s) => s.docs.map((d) => Job.fromJson(d.id, d.data())).toList());
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ESTIMATES (subcollection of jobs)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  CollectionReference<Map<String, dynamic>> _estimates(String jobId) =>
+      _jobs.doc(jobId).collection(_estimatesSubcol);
+
+  Future<String> createEstimate(String jobId, Estimate e) async {
+    final id = e.id.isNotEmpty ? e.id : _uuid.v4();
+    await _estimates(jobId).doc(id).set({
+      ...e.toJson(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    return id;
+  }
+
+  Future<void> updateEstimate(String jobId, Estimate e) async {
+    await _estimates(jobId).doc(e.id).set({
+      ...e.toJson(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> deleteEstimate(String jobId, String estimateId) async {
+    final estRef = _estimates(jobId).doc(estimateId);
+    final versions = await estRef.collection(_versionsSubcol).get();
+    for (final v in versions.docs) {
+      await v.reference.delete();
+    }
+    await estRef.delete();
+  }
+
+  Future<Estimate?> getEstimate(String jobId, String estimateId) async {
+    final snap = await _estimates(jobId).doc(estimateId).get();
+    if (!snap.exists) return null;
+    final data = snap.data();
+    if (data == null) return null;
+    return Estimate.fromJson(snap.id, data);
+  }
+
+  Stream<List<Estimate>> streamEstimates(String jobId) {
+    return _estimates(jobId)
+        .orderBy('updatedAt', descending: true)
+        .snapshots()
+        .map((s) =>
+            s.docs.map((d) => Estimate.fromJson(d.id, d.data())).toList());
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // VERSIONS (subcollection of estimates, append-only)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  CollectionReference<Map<String, dynamic>> _versions(
+          String jobId, String estimateId) =>
+      _estimates(jobId).doc(estimateId).collection(_versionsSubcol);
+
+  Future<String> createVersion(
+      String jobId, String estimateId, EstimateVersion v) async {
+    final id = v.id.isNotEmpty ? v.id : _uuid.v4();
+    await _versions(jobId, estimateId).doc(id).set({
+      ...v.toJson(),
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    return id;
+  }
+
+  Future<void> deleteVersion(
+      String jobId, String estimateId, String versionId) async {
+    await _versions(jobId, estimateId).doc(versionId).delete();
+  }
+
+  Future<List<EstimateVersion>> listVersions(
+      String jobId, String estimateId) async {
+    final snap = await _versions(jobId, estimateId)
+        .orderBy('createdAt', descending: true)
+        .get();
+    return snap.docs
+        .map((d) => EstimateVersion.fromJson(d.id, d.data()))
+        .toList();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ACTIVITIES (subcollection of jobs)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  CollectionReference<Map<String, dynamic>> _activities(String jobId) =>
+      _jobs.doc(jobId).collection(_activitiesSubcol);
+
+  Future<String> createActivity(String jobId, Activity a) async {
+    final id = a.id.isNotEmpty ? a.id : _uuid.v4();
+    await _activities(jobId).doc(id).set(a.toJson());
+    return id;
+  }
+
+  Future<void> updateTaskCompletion(
+      String jobId, String activityId, bool completed) async {
+    await _activities(jobId).doc(activityId).set({
+      'taskCompleted': completed,
+      if (completed)
+        'taskCompletedAt': FieldValue.serverTimestamp()
+      else
+        'taskCompletedAt': FieldValue.delete(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> deleteActivity(String jobId, String activityId) async {
+    await _activities(jobId).doc(activityId).delete();
+  }
+
+  Stream<List<Activity>> streamActivities(String jobId) {
+    return _activities(jobId)
+        .orderBy('timestamp', descending: true)
+        .limit(200)
+        .snapshots()
+        .map((s) =>
+            s.docs.map((d) => Activity.fromJson(d.id, d.data())).toList());
   }
 }
