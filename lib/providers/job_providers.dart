@@ -172,3 +172,43 @@ final activitiesForJobProvider =
     StreamProvider.family<List<Activity>, String>((ref, jobId) {
   return FirestoreService.instance.streamActivities(jobId);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SESSION RESTORE — reload the last-opened job/estimate on app launch
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Attempts to restore the last-opened job and estimate from
+/// `protpo_settings/last_session`. If the job or estimate no longer exists
+/// in Firestore, silently returns false without changing state.
+///
+/// Called once on app startup (Phase 4+ wires this into initState).
+Future<bool> restoreLastSession(ProviderContainer container) async {
+  final fs = FirestoreService.instance;
+
+  // Read the last session IDs
+  final session = await fs.loadLastSession();
+  if (session.jobId == null || session.estimateId == null) return false;
+
+  // Verify the job still exists
+  final job = await fs.getJob(session.jobId!);
+  if (job == null) return false;
+
+  // Verify the estimate still exists
+  final estimate = await fs.getEstimate(session.jobId!, session.estimateId!);
+  if (estimate == null) return false;
+
+  // Load the estimate into the editor
+  return loadEstimateIntoEditor(container, estimate, session.jobId!);
+}
+
+/// Persists the current active job/estimate IDs for session restore.
+/// Call this whenever the active job or estimate changes (Phase 5 wires
+/// this into the save path and the load-into-editor flow).
+Future<void> persistActiveSession(ProviderContainer container) async {
+  final jobId = container.read(activeJobIdProvider);
+  final estId = container.read(activeEstimateIdProvider);
+  await FirestoreService.instance.saveLastSession(
+    jobId: jobId,
+    estimateId: estId,
+  );
+}

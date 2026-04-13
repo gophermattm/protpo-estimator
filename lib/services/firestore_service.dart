@@ -419,4 +419,33 @@ class FirestoreService {
         .map((s) =>
             s.docs.map((d) => Activity.fromJson(d.id, d.data())).toList());
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // SESSION PERSISTENCE
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Saves the last-opened job and estimate IDs so the app can restore
+  /// context on the next launch. Written to protpo_settings/last_session.
+  Future<void> saveLastSession({
+    required String? jobId,
+    required String? estimateId,
+  }) async {
+    await _db.collection(_settingsCol).doc('last_session').set({
+      'jobId': jobId,
+      'estimateId': estimateId,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Loads the last-opened job and estimate IDs. Returns null values if
+  /// no session has been saved yet.
+  Future<({String? jobId, String? estimateId})> loadLastSession() async {
+    final snap = await _db.collection(_settingsCol).doc('last_session').get();
+    final data = snap.data();
+    if (data == null) return (jobId: null, estimateId: null);
+    return (
+      jobId: data['jobId'] as String?,
+      estimateId: data['estimateId'] as String?,
+    );
+  }
 }
