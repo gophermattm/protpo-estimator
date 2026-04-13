@@ -16,6 +16,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/estimate.dart';
 import '../providers/estimator_providers.dart';
 import '../services/serialization.dart';
+import '../services/firestore_service.dart';
+import '../models/customer.dart';
+import '../models/job.dart';
+import '../models/estimate_version.dart';
+import '../models/activity.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // NAVIGATION STATE — which job/estimate is currently loaded in the editor
@@ -117,3 +122,53 @@ Estimate? buildEstimateDraft(
     buildingCount: buildingCount,
   );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIRESTORE STREAM PROVIDERS — reactive access to job record collections
+//
+// These are thin wrappers over FirestoreService methods. No business logic.
+// Not unit tested — they delegate directly to cloud_firestore streams.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// All customers, ordered by name. Used by the Settings "Customers" tab
+/// and the customer picker in the new-job flow.
+final customersListProvider = StreamProvider<List<Customer>>((ref) {
+  return FirestoreService.instance.streamCustomers();
+});
+
+/// Single customer by ID. Used by Job Detail Overview tab.
+final customerProvider =
+    FutureProvider.family<Customer?, String>((ref, customerId) {
+  return FirestoreService.instance.getCustomer(customerId);
+});
+
+/// All jobs, most-recently-updated first. Used by the Job List Sheet.
+final jobsListProvider = StreamProvider<List<Job>>((ref) {
+  return FirestoreService.instance.streamJobs();
+});
+
+/// Single job by ID (live stream). Used by Job Detail header and overview.
+final jobStreamProvider = StreamProvider.family<Job?, String>((ref, jobId) {
+  return FirestoreService.instance.streamJob(jobId);
+});
+
+/// Estimates for a specific job, most-recently-updated first.
+/// Used by the Estimates tab in Job Detail.
+final estimatesForJobProvider =
+    StreamProvider.family<List<Estimate>, String>((ref, jobId) {
+  return FirestoreService.instance.streamEstimates(jobId);
+});
+
+/// Version history for a specific estimate. Loaded on-demand when the
+/// user expands the version list in the Estimates tab.
+final versionsForEstimateProvider = FutureProvider.family<
+    List<EstimateVersion>, ({String jobId, String estimateId})>((ref, ids) {
+  return FirestoreService.instance.listVersions(ids.jobId, ids.estimateId);
+});
+
+/// Activity timeline for a specific job, newest first.
+/// Used by the Activity tab in Job Detail.
+final activitiesForJobProvider =
+    StreamProvider.family<List<Activity>, String>((ref, jobId) {
+  return FirestoreService.instance.streamActivities(jobId);
+});
