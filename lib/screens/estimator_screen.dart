@@ -11,6 +11,7 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import '../theme/app_theme.dart';
 import '../widgets/ui_polish.dart';
 import '../widgets/left_panel.dart';
@@ -30,6 +31,8 @@ import '../models/labor_models.dart';
 import '../widgets/settings_dialog.dart';
 import '../services/validation_engine.dart';
 import '../services/platform_utils.dart';
+import '../models/estimate_version.dart';
+import '../models/activity.dart';
 
 class EstimatorScreen extends ConsumerStatefulWidget {
   const EstimatorScreen({super.key});
@@ -296,10 +299,138 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
               overflow: TextOverflow.ellipsis,
             ),
           ),
+          GestureDetector(
+            onTap: _promptSaveVersion,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              margin: const EdgeInsets.only(right: 4),
+              decoration: BoxDecoration(
+                color: AppTheme.accent.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                    color: AppTheme.accent.withValues(alpha: 0.3)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.bookmark_add_outlined,
+                    size: 12, color: AppTheme.accent),
+                const SizedBox(width: 4),
+                Text('Version',
+                    style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.accent)),
+              ]),
+            ),
+          ),
           Icon(Icons.chevron_right, size: 16, color: AppTheme.textMuted),
         ]),
       ),
     );
+  }
+
+  Future<void> _saveVersion({
+    required String source,
+    String? label,
+  }) async {
+    final jobId = ref.read(activeJobIdProvider);
+    final estId = ref.read(activeEstimateIdProvider);
+    if (jobId == null || estId == null) return;
+
+    final state = ref.read(estimatorProvider);
+    final estName = ref.read(activeEstimateNameProvider);
+    final serialized = stateToJson(state, estId);
+    final profile = ref.read(companyProfileProvider);
+    final now = DateTime.now();
+
+    final defaultLabel = source == 'export'
+        ? 'Export ${DateFormat('yyyy-MM-dd HH:mm').format(now)}'
+        : 'Manual snapshot ${DateFormat('yyyy-MM-dd HH:mm').format(now)}';
+
+    final version = EstimateVersion(
+      id: '',
+      label: label?.isNotEmpty == true ? label! : defaultLabel,
+      source: source == 'export' ? VersionSource.export : VersionSource.manual,
+      estimatorState: serialized,
+      createdAt: now,
+      createdBy: profile.companyName.isNotEmpty
+          ? profile.companyName
+          : 'ProTPO',
+    );
+
+    try {
+      final versionId = await FirestoreService.instance
+          .createVersion(jobId, estId, version);
+
+      final currentEst = await FirestoreService.instance
+          .getEstimate(jobId, estId);
+      if (currentEst != null) {
+        await FirestoreService.instance.updateEstimate(
+          jobId,
+          currentEst.copyWith(activeVersionId: versionId),
+        );
+      }
+
+      final activity = Activity(
+        id: '',
+        type: ActivityType.system,
+        timestamp: now,
+        author: 'system',
+        body: source == 'export'
+            ? 'Version saved before export: ${version.label}'
+            : 'Version saved: ${version.label}',
+        systemEventKind: 'version_saved',
+        systemEventData: {
+          'versionId': versionId,
+          'label': version.label,
+          'source': source,
+          'estimateName': estName,
+        },
+      );
+      await FirestoreService.instance.createActivity(jobId, activity);
+
+      if (source == 'manual' && mounted) {
+        AppSnackbar.success(context, 'Version saved: "${version.label}"');
+      }
+    } catch (e) {
+      debugPrint('[VERSION] Save failed: $e');
+      if (source == 'manual' && mounted) {
+        AppSnackbar.error(context, 'Version save failed: $e');
+      }
+    }
+  }
+
+  Future<void> _promptSaveVersion() async {
+    final ctrl = TextEditingController();
+    final label = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Save as Version',
+            style: TextStyle(fontSize: 16)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Version label (optional)',
+            isDense: true,
+            hintText: 'e.g. v2 — added Building B',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Save Version'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (label == null) return;
+
+    await _saveVersion(source: 'manual', label: label);
   }
 
   Future<void> _export(String format) async {
@@ -347,6 +478,11 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
 
     setState(() => _isExporting = true);
     try {
+      // Auto-snapshot version before export (if a job estimate is active)
+      if (ref.read(hasActiveEstimateProvider)) {
+        await _saveVersion(source: 'export');
+      }
+
       final state = ref.read(estimatorProvider);
       final bom = ref.read(bomProvider);
       final rValue = ref.read(rValueResultProvider);
