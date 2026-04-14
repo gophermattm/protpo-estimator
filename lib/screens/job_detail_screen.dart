@@ -12,6 +12,7 @@ import '../models/job.dart';
 import '../models/customer.dart';
 import '../models/activity.dart';
 import '../providers/job_providers.dart';
+import '../providers/estimator_providers.dart';
 import '../services/firestore_service.dart';
 import '../theme/app_theme.dart';
 
@@ -116,10 +117,7 @@ class _JobDetailBodyState extends ConsumerState<_JobDetailBody>
         children: [
           _OverviewTab(job: job),
           _EstimatesTab(job: job),
-          _PlaceholderTab(
-              icon: Icons.timeline,
-              label: 'Activity',
-              message: 'Activity timeline coming in Phase 7'),
+          _ActivityTab(job: job),
         ],
       ),
     );
@@ -991,6 +989,404 @@ class _VersionRow extends ConsumerWidget {
         );
       }
     }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ACTIVITY TAB
+// ══════════════════════════════════════════════════════════════════════════════
+
+class _ActivityTab extends ConsumerWidget {
+  final Job job;
+  const _ActivityTab({required this.job});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final activitiesAsync = ref.watch(activitiesForJobProvider(job.id));
+
+    return Stack(children: [
+      activitiesAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(
+          child: Text('Failed to load activities: $e',
+              style: TextStyle(color: AppTheme.error)),
+        ),
+        data: (activities) {
+          if (activities.isEmpty) {
+            return Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.timeline, size: 40, color: AppTheme.textMuted),
+                const SizedBox(height: 8),
+                Text('No activity yet',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: AppTheme.textMuted)),
+                const SizedBox(height: 4),
+                Text('Notes, tasks, and calls will appear here.',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+              ]),
+            );
+          }
+          return ListView.separated(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+            itemCount: activities.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (_, i) => _buildActivityCard(context, ref, activities[i]),
+          );
+        },
+      ),
+      Positioned(
+        right: 16, bottom: 16,
+        child: PopupMenuButton<String>(
+          onSelected: (v) {
+            if (v == 'note') showDialog(context: context, builder: (_) => _AddNoteDialog(jobId: job.id));
+            if (v == 'task') showDialog(context: context, builder: (_) => _AddTaskDialog(jobId: job.id));
+            if (v == 'call') showDialog(context: context, builder: (_) => _LogCallDialog(jobId: job.id));
+          },
+          itemBuilder: (_) => [
+            const PopupMenuItem(value: 'note', child: Row(children: [Icon(Icons.note_add, size: 18), SizedBox(width: 10), Text('Add Note')])),
+            const PopupMenuItem(value: 'task', child: Row(children: [Icon(Icons.add_task, size: 18), SizedBox(width: 10), Text('Add Task')])),
+            const PopupMenuItem(value: 'call', child: Row(children: [Icon(Icons.phone, size: 18), SizedBox(width: 10), Text('Log Call')])),
+          ],
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppTheme.primary, shape: BoxShape.circle,
+              boxShadow: [BoxShadow(color: AppTheme.primary.withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 3))],
+            ),
+            child: const Icon(Icons.add, color: Colors.white, size: 22),
+          ),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _buildActivityCard(BuildContext context, WidgetRef ref, Activity activity) {
+    switch (activity.type) {
+      case ActivityType.note: return _buildNoteCard(context, activity);
+      case ActivityType.task: return _buildTaskCard(context, ref, activity);
+      case ActivityType.call: return _buildCallCard(context, activity);
+      case ActivityType.system: return _buildSystemCard(activity);
+    }
+  }
+
+  Widget _buildNoteCard(BuildContext context, Activity activity) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.sticky_note_2_outlined, size: 14, color: const Color(0xFF6366F1)),
+          const SizedBox(width: 6),
+          Text('Note', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: const Color(0xFF6366F1))),
+          const Spacer(),
+          Text(_timeAgo(activity.timestamp), style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+          const SizedBox(width: 4),
+          _deleteButton(context, activity),
+        ]),
+        const SizedBox(height: 6),
+        Text(activity.body, style: const TextStyle(fontSize: 13)),
+        if (activity.author.isNotEmpty && activity.author != 'system')
+          Padding(padding: const EdgeInsets.only(top: 4),
+            child: Text('— ${activity.author}', style: TextStyle(fontSize: 10, fontStyle: FontStyle.italic, color: AppTheme.textMuted))),
+      ]),
+    );
+  }
+
+  Widget _buildTaskCard(BuildContext context, WidgetRef ref, Activity activity) {
+    final completed = activity.taskCompleted == true;
+    final overdue = !completed && activity.taskDueDate != null && activity.taskDueDate!.isBefore(DateTime.now());
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: overdue ? AppTheme.error.withValues(alpha: 0.04) : Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: overdue ? AppTheme.error.withValues(alpha: 0.3) : AppTheme.border),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        GestureDetector(
+          onTap: () => FirestoreService.instance.updateTaskCompletion(job.id, activity.id, !completed),
+          child: Container(
+            width: 22, height: 22, margin: const EdgeInsets.only(top: 2, right: 10),
+            decoration: BoxDecoration(
+              color: completed ? AppTheme.accent.withValues(alpha: 0.1) : Colors.white,
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: completed ? AppTheme.accent : AppTheme.border, width: 2),
+            ),
+            child: completed ? Icon(Icons.check, size: 14, color: AppTheme.accent) : null,
+          ),
+        ),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Text('Task', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: overdue ? AppTheme.error : const Color(0xFFF59E0B))),
+            const Spacer(),
+            if (activity.taskDueDate != null)
+              Text('Due ${_dateFmt.format(activity.taskDueDate!)}',
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: overdue ? AppTheme.error : AppTheme.textMuted)),
+            const SizedBox(width: 4),
+            _deleteButton(context, activity),
+          ]),
+          const SizedBox(height: 4),
+          Text(activity.body, style: TextStyle(fontSize: 13, decoration: completed ? TextDecoration.lineThrough : null, color: completed ? AppTheme.textMuted : AppTheme.textPrimary)),
+          if (completed && activity.taskCompletedAt != null)
+            Padding(padding: const EdgeInsets.only(top: 4),
+              child: Text('Completed ${_dateFmt.format(activity.taskCompletedAt!)}', style: TextStyle(fontSize: 10, color: AppTheme.accent))),
+        ])),
+      ]),
+    );
+  }
+
+  Widget _buildCallCard(BuildContext context, Activity activity) {
+    final isIncoming = activity.callDirection == CallDirection.in_;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(isIncoming ? Icons.call_received : Icons.call_made, size: 14, color: const Color(0xFF10B981)),
+          const SizedBox(width: 6),
+          Text(isIncoming ? 'Incoming Call' : 'Outgoing Call', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: const Color(0xFF10B981))),
+          if (activity.callDurationMinutes != null) ...[const SizedBox(width: 8), Text('${activity.callDurationMinutes} min', style: TextStyle(fontSize: 10, color: AppTheme.textMuted))],
+          const Spacer(),
+          Text(_timeAgo(activity.timestamp), style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+          const SizedBox(width: 4),
+          _deleteButton(context, activity),
+        ]),
+        if (activity.body.isNotEmpty) ...[const SizedBox(height: 6), Text(activity.body, style: const TextStyle(fontSize: 13))],
+      ]),
+    );
+  }
+
+  Widget _buildSystemCard(Activity activity) {
+    IconData icon;
+    switch (activity.systemEventKind) {
+      case 'status_changed': icon = Icons.swap_horiz; break;
+      case 'version_saved': icon = Icons.bookmark_added; break;
+      case 'version_restored': icon = Icons.restore; break;
+      case 'export_created': icon = Icons.picture_as_pdf; break;
+      case 'job_created': icon = Icons.work; break;
+      case 'estimate_created': icon = Icons.description; break;
+      default: icon = Icons.info_outline;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8)),
+      child: Row(children: [
+        Icon(icon, size: 14, color: AppTheme.textMuted),
+        const SizedBox(width: 8),
+        Expanded(child: Text(activity.body, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+        Text(_timeAgo(activity.timestamp), style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+      ]),
+    );
+  }
+
+  Widget _deleteButton(BuildContext context, Activity activity) {
+    return GestureDetector(
+      onTap: () async {
+        final confirmed = await showDialog<bool>(context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Delete?', style: TextStyle(fontSize: 16)),
+            content: const Text('Delete this activity entry?', style: TextStyle(fontSize: 13)),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error), child: const Text('Delete')),
+            ],
+          ),
+        );
+        if (confirmed == true) await FirestoreService.instance.deleteActivity(job.id, activity.id);
+      },
+      child: Icon(Icons.close, size: 14, color: AppTheme.textMuted),
+    );
+  }
+
+  String _timeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return _dateFmt.format(dt);
+  }
+}
+
+// ── Add Note Dialog ──────────────────────────────────────────────────────────
+
+class _AddNoteDialog extends ConsumerStatefulWidget {
+  final String jobId;
+  const _AddNoteDialog({required this.jobId});
+  @override
+  ConsumerState<_AddNoteDialog> createState() => _AddNoteDialogState();
+}
+
+class _AddNoteDialogState extends ConsumerState<_AddNoteDialog> {
+  final _bodyCtrl = TextEditingController();
+  bool _saving = false;
+
+  @override
+  void dispose() { _bodyCtrl.dispose(); super.dispose(); }
+
+  Future<void> _save() async {
+    final body = _bodyCtrl.text.trim();
+    if (body.isEmpty) return;
+    setState(() => _saving = true);
+    try {
+      final profile = ref.read(companyProfileProvider);
+      final activity = Activity(id: '', type: ActivityType.note, timestamp: DateTime.now(),
+        author: profile.companyName.isNotEmpty ? profile.companyName : 'ProTPO', body: body);
+      await FirestoreService.instance.createActivity(widget.jobId, activity);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+    } finally { if (mounted) setState(() => _saving = false); }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(children: [Icon(Icons.note_add, size: 20, color: AppTheme.primary), const SizedBox(width: 8), const Text('Add Note', style: TextStyle(fontSize: 16))]),
+      content: SizedBox(width: 400, child: TextField(controller: _bodyCtrl, autofocus: true, maxLines: 4,
+        decoration: const InputDecoration(labelText: 'Note', isDense: true, hintText: 'Enter your note...', alignLabelWithHint: true))),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        ElevatedButton.icon(onPressed: _saving ? null : _save,
+          icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.add, size: 16),
+          label: const Text('Add Note')),
+      ],
+    );
+  }
+}
+
+// ── Add Task Dialog ──────────────────────────────────────────────────────────
+
+class _AddTaskDialog extends ConsumerStatefulWidget {
+  final String jobId;
+  const _AddTaskDialog({required this.jobId});
+  @override
+  ConsumerState<_AddTaskDialog> createState() => _AddTaskDialogState();
+}
+
+class _AddTaskDialogState extends ConsumerState<_AddTaskDialog> {
+  final _bodyCtrl = TextEditingController();
+  DateTime? _dueDate;
+  bool _saving = false;
+
+  @override
+  void dispose() { _bodyCtrl.dispose(); super.dispose(); }
+
+  Future<void> _pickDueDate() async {
+    final picked = await showDatePicker(context: context,
+      initialDate: DateTime.now().add(const Duration(days: 1)),
+      firstDate: DateTime.now(), lastDate: DateTime.now().add(const Duration(days: 365)));
+    if (picked != null) setState(() => _dueDate = picked);
+  }
+
+  Future<void> _save() async {
+    final body = _bodyCtrl.text.trim();
+    if (body.isEmpty) return;
+    setState(() => _saving = true);
+    try {
+      final profile = ref.read(companyProfileProvider);
+      final activity = Activity(id: '', type: ActivityType.task, timestamp: DateTime.now(),
+        author: profile.companyName.isNotEmpty ? profile.companyName : 'ProTPO', body: body,
+        taskDueDate: _dueDate, taskCompleted: false);
+      await FirestoreService.instance.createActivity(widget.jobId, activity);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+    } finally { if (mounted) setState(() => _saving = false); }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(children: [Icon(Icons.add_task, size: 20, color: AppTheme.primary), const SizedBox(width: 8), const Text('Add Task', style: TextStyle(fontSize: 16))]),
+      content: SizedBox(width: 400, child: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(controller: _bodyCtrl, autofocus: true,
+          decoration: const InputDecoration(labelText: 'Task description', isDense: true, hintText: 'e.g. Call adjuster, Send revised estimate')),
+        const SizedBox(height: 12),
+        GestureDetector(onTap: _pickDueDate, child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
+          child: Row(children: [
+            Icon(Icons.calendar_today, size: 16, color: AppTheme.textMuted), const SizedBox(width: 8),
+            Text(_dueDate != null ? 'Due: ${_dateFmt.format(_dueDate!)}' : 'Set due date (optional)',
+              style: TextStyle(fontSize: 13, color: _dueDate != null ? AppTheme.textPrimary : AppTheme.textMuted)),
+            if (_dueDate != null) ...[const Spacer(), GestureDetector(onTap: () => setState(() => _dueDate = null), child: Icon(Icons.close, size: 14, color: AppTheme.textMuted))],
+          ]),
+        )),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        ElevatedButton.icon(onPressed: _saving ? null : _save,
+          icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.add, size: 16),
+          label: const Text('Add Task')),
+      ],
+    );
+  }
+}
+
+// ── Log Call Dialog ──────────────────────────────────────────────────────────
+
+class _LogCallDialog extends ConsumerStatefulWidget {
+  final String jobId;
+  const _LogCallDialog({required this.jobId});
+  @override
+  ConsumerState<_LogCallDialog> createState() => _LogCallDialogState();
+}
+
+class _LogCallDialogState extends ConsumerState<_LogCallDialog> {
+  final _summaryCtrl = TextEditingController();
+  final _durationCtrl = TextEditingController();
+  CallDirection _direction = CallDirection.out;
+  bool _saving = false;
+
+  @override
+  void dispose() { _summaryCtrl.dispose(); _durationCtrl.dispose(); super.dispose(); }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      final profile = ref.read(companyProfileProvider);
+      final duration = int.tryParse(_durationCtrl.text.trim());
+      final activity = Activity(id: '', type: ActivityType.call, timestamp: DateTime.now(),
+        author: profile.companyName.isNotEmpty ? profile.companyName : 'ProTPO',
+        body: _summaryCtrl.text.trim(), callDirection: _direction, callDurationMinutes: duration);
+      await FirestoreService.instance.createActivity(widget.jobId, activity);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+    } finally { if (mounted) setState(() => _saving = false); }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(children: [Icon(Icons.phone, size: 20, color: AppTheme.primary), const SizedBox(width: 8), const Text('Log Call', style: TextStyle(fontSize: 16))]),
+      content: SizedBox(width: 400, child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Row(children: [
+          Text('Direction:', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)), const SizedBox(width: 12),
+          SegmentedButton<CallDirection>(
+            segments: const [
+              ButtonSegment(value: CallDirection.out, label: Text('Outgoing', style: TextStyle(fontSize: 12)), icon: Icon(Icons.call_made, size: 14)),
+              ButtonSegment(value: CallDirection.in_, label: Text('Incoming', style: TextStyle(fontSize: 12)), icon: Icon(Icons.call_received, size: 14)),
+            ],
+            selected: {_direction}, onSelectionChanged: (s) => setState(() => _direction = s.first),
+            style: SegmentedButton.styleFrom(visualDensity: VisualDensity.compact),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        TextField(controller: _durationCtrl, keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Duration (minutes)', isDense: true, hintText: 'Optional', prefixIcon: Icon(Icons.timer, size: 18))),
+        const SizedBox(height: 10),
+        TextField(controller: _summaryCtrl, maxLines: 3,
+          decoration: const InputDecoration(labelText: 'Call summary', isDense: true, hintText: 'What was discussed?', alignLabelWithHint: true)),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        ElevatedButton.icon(onPressed: _saving ? null : _save,
+          icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.phone, size: 16),
+          label: const Text('Log Call')),
+      ],
+    );
   }
 }
 
