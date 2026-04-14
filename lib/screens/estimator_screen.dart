@@ -21,6 +21,10 @@ import '../models/estimator_state.dart';
 import '../services/firestore_service.dart';
 import 'project_list_screen.dart';
 import 'job_list_sheet.dart';
+import '../providers/job_providers.dart';
+import '../services/serialization.dart';
+import '../models/estimate.dart';
+import 'job_detail_screen.dart';
 import '../services/export_service.dart';
 import '../models/labor_models.dart';
 import '../widgets/settings_dialog.dart';
@@ -76,46 +80,123 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
   /// after first meaningful edit if project has not been saved yet.
   Future<void> _maybeAutosave(EstimatorState state) async {
     if (!mounted || _autoSaveDone) return;
-    // Only autosave if there's something worth saving
     final hasData = state.projectInfo.projectName.isNotEmpty ||
         (state.buildings.isNotEmpty &&
          state.buildings.first.roofGeometry.totalArea > 0);
     if (!hasData) return;
-    _autoSaveDone = true; // prevent repeat attempts
-    try {
-      final id = await FirestoreService.instance.save(
-          state, projectId: _currentProjectId);
-      if (mounted) {
-        setState(() {
-          _currentProjectId  = id;
-          _hasUnsavedChanges = false;
-          _lastSavedState    = state.hashCode;
-        });
-        AppSnackbar.info(context, 'Auto-draft saved — tap Save anytime to keep it.');
+
+    final hasActiveEst = ref.read(hasActiveEstimateProvider);
+
+    if (!hasActiveEst && _currentProjectId == null) {
+      // Legacy autosave: create a new protpo_projects doc
+      _autoSaveDone = true;
+      try {
+        final id = await FirestoreService.instance.save(
+            state, projectId: _currentProjectId);
+        if (mounted) {
+          setState(() {
+            _currentProjectId  = id;
+            _hasUnsavedChanges = false;
+            _lastSavedState    = state.hashCode;
+          });
+          AppSnackbar.info(context, 'Auto-draft saved \u2014 tap Save anytime to keep it.');
+        }
+      } catch (e) {
+        _autoSaveDone = false;
       }
-    } catch (e) {
-      _autoSaveDone = false; // allow retry on next change
+      return;
+    }
+
+    if (hasActiveEst) {
+      // Job estimate autosave: write to the estimate doc silently
+      _autoSaveDone = true;
+      try {
+        final jobId = ref.read(activeJobIdProvider)!;
+        final estId = ref.read(activeEstimateIdProvider)!;
+        final estName = ref.read(activeEstimateNameProvider);
+        final serialized = stateToJson(state, estId);
+        final totalArea = state.buildings
+            .fold(0.0, (sum, b) => sum + b.roofGeometry.totalArea);
+
+        final draft = Estimate(
+          id: estId,
+          name: estName,
+          estimatorState: serialized,
+          totalArea: totalArea,
+          totalValue: 0,
+          buildingCount: state.buildings.length,
+        );
+        await FirestoreService.instance.updateEstimate(jobId, draft);
+        if (mounted) {
+          setState(() {
+            _hasUnsavedChanges = false;
+            _lastSavedState    = state.hashCode;
+          });
+        }
+      } catch (e) {
+        _autoSaveDone = false;
+      }
     }
   }
 
 
   Future<void> _saveProject() async {
     if (_isSaving) return;
-    debugPrint('[SAVE] Starting save...');
     setState(() { _isSaving = true; _saveSuccess = false; });
+
+    final hasActiveEst = ref.read(hasActiveEstimateProvider);
+
     try {
-      final state = ref.read(estimatorProvider);
-      debugPrint('[SAVE] Saving project: ${state.projectInfo.projectName}, id: $_currentProjectId');
-      final id = await FirestoreService.instance.save(state, projectId: _currentProjectId);
-      debugPrint('[SAVE] Save succeeded, id: $id');
-      setState(() { _currentProjectId = id; _isSaving = false; _saveSuccess = true; _hasUnsavedChanges = false; _lastSavedState = ref.read(estimatorProvider).hashCode; });
-      if (mounted) {
-        final name = state.projectInfo.projectName.isNotEmpty
-            ? state.projectInfo.projectName
-            : 'Untitled Project';
-        AppSnackbar.success(context, 'Saved "$name"');
+      if (hasActiveEst) {
+        // ── NEW PATH: save to job estimate doc ──
+        final jobId = ref.read(activeJobIdProvider)!;
+        final estId = ref.read(activeEstimateIdProvider)!;
+        final estName = ref.read(activeEstimateNameProvider);
+        final state = ref.read(estimatorProvider);
+        final serialized = stateToJson(state, estId);
+
+        final totalArea = state.buildings
+            .fold(0.0, (sum, b) => sum + b.roofGeometry.totalArea);
+
+        final draft = Estimate(
+          id: estId,
+          name: estName,
+          estimatorState: serialized,
+          totalArea: totalArea,
+          totalValue: 0,
+          buildingCount: state.buildings.length,
+        );
+        await FirestoreService.instance.updateEstimate(jobId, draft);
+
+        setState(() {
+          _isSaving = false;
+          _saveSuccess = true;
+          _hasUnsavedChanges = false;
+          _lastSavedState = state.hashCode;
+        });
+        if (mounted) {
+          AppSnackbar.success(context, 'Saved estimate "$estName"');
+        }
+      } else {
+        // ── LEGACY PATH: save to protpo_projects ──
+        final state = ref.read(estimatorProvider);
+        final id = await FirestoreService.instance
+            .save(state, projectId: _currentProjectId);
+        setState(() {
+          _currentProjectId = id;
+          _isSaving = false;
+          _saveSuccess = true;
+          _hasUnsavedChanges = false;
+          _lastSavedState = ref.read(estimatorProvider).hashCode;
+        });
+        if (mounted) {
+          final name = state.projectInfo.projectName.isNotEmpty
+              ? state.projectInfo.projectName
+              : 'Untitled Project';
+          AppSnackbar.success(context, 'Saved "$name"');
+        }
       }
-      // Clear success badge after 2 seconds
+
       Future.delayed(const Duration(seconds: 2), () {
         if (mounted) setState(() => _saveSuccess = false);
       });
@@ -145,6 +226,80 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
   /// regular Open tap handler with this.
   Future<void> _openJobList() async {
     await showJobList(context);
+  }
+
+  Widget _buildContextRibbon(bool isMobile) {
+    final hasJob = ref.watch(hasActiveEstimateProvider);
+    if (!hasJob) {
+      return GestureDetector(
+        onTap: _openJobList,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          color: AppTheme.primary.withValues(alpha: 0.04),
+          child: Row(children: [
+            Icon(Icons.info_outline, size: 14, color: AppTheme.textMuted),
+            const SizedBox(width: 8),
+            Text('No job loaded \u2014 tap to open a job',
+                style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+          ]),
+        ),
+      );
+    }
+
+    final customerName = ref.watch(activeCustomerNameProvider);
+    final jobName = ref.watch(activeJobNameProvider);
+    final estName = ref.watch(activeEstimateNameProvider);
+
+    return GestureDetector(
+      onTap: () {
+        final jobId = ref.read(activeJobIdProvider);
+        if (jobId != null) {
+          Navigator.push(context,
+            MaterialPageRoute(builder: (_) => JobDetailScreen(jobId: jobId)),
+          );
+        }
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        decoration: BoxDecoration(
+          color: AppTheme.primary.withValues(alpha: 0.06),
+          border: Border(
+            bottom: BorderSide(
+                color: AppTheme.primary.withValues(alpha: 0.15)),
+          ),
+        ),
+        child: Row(children: [
+          Icon(Icons.work_outline, size: 14, color: AppTheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text.rich(
+              TextSpan(children: [
+                if (!isMobile && customerName.isNotEmpty) ...[
+                  TextSpan(text: customerName,
+                      style: TextStyle(color: AppTheme.textSecondary)),
+                  TextSpan(text: '  \u203A  ',
+                      style: TextStyle(color: AppTheme.textMuted)),
+                ],
+                TextSpan(text: jobName.isNotEmpty ? jobName : 'Job',
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                TextSpan(text: '  \u203A  ',
+                    style: TextStyle(color: AppTheme.textMuted)),
+                TextSpan(text: estName.isNotEmpty ? estName : 'Estimate',
+                    style: TextStyle(color: AppTheme.textSecondary)),
+                TextSpan(text: ' (draft)',
+                    style: TextStyle(
+                        fontSize: 10, color: AppTheme.textMuted)),
+              ]),
+              style: const TextStyle(fontSize: 12),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Icon(Icons.chevron_right, size: 16, color: AppTheme.textMuted),
+        ]),
+      ),
+    );
   }
 
   Future<void> _export(String format) async {
@@ -337,6 +492,8 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
       appBar: _buildAppBar(isMobile),
       body: Column(
         children: [
+          // Job context ribbon — shows which job/estimate is loaded
+          _buildContextRibbon(isMobile),
           // Hide building tab bar in tight landscape to save vertical space
           if (!isLandscapeTight) const BuildingTabBar(),
           // 3-panel body
