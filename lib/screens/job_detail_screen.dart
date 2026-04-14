@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import '../models/estimate.dart';
 import '../models/job.dart';
 import '../models/customer.dart';
 import '../models/activity.dart';
@@ -113,10 +114,7 @@ class _JobDetailBodyState extends ConsumerState<_JobDetailBody>
         controller: _tabCtrl,
         children: [
           _OverviewTab(job: job),
-          _PlaceholderTab(
-              icon: Icons.description_outlined,
-              label: 'Estimates',
-              message: 'Estimate management coming in Phase 5'),
+          _EstimatesTab(job: job),
           _PlaceholderTab(
               icon: Icons.timeline,
               label: 'Activity',
@@ -367,6 +365,422 @@ class _CustomerCard extends StatelessWidget {
           Text(value, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         ]),
       );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ESTIMATES TAB
+// ══════════════════════════════════════════════════════════════════════════════
+
+class _EstimatesTab extends ConsumerWidget {
+  final Job job;
+  const _EstimatesTab({required this.job});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final estimatesAsync = ref.watch(estimatesForJobProvider(job.id));
+
+    return estimatesAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => Center(
+        child: Text('Failed to load estimates: $e',
+            style: TextStyle(color: AppTheme.error)),
+      ),
+      data: (estimates) => Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Row(children: [
+            Text(
+                '${estimates.length} estimate${estimates.length == 1 ? '' : 's'}',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    fontWeight: FontWeight.w500)),
+            const Spacer(),
+            ElevatedButton.icon(
+              onPressed: () => _createEstimate(context, ref),
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('New Estimate',
+                  style: TextStyle(fontSize: 12)),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
+                minimumSize: Size.zero,
+              ),
+            ),
+          ]),
+        ),
+        Expanded(
+          child: estimates.isEmpty
+              ? Center(
+                  child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                    Icon(Icons.description_outlined,
+                        size: 40, color: AppTheme.textMuted),
+                    const SizedBox(height: 8),
+                    Text('No estimates yet',
+                        style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: AppTheme.textMuted)),
+                    const SizedBox(height: 4),
+                    Text('Create your first estimate to start bidding.',
+                        style: TextStyle(
+                            fontSize: 12, color: AppTheme.textMuted)),
+                  ]))
+              : ListView.separated(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: estimates.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (_, i) => _EstimateCard(
+                    job: job,
+                    estimate: estimates[i],
+                    isActive: estimates[i].id == job.activeEstimateId,
+                  ),
+                ),
+        ),
+      ]),
+    );
+  }
+
+  Future<void> _createEstimate(BuildContext context, WidgetRef ref) async {
+    final nameCtrl = TextEditingController(text: 'New Estimate');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('New Estimate', style: TextStyle(fontSize: 16)),
+        content: TextField(
+          controller: nameCtrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Estimate Name',
+            isDense: true,
+            hintText: 'e.g. TPO Bid, PVC Alternate',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, nameCtrl.text.trim()),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+    nameCtrl.dispose();
+    if (name == null || name.isEmpty) return;
+
+    try {
+      final estimate = Estimate(
+        id: '',
+        name: name,
+        estimatorState: const {},
+      );
+      final estId = await FirestoreService.instance
+          .createEstimate(job.id, estimate);
+
+      final updated = job.copyWith(activeEstimateId: estId);
+      await FirestoreService.instance.updateJob(updated);
+
+      final activity = Activity(
+        id: '',
+        type: ActivityType.system,
+        timestamp: DateTime.now(),
+        author: 'system',
+        body: 'Estimate created: $name',
+        systemEventKind: 'estimate_created',
+        systemEventData: {'estimateId': estId, 'name': name},
+      );
+      await FirestoreService.instance.createActivity(job.id, activity);
+
+      // New estimate has empty state — don't try to deserialize.
+      // Just set the active IDs so saves go to the right place.
+      ref.read(activeJobIdProvider.notifier).state = job.id;
+      ref.read(activeEstimateIdProvider.notifier).state = estId;
+      ref.read(activeJobNameProvider.notifier).state = job.jobName;
+      ref.read(activeCustomerNameProvider.notifier).state = job.customerName;
+      ref.read(activeEstimateNameProvider.notifier).state = name;
+      FirestoreService.instance.saveLastSession(
+          jobId: job.id, estimateId: estId);
+
+      if (context.mounted) Navigator.pop(context);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to create estimate: $e')),
+        );
+      }
+    }
+  }
+}
+
+class _EstimateCard extends ConsumerWidget {
+  final Job job;
+  final Estimate estimate;
+  final bool isActive;
+
+  const _EstimateCard({
+    required this.job,
+    required this.estimate,
+    required this.isActive,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isActive
+              ? AppTheme.primary.withValues(alpha: 0.4)
+              : AppTheme.border,
+          width: isActive ? 2 : 1,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+          Row(children: [
+            Expanded(
+              child: Row(children: [
+                Icon(Icons.description_outlined,
+                    size: 18,
+                    color: isActive
+                        ? AppTheme.primary
+                        : AppTheme.textMuted),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(estimate.name,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: isActive
+                              ? AppTheme.primary
+                              : AppTheme.textPrimary),
+                      overflow: TextOverflow.ellipsis),
+                ),
+                if (isActive) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text('Active',
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.primary)),
+                  ),
+                ],
+              ]),
+            ),
+            PopupMenuButton<String>(
+              icon: Icon(Icons.more_vert,
+                  size: 18, color: AppTheme.textMuted),
+              onSelected: (v) {
+                if (v == 'rename') _rename(context, ref);
+                if (v == 'duplicate') _duplicate(context, ref);
+                if (v == 'delete') _delete(context, ref);
+              },
+              itemBuilder: (_) => [
+                const PopupMenuItem(
+                    value: 'rename',
+                    child: Row(children: [
+                      Icon(Icons.edit, size: 16),
+                      SizedBox(width: 8),
+                      Text('Rename'),
+                    ])),
+                const PopupMenuItem(
+                    value: 'duplicate',
+                    child: Row(children: [
+                      Icon(Icons.copy, size: 16),
+                      SizedBox(width: 8),
+                      Text('Duplicate'),
+                    ])),
+                PopupMenuItem(
+                    value: 'delete',
+                    child: Row(children: [
+                      Icon(Icons.delete_outline,
+                          size: 16, color: AppTheme.error),
+                      const SizedBox(width: 8),
+                      Text('Delete',
+                          style: TextStyle(color: AppTheme.error)),
+                    ])),
+              ],
+            ),
+          ]),
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Wrap(spacing: 16, runSpacing: 4, children: [
+              if (estimate.totalArea > 0)
+                _stat(Icons.crop_square,
+                    '${estimate.totalArea.toStringAsFixed(0)} sf'),
+              _stat(Icons.business,
+                  '${estimate.buildingCount} bldg${estimate.buildingCount != 1 ? "s" : ""}'),
+              if (estimate.updatedAt != null)
+                _stat(Icons.update,
+                    _dateFmt.format(estimate.updatedAt!)),
+            ]),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => _loadIntoEstimator(context, ref),
+                icon: const Icon(Icons.open_in_new, size: 16),
+                label: const Text('Load into Estimator'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isActive
+                      ? AppTheme.primary
+                      : AppTheme.textSecondary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  textStyle: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  static Widget _stat(IconData icon, String label) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: AppTheme.textMuted),
+          const SizedBox(width: 4),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 11, color: AppTheme.textSecondary)),
+        ],
+      );
+
+  void _loadIntoEstimator(BuildContext context, WidgetRef ref) {
+    FirestoreService.instance.updateJob(
+        job.copyWith(activeEstimateId: estimate.id));
+
+    loadEstimateIntoEditorRef(ref, estimate, job.id,
+        jobName: job.jobName, customerName: job.customerName);
+
+    FirestoreService.instance.saveLastSession(
+        jobId: job.id, estimateId: estimate.id);
+
+    Navigator.pop(context);
+  }
+
+  Future<void> _rename(BuildContext context, WidgetRef ref) async {
+    final ctrl = TextEditingController(text: estimate.name);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename Estimate',
+            style: TextStyle(fontSize: 16)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+              labelText: 'Name', isDense: true),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () =>
+                  Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('Rename')),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (newName == null || newName.isEmpty || newName == estimate.name) return;
+
+    try {
+      final updated = estimate.copyWith(name: newName);
+      await FirestoreService.instance
+          .updateEstimate(job.id, updated);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Rename failed: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _duplicate(BuildContext context, WidgetRef ref) async {
+    try {
+      final copy = Estimate(
+        id: '',
+        name: '${estimate.name} (Copy)',
+        estimatorState: estimate.estimatorState,
+        totalArea: estimate.totalArea,
+        totalValue: estimate.totalValue,
+        buildingCount: estimate.buildingCount,
+      );
+      await FirestoreService.instance.createEstimate(job.id, copy);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Duplicate failed: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _delete(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Estimate?',
+            style: TextStyle(fontSize: 16)),
+        content: Text(
+            'Delete "${estimate.name}" and all its version history? '
+            'This cannot be undone.',
+            style: const TextStyle(fontSize: 13)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.error),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await FirestoreService.instance
+          .deleteEstimate(job.id, estimate.id);
+      if (estimate.id == job.activeEstimateId) {
+        await FirestoreService.instance
+            .updateJob(job.copyWith(activeEstimateId: null));
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Delete failed: $e')),
+        );
+      }
+    }
+  }
 }
 
 class _PlaceholderTab extends StatelessWidget {
