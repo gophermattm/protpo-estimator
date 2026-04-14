@@ -35,6 +35,16 @@ final activeJobIdProvider = StateProvider<String?>((ref) => null);
 /// estimate is loaded. Always null if activeJobId is null.
 final activeEstimateIdProvider = StateProvider<String?>((ref) => null);
 
+/// Display name for the active job — set when loading an estimate.
+/// Used by the estimator context ribbon. Not reactive to Firestore changes.
+final activeJobNameProvider = StateProvider<String>((ref) => '');
+
+/// Display name for the active customer — set when loading an estimate.
+final activeCustomerNameProvider = StateProvider<String>((ref) => '');
+
+/// Display name for the active estimate — set when loading an estimate.
+final activeEstimateNameProvider = StateProvider<String>((ref) => '');
+
 /// True when both an active job and estimate are set — meaning the editor
 /// is working on a real estimate and autosave should write to the estimate
 /// doc rather than protpo_projects. Used by estimator_screen to decide
@@ -62,8 +72,10 @@ final hasActiveEstimateProvider = Provider<bool>((ref) {
 bool loadEstimateIntoEditor(
   ProviderContainer container,
   Estimate estimate,
-  String jobId,
-) {
+  String jobId, {
+  String jobName = '',
+  String customerName = '',
+}) {
   if (estimate.estimatorState.isEmpty) return false;
 
   final loaded = stateFromJson(estimate.estimatorState);
@@ -72,6 +84,9 @@ bool loadEstimateIntoEditor(
   container.read(estimatorProvider.notifier).loadState(loaded);
   container.read(activeJobIdProvider.notifier).state = jobId;
   container.read(activeEstimateIdProvider.notifier).state = estimate.id;
+  container.read(activeJobNameProvider.notifier).state = jobName;
+  container.read(activeCustomerNameProvider.notifier).state = customerName;
+  container.read(activeEstimateNameProvider.notifier).state = estimate.name;
   return true;
 }
 
@@ -79,8 +94,10 @@ bool loadEstimateIntoEditor(
 bool loadEstimateIntoEditorRef(
   dynamic ref,
   Estimate estimate,
-  String jobId,
-) {
+  String jobId, {
+  String jobName = '',
+  String customerName = '',
+}) {
   if (estimate.estimatorState.isEmpty) return false;
 
   final loaded = stateFromJson(estimate.estimatorState);
@@ -89,6 +106,9 @@ bool loadEstimateIntoEditorRef(
   ref.read(estimatorProvider.notifier).loadState(loaded);
   ref.read(activeJobIdProvider.notifier).state = jobId;
   ref.read(activeEstimateIdProvider.notifier).state = estimate.id;
+  ref.read(activeJobNameProvider.notifier).state = jobName;
+  ref.read(activeCustomerNameProvider.notifier).state = customerName;
+  ref.read(activeEstimateNameProvider.notifier).state = estimate.name;
   return true;
 }
 
@@ -198,7 +218,11 @@ Future<bool> restoreLastSession(ProviderContainer container) async {
   if (estimate == null) return false;
 
   // Load the estimate into the editor
-  return loadEstimateIntoEditor(container, estimate, session.jobId!);
+  return loadEstimateIntoEditor(
+    container, estimate, session.jobId!,
+    jobName: job.jobName,
+    customerName: job.customerName,
+  );
 }
 
 /// Persists the current active job/estimate IDs for session restore.

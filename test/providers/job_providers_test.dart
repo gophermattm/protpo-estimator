@@ -89,10 +89,14 @@ void main() {
       );
 
       // Load the estimate into the editor
-      final result = loadEstimateIntoEditor(container, estimate, 'job-42');
+      final result = loadEstimateIntoEditor(container, estimate, 'job-42',
+          jobName: 'Warehouse', customerName: 'Acme');
       expect(result, isTrue);
       expect(container.read(activeJobIdProvider), 'job-42');
       expect(container.read(activeEstimateIdProvider), 'est-test');
+      expect(container.read(activeJobNameProvider), 'Warehouse');
+      expect(container.read(activeCustomerNameProvider), 'Acme');
+      expect(container.read(activeEstimateNameProvider), 'TPO Bid');
       expect(
         container.read(estimatorProvider).projectInfo.projectName,
         'Warehouse Bid',
