@@ -20,6 +20,7 @@ import '../providers/estimator_providers.dart';
 import '../models/estimator_state.dart';
 import '../services/firestore_service.dart';
 import 'project_list_screen.dart';
+import 'job_list_sheet.dart';
 import '../services/export_service.dart';
 import '../models/labor_models.dart';
 import '../widgets/settings_dialog.dart';
@@ -137,6 +138,13 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
         _lastSavedState     = ref.read(estimatorProvider).hashCode;
       });
     }
+  }
+
+  /// Debug entry point for the new Job List (Phase 4).
+  /// Long-press the Open button to reach this. Phase 8 replaces the
+  /// regular Open tap handler with this.
+  Future<void> _openJobList() async {
+    await showJobList(context);
   }
 
   Future<void> _export(String format) async {
@@ -412,11 +420,14 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
       actions: [
         if (isMobile) ...[
           // Compact icon-only buttons on mobile
-          IconButton(
-            onPressed: _openProject,
-            icon: const Icon(Icons.folder_open, size: 20),
-            color: AppTheme.textSecondary,
-            tooltip: 'Open Project',
+          GestureDetector(
+            onLongPress: _openJobList,
+            child: IconButton(
+              onPressed: _openProject,
+              icon: const Icon(Icons.folder_open, size: 20),
+              color: AppTheme.textSecondary,
+              tooltip: 'Open Project (long-press for Jobs)',
+            ),
           ),
           if (_isSaving)
             const Padding(
@@ -457,11 +468,14 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
           // Full labels on desktop/tablet
           const _ProjectHealthChip(),
           const SizedBox(width: 8),
-          TextButton.icon(
-            onPressed: _openProject,
-            icon: const Icon(Icons.folder_open, size: 18),
-            label: const Text('Open'),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.textSecondary),
+          GestureDetector(
+            onLongPress: _openJobList,
+            child: TextButton.icon(
+              onPressed: _openProject,
+              icon: const Icon(Icons.folder_open, size: 18),
+              label: const Text('Open'),
+              style: TextButton.styleFrom(foregroundColor: AppTheme.textSecondary),
+            ),
           ),
           const SizedBox(width: 4),
           if (_isSaving)

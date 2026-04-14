@@ -10,7 +10,7 @@ import '../models/job.dart';
 import '../providers/job_providers.dart';
 import '../services/firestore_service.dart';
 import '../theme/app_theme.dart';
-// import 'job_detail_screen.dart'; // TODO: uncomment when Task 2 (job_detail_screen.dart) lands
+import 'job_detail_screen.dart';
 
 final _dateFmt = DateFormat('MMM d, yyyy');
 
@@ -170,11 +170,10 @@ class _JobListSheetState extends ConsumerState<_JobListSheet> {
   }
 
   void _openJobDetail(Job job) {
-    // TODO: uncomment when job_detail_screen.dart lands (Task 2)
     Navigator.pop(context);
-    // Navigator.push(context,
-    //   MaterialPageRoute(builder: (_) => JobDetailScreen(jobId: job.id)),
-    // );
+    Navigator.push(context,
+      MaterialPageRoute(builder: (_) => JobDetailScreen(jobId: job.id)),
+    );
   }
 
   Future<void> _deleteJob(Job job) async {
