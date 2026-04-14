@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../models/estimate.dart';
+import '../models/estimate_version.dart';
 import '../models/job.dart';
 import '../models/customer.dart';
 import '../models/activity.dart';
@@ -517,7 +518,7 @@ class _EstimatesTab extends ConsumerWidget {
   }
 }
 
-class _EstimateCard extends ConsumerWidget {
+class _EstimateCard extends ConsumerStatefulWidget {
   final Job job;
   final Estimate estimate;
   final bool isActive;
@@ -529,7 +530,18 @@ class _EstimateCard extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_EstimateCard> createState() => _EstimateCardState();
+}
+
+class _EstimateCardState extends ConsumerState<_EstimateCard> {
+  bool _showVersions = false;
+
+  Job get job => widget.job;
+  Estimate get estimate => widget.estimate;
+  bool get isActive => widget.isActive;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -587,9 +599,9 @@ class _EstimateCard extends ConsumerWidget {
               icon: Icon(Icons.more_vert,
                   size: 18, color: AppTheme.textMuted),
               onSelected: (v) {
-                if (v == 'rename') _rename(context, ref);
-                if (v == 'duplicate') _duplicate(context, ref);
-                if (v == 'delete') _delete(context, ref);
+                if (v == 'rename') _rename();
+                if (v == 'duplicate') _duplicate();
+                if (v == 'delete') _delete();
               },
               itemBuilder: (_) => [
                 const PopupMenuItem(
@@ -636,7 +648,7 @@ class _EstimateCard extends ConsumerWidget {
             child: SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () => _loadIntoEstimator(context, ref),
+                onPressed: _loadIntoEstimator,
                 icon: const Icon(Icons.open_in_new, size: 16),
                 label: const Text('Load into Estimator'),
                 style: ElevatedButton.styleFrom(
@@ -653,6 +665,29 @@ class _EstimateCard extends ConsumerWidget {
               ),
             ),
           ),
+          // ── Version history (expandable) ──
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: GestureDetector(
+              onTap: () => setState(() => _showVersions = !_showVersions),
+              child: Row(children: [
+                Icon(
+                  _showVersions ? Icons.expand_less : Icons.expand_more,
+                  size: 16,
+                  color: AppTheme.textMuted,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Version History',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: AppTheme.textMuted),
+                ),
+              ]),
+            ),
+          ),
+          if (_showVersions) _buildVersionList(),
         ]),
       ),
     );
@@ -669,7 +704,51 @@ class _EstimateCard extends ConsumerWidget {
         ],
       );
 
-  void _loadIntoEstimator(BuildContext context, WidgetRef ref) {
+  Widget _buildVersionList() {
+    final versionsAsync = ref.watch(
+        versionsForEstimateProvider(
+            (jobId: job.id, estimateId: estimate.id)));
+
+    return versionsAsync.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.all(12),
+        child: Center(
+            child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2))),
+      ),
+      error: (e, _) => Padding(
+        padding: const EdgeInsets.all(8),
+        child: Text('Failed to load versions: $e',
+            style: TextStyle(fontSize: 11, color: AppTheme.error)),
+      ),
+      data: (versions) {
+        if (versions.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text('No versions saved yet.',
+                style: TextStyle(
+                    fontSize: 11, color: AppTheme.textMuted)),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Column(
+            children: versions
+                .map((v) => _VersionRow(
+                      version: v,
+                      job: job,
+                      estimate: estimate,
+                    ))
+                .toList(),
+          ),
+        );
+      },
+    );
+  }
+
+  void _loadIntoEstimator() {
     FirestoreService.instance.updateJob(
         job.copyWith(activeEstimateId: estimate.id));
 
@@ -682,7 +761,7 @@ class _EstimateCard extends ConsumerWidget {
     Navigator.pop(context);
   }
 
-  Future<void> _rename(BuildContext context, WidgetRef ref) async {
+  Future<void> _rename() async {
     final ctrl = TextEditingController(text: estimate.name);
     final newName = await showDialog<String>(
       context: context,
@@ -722,7 +801,7 @@ class _EstimateCard extends ConsumerWidget {
     }
   }
 
-  Future<void> _duplicate(BuildContext context, WidgetRef ref) async {
+  Future<void> _duplicate() async {
     try {
       final copy = Estimate(
         id: '',
@@ -742,7 +821,7 @@ class _EstimateCard extends ConsumerWidget {
     }
   }
 
-  Future<void> _delete(BuildContext context, WidgetRef ref) async {
+  Future<void> _delete() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -777,6 +856,138 @@ class _EstimateCard extends ConsumerWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Delete failed: $e')),
+        );
+      }
+    }
+  }
+}
+
+class _VersionRow extends ConsumerWidget {
+  final EstimateVersion version;
+  final Job job;
+  final Estimate estimate;
+
+  const _VersionRow({
+    required this.version,
+    required this.job,
+    required this.estimate,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isExport = version.source == VersionSource.export;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      margin: const EdgeInsets.only(bottom: 4),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(children: [
+        Icon(
+          isExport ? Icons.picture_as_pdf : Icons.bookmark_outline,
+          size: 14,
+          color: isExport
+              ? const Color(0xFFEF4444)
+              : AppTheme.textMuted,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+            Text(version.label,
+                style: const TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w600),
+                overflow: TextOverflow.ellipsis),
+            Text(
+              '${_dateFmt.format(version.createdAt)}'
+              '${version.createdBy.isNotEmpty ? ' by ${version.createdBy}' : ''}',
+              style: TextStyle(
+                  fontSize: 10, color: AppTheme.textMuted),
+            ),
+          ]),
+        ),
+        TextButton(
+          onPressed: () => _restore(context, ref),
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(
+                horizontal: 8, vertical: 4),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: Text('Restore',
+              style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.primary)),
+        ),
+      ]),
+    );
+  }
+
+  Future<void> _restore(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Restore Version?',
+            style: TextStyle(fontSize: 16)),
+        content: Text(
+          'Restoring "${version.label}" will overwrite your current '
+          'draft. This cannot be undone. Continue?',
+          style: const TextStyle(fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      final restored = estimate.copyWith(
+        estimatorState: version.estimatorState,
+        activeVersionId: version.id,
+      );
+      await FirestoreService.instance
+          .updateEstimate(job.id, restored);
+
+      loadEstimateIntoEditorRef(ref, restored, job.id,
+          jobName: job.jobName, customerName: job.customerName);
+
+      FirestoreService.instance.saveLastSession(
+          jobId: job.id, estimateId: estimate.id);
+
+      final activity = Activity(
+        id: '',
+        type: ActivityType.system,
+        timestamp: DateTime.now(),
+        author: 'system',
+        body: 'Restored version: ${version.label}',
+        systemEventKind: 'version_restored',
+        systemEventData: {
+          'versionId': version.id,
+          'label': version.label,
+        },
+      );
+      await FirestoreService.instance.createActivity(job.id, activity);
+
+      if (context.mounted) {
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Restore failed: $e')),
         );
       }
     }
