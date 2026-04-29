@@ -55,6 +55,17 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ── QXO SKU alignment mapping (BOM ↔ QXO catalog) ─────────────────────
+    // Edited by the operator from the SKU Mapping admin screen. Each doc
+    // pins one (skuKey, attributes) tuple to a QXO itemNumber.
+    match /qxo_sku_mappings/{docId} {
+      allow read: if true;
+      allow create, update: if
+        request.resource.data.keys().hasAll(['skuKey']) &&
+        request.resource.size() < 10 * 1024;
+      allow delete: if true;
+    }
+
     // ── Customers ────────────────────────────────────────────────────────
     // Used by FirestoreService.createCustomer / updateCustomer / etc.
     match /protpo_customers/{docId} {

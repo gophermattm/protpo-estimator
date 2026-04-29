@@ -384,23 +384,39 @@ class _MappingEditorDialogState extends State<_MappingEditorDialog> {
     return attrs;
   }
 
+  bool _saving = false;
+
   Future<void> _save() async {
     if (_selectedItem == null) {
       setState(() => _error = 'Pick a QXO item first.');
       return;
     }
-    final attrs = _collectAttributes();
-    final hash = QxoSkuMappingService.hashAttributes(attrs);
-    final mapping = QxoSkuMapping(
-      skuKey: widget.entry.skuKey,
-      attributes: attrs,
-      attributesHash: hash,
-      qxoItemNumber: _selectedItem!.itemNumber,
-      qxoProductName: _selectedItem!.productName,
-      notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
-    );
-    await widget.service.save(mapping);
-    if (mounted) Navigator.pop(context);
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final attrs = _collectAttributes();
+      final hash = QxoSkuMappingService.hashAttributes(attrs);
+      final mapping = QxoSkuMapping(
+        skuKey: widget.entry.skuKey,
+        attributes: attrs,
+        attributesHash: hash,
+        qxoItemNumber: _selectedItem!.itemNumber,
+        qxoProductName: _selectedItem!.productName,
+        notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+      );
+      await widget.service.save(mapping);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = 'Save failed: $e\n\n'
+            'If this says "permission-denied", deploy the updated Firestore '
+            'rules: `firebase deploy --only firestore:rules` from protpo_app/.';
+      });
+    }
   }
 
   @override
@@ -469,14 +485,32 @@ class _MappingEditorDialogState extends State<_MappingEditorDialog> {
               ]),
               const SizedBox(height: 8),
 
+              if (_error != null)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    border: Border.all(color: Colors.red.shade200),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Icon(Icons.error_outline, size: 18, color: Colors.red.shade700),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(_error!,
+                          style: TextStyle(
+                              color: Colors.red.shade900, fontSize: 12)),
+                    ),
+                  ]),
+                ),
               Expanded(
                 child: _searchResults.isEmpty
                     ? Center(
                         child: Text(
-                          _error ??
-                              'Enter a search query above and tap Search.',
-                          style: TextStyle(
-                              color: _error != null ? Colors.red : AppTheme.textMuted),
+                          'Enter a search query above and tap Search.',
+                          style: TextStyle(color: AppTheme.textMuted),
                         ),
                       )
                     : ListView.separated(
@@ -539,9 +573,14 @@ class _MappingEditorDialogState extends State<_MappingEditorDialog> {
                 ),
                 const SizedBox(width: 8),
                 FilledButton.icon(
-                  icon: const Icon(Icons.save, size: 16),
-                  label: const Text('Save mapping'),
-                  onPressed: _selectedItem == null ? null : _save,
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 14, height: 14,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.save, size: 16),
+                  label: Text(_saving ? 'Saving…' : 'Save mapping'),
+                  onPressed: (_selectedItem == null || _saving) ? null : _save,
                 ),
               ]),
             ],
