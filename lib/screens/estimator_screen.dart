@@ -27,6 +27,7 @@ import '../models/estimate.dart';
 import 'job_detail_screen.dart';
 import '../services/export_service.dart';
 import '../widgets/settings_dialog.dart';
+import 'sku_mapping_admin_screen.dart';
 import '../services/validation_engine.dart';
 import '../services/platform_utils.dart';
 import '../models/estimate_version.dart';
@@ -682,6 +683,13 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
               tooltip: _saveSuccess ? 'Saved!' : 'Save',
             ),
           IconButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SkuMappingAdminScreen()),
+            ),
+            icon: Icon(Icons.link, size: 20, color: AppTheme.textSecondary),
+            tooltip: 'SKU Mapping (BOM ↔ QXO)',
+          ),
+          IconButton(
             onPressed: () => SettingsDialog.show(context),
             icon: Icon(Icons.settings, size: 20, color: AppTheme.textSecondary),
             tooltip: 'Company Settings',
@@ -728,6 +736,14 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
               label: Text(_saveSuccess ? 'Saved!' : 'Save',
                   style: TextStyle(color: _saveSuccess ? AppTheme.accent : null)),
             ),
+          const SizedBox(width: 4),
+          TextButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SkuMappingAdminScreen()),
+            ),
+            icon: Icon(Icons.link, size: 18, color: AppTheme.textSecondary),
+            label: Text('SKU Mapping', style: TextStyle(color: AppTheme.textSecondary)),
+          ),
           const SizedBox(width: 4),
           TextButton.icon(
             onPressed: () => SettingsDialog.show(context),

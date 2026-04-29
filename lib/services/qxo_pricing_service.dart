@@ -1,10 +1,16 @@
 import 'package:flutter/foundation.dart';
+import 'bom_calculator.dart' show BomLineItem;
 import 'qxo_api_service.dart';
+import 'qxo_sku_mapping_service.dart';
 
-/// Pricing service that searches QXO catalog by BOM item names,
-/// resolves them to Beacon item numbers, then fetches live pricing.
+/// Pricing service that resolves BOM items to QXO catalog SKUs.
+///
+/// Resolution order:
+///   1. Deterministic lookup via [QxoSkuMappingService] using (skuKey, attributes)
+///   2. Fall back to fuzzy text search by display name when no mapping exists
 class QxoPricingService {
   final _api = QxoApiService();
+  final _mapping = QxoSkuMappingService();
 
   /// Given a list of BOM item names and their quantities,
   /// searches QXO for matching products, fetches pricing, and returns
@@ -553,6 +559,111 @@ class QxoPricingService {
     }
 
     return sku; // Returns the item number as the search query — QXO finds it directly
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // DETERMINISTIC RESOLUTION (skuKey + attributes → QXO SKU)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Resolves BOM lines to QXO pricing using the Firestore mapping table
+  /// first, falling back to fuzzy search by display name when a line has no
+  /// stored mapping (or no skuKey at all).
+  ///
+  /// Returns a map keyed by `BomLineItem.name` so callers can correlate.
+  Future<Map<String, QxoPricedItem>> fetchPricingForLines(
+      List<BomLineItem> lines) async {
+    if (lines.isEmpty) return {};
+
+    final result = <String, QxoPricedItem>{};
+    final fuzzyFallbackLines = <BomLineItem>[];
+    final fuzzyFallbackQty = <String, int>{};
+
+    // Step 1: Deterministic mapping lookup for every line that has a skuKey.
+    final mappingRequests = <({String skuKey, Map<String, dynamic>? attributes})>[];
+    final lineByDocId = <String, BomLineItem>{};
+    for (final line in lines) {
+      if (line.skuKey == null) {
+        fuzzyFallbackLines.add(line);
+        fuzzyFallbackQty[line.name] = line.orderQty.toInt();
+        continue;
+      }
+      final id = QxoSkuMappingService.buildDocId(line.skuKey!, line.attributes);
+      mappingRequests.add((skuKey: line.skuKey!, attributes: line.attributes));
+      lineByDocId[id] = line;
+    }
+
+    Map<String, QxoSkuMapping?> mappings = {};
+    if (mappingRequests.isNotEmpty) {
+      try {
+        mappings = await _mapping.lookupMany(mappingRequests);
+      } catch (e) {
+        debugPrint('[QXO mapping] lookup error: $e — falling back to fuzzy');
+      }
+    }
+
+    // Step 2: For each line, try the deterministic mapping; if absent or
+    // unmapped, queue it for the legacy fuzzy path.
+    final directSkus = <String>{}; // qxoItemNumbers we already know we want
+    final directLineByItem = <String, List<BomLineItem>>{};
+    for (final entry in lineByDocId.entries) {
+      final line = entry.value;
+      final mapping = mappings[entry.key];
+      if (mapping != null && mapping.isMapped) {
+        directSkus.add(mapping.qxoItemNumber!);
+        directLineByItem.putIfAbsent(mapping.qxoItemNumber!, () => []).add(line);
+      } else {
+        fuzzyFallbackLines.add(line);
+        fuzzyFallbackQty[line.name] = line.orderQty.toInt();
+      }
+    }
+
+    // Step 3: Pull pricing for the deterministically-resolved SKUs in one batch.
+    if (directSkus.isNotEmpty) {
+      Map<String, Map<String, double>> prices = {};
+      try {
+        prices = await _api.getPricing(directSkus.toList());
+      } catch (e) {
+        debugPrint('[QXO mapping] pricing error: $e');
+      }
+
+      for (final sku in directSkus) {
+        final priceMap = prices[sku];
+        double? unitPrice;
+        String? uom;
+        if (priceMap != null && priceMap.isNotEmpty) {
+          final priceEntry = priceMap.entries.first;
+          uom = priceEntry.key;
+          unitPrice = priceEntry.value;
+        }
+
+        // One QXO SKU may correspond to multiple BOM lines (consolidated).
+        for (final line in directLineByItem[sku] ?? const <BomLineItem>[]) {
+          final mapping = mappings[
+              QxoSkuMappingService.buildDocId(line.skuKey!, line.attributes)];
+          result[line.name] = QxoPricedItem(
+            bomName: line.name,
+            qxoItemNumber: sku,
+            qxoProductName: mapping?.qxoProductName ?? '',
+            qxoBrand: '',
+            unitPrice: unitPrice,
+            uom: uom,
+            orderQty: line.orderQty.toInt(),
+            confidence: 1.0, // deterministic = full confidence
+          );
+        }
+      }
+    }
+
+    // Step 4: Legacy fuzzy fallback for unmapped lines.
+    if (fuzzyFallbackLines.isNotEmpty) {
+      final names = fuzzyFallbackLines.map((l) => l.name).toList();
+      final fuzzy = await fetchBomPricing(names, bomQuantities: fuzzyFallbackQty);
+      for (final entry in fuzzy.entries) {
+        result.putIfAbsent(entry.key, () => entry.value);
+      }
+    }
+
+    return result;
   }
 }
 

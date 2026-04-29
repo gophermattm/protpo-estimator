@@ -42,6 +42,17 @@ class BomLineItem {
   /// If null, falls back to [name] (with any "— Layer X" suffix stripped).
   final String? consolidatedName;
 
+  /// Stable identifier for QXO catalog mapping. Independent of display name —
+  /// e.g. 'tpo_membrane_field', 'fastener_insulation', 'plate_3in_insulation'.
+  /// The QXO mapping service looks up (skuKey, attributes) → qxoSkuId.
+  final String? skuKey;
+
+  /// Variant attributes that discriminate between SKUs sharing the same skuKey.
+  /// E.g. for `tpo_membrane_field`: {thickness: '60 mil', color: 'White',
+  /// rollWidth: "10'"}. For `fastener_insulation`: {deckType: 'Steel',
+  /// lengthIn: 4}. Keep keys camelCase, values JSON-serializable.
+  final Map<String, dynamic>? attributes;
+
   const BomLineItem({
     required this.category,
     required this.name,
@@ -51,6 +62,8 @@ class BomLineItem {
     required this.trace,
     this.consolidationKey,
     this.consolidatedName,
+    this.skuKey,
+    this.attributes,
   });
 
   /// True if this line has a non-zero quantity.
@@ -211,6 +224,13 @@ class BomCalculator {
         orderQty: orderQty,
         unit: 'rolls',
         notes: '${membrane.rollWidth}×100\', ${fieldRollCoverage.toInt()} sf/roll',
+        skuKey: 'tpo_membrane_field',
+        attributes: {
+          'membraneType': membrane.membraneType,
+          'thickness':    membrane.thickness,
+          'color':        membrane.color,
+          'rollWidth':    membrane.rollWidth,
+        },
         trace: BomTrace(
           baseDescription: '${_sf(effectiveFieldArea)} ÷ ${fieldRollCoverage.toInt()} sf/roll',
           baseQty: base,
@@ -247,6 +267,13 @@ class BomCalculator {
         orderQty: orderQty,
         unit: 'rolls',
         notes: "$pRW×100', $pRC sf/roll — parapet, perimeter & corner zones",
+        skuKey: 'tpo_membrane_flashing',
+        attributes: {
+          'membraneType': membrane.membraneType,
+          'thickness':    membrane.thickness,
+          'color':        membrane.color,
+          'rollWidth':    pRW,
+        },
         trace: BomTrace(
           baseDescription: '${_sf(flashingArea)} ÷ $pRC sf/roll',
           baseQty: base,
@@ -289,6 +316,12 @@ class BomCalculator {
           orderQty: orderQty,
           unit: 'boards',
           notes: "4'×8' boards (${boardSf.toInt()} sf each), ${l1.attachmentMethod}",
+          skuKey: 'iso_polyiso_flat',
+          attributes: {
+            'type':       l1.type,
+            'thicknessIn': l1.thickness,
+            'boardSize':  "4x8",
+          },
           trace: _insTrace(totalArea, base, withW, orderQty, wMat, boardSf,
               'Layer 1 — ${l1.type} ${_ins(l1.thickness)}'),
         ));
@@ -307,6 +340,12 @@ class BomCalculator {
             orderQty: orderQty,
             unit: 'boards',
             notes: "4'×8' boards (${boardSf.toInt()} sf each), ${l2.attachmentMethod}",
+            skuKey: 'iso_polyiso_flat',
+            attributes: {
+              'type':       l2.type,
+              'thicknessIn': l2.thickness,
+              'boardSize':  "4x8",
+            },
             trace: _insTrace(totalArea, base, withW, orderQty, wMat, boardSf,
                 'Layer 2 — ${l2.type} ${_ins(l2.thickness)}'),
           ));
@@ -330,6 +369,13 @@ class BomCalculator {
               orderQty: orderQty,
               unit: 'boards',
               notes: "4'×4' tapered boards, ${taper.attachmentMethod}",
+              skuKey: 'iso_polyiso_tapered_panel',
+              attributes: {
+                'manufacturer': taper.manufacturer,
+                'taperRate':    taper.taperRate,
+                'profileType':  taper.profileType,
+                'panelLetter':  letter,
+              },
               trace: BomTrace(
                 baseDescription: '$count panels (Panel $letter) from board schedule',
                 baseQty: count.toDouble(),
@@ -361,6 +407,12 @@ class BomCalculator {
               orderQty: orderQty,
               unit: 'boards',
               notes: "4'×4' flat stock under tapered panels, ${taper.attachmentMethod}",
+              skuKey: 'iso_polyiso_flat_fill',
+              attributes: {
+                'manufacturer': taper.manufacturer,
+                'thicknessIn': thickness,
+                'boardSize':  "4x4",
+              },
               trace: BomTrace(
                 baseDescription: '$count boards (${_ins(thickness)} flat fill) from board schedule',
                 baseQty: count.toDouble(),
@@ -389,6 +441,13 @@ class BomCalculator {
             orderQty: orderQty,
             unit: 'boards',
             notes: 'Min ${_ins(taper.minThickness)} at drain — place drains for detailed schedule',
+            skuKey: 'iso_polyiso_tapered_panel',
+            attributes: {
+              'manufacturer': taper.manufacturer,
+              'taperRate':    taper.taperRate,
+              'profileType':  taper.profileType,
+              'panelLetter':  'estimated',
+            },
             trace: _insTrace(taperArea, base, withW, orderQty, wMat, boardSf,
                 'Tapered — Polyiso (estimated, no drains placed)'),
           ));
@@ -405,6 +464,12 @@ class BomCalculator {
           items.add(BomLineItem(
             category: 'Insulation',
             name: '${cb.type} ${_ins(cb.thickness)} — Cover Board',
+            skuKey: 'iso_coverboard',
+            attributes: {
+              'type':        cb.type,
+              'thicknessIn': cb.thickness,
+              'boardSize':   "4x8",
+            },
             orderQty: orderQty,
             unit: 'boards',
             notes: "4'×8' boards (${boardSf.toInt()} sf each), ${cb.attachmentMethod}",
@@ -456,6 +521,12 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Fasteners & Plates',
         name: '$fastenerName $memFastLen — ${systemSpecs.deckType} Deck (MA Membrane)',
+        skuKey: 'fastener_membrane',
+        attributes: {
+          'fastenerName': fastenerName,
+          'length':       memFastLen,
+          'deckType':     systemSpecs.deckType,
+        },
         orderQty: orderQty,
         unit: 'boxes',
         notes: '500/box — field, perimeter & corner zones',
@@ -489,6 +560,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Fasteners & Plates',
         name: '3" Seam Stress Plates',
+        skuKey: 'plate_seam_stress_3in',
+        attributes: const {},
         orderQty: plateOrder,
         unit: 'boxes',
         notes: '1,000/box — one plate per MA fastener',
@@ -539,6 +612,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Fasteners & Plates',
         name: 'Rhinobond Induction Weld Plates',
+        skuKey: 'plate_rhinobond',
+        attributes: const {},
         orderQty: rbPlateOrder,
         unit: 'cartons',
         notes: '250/carton — Versico Rhinobond TPO system',
@@ -578,6 +653,12 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Fasteners & Plates',
         name: '$rbFastName $rbFastLen — ${systemSpecs.deckType} Deck (Rhinobond)',
+        skuKey: 'fastener_rhinobond',
+        attributes: {
+          'fastenerName': rbFastName,
+          'length':       rbFastLen,
+          'deckType':     systemSpecs.deckType,
+        },
         orderQty: rbFastOrder,
         unit: 'boxes',
         notes: '500/box — one fastener per Rhinobond plate',
@@ -644,6 +725,12 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Fasteners & Plates',
           name: '${_fastenerName(systemSpecs.deckType)} $l1Len — Layer 1 Insulation',
+          skuKey: 'fastener_insulation',
+          attributes: {
+            'fastenerName': _fastenerName(systemSpecs.deckType),
+            'length':       l1Len,
+            'deckType':     systemSpecs.deckType,
+          },
           orderQty: orderQty,
           unit: 'boxes',
           notes: '500/box — 4 per 4\'×8\' board (${insulation.layer1.type})',
@@ -670,6 +757,8 @@ class BomCalculator {
           category: 'Fasteners & Plates',
           name: '3" Insulation Plates — Layer 1',
           consolidationKey: 'plates_3in_insulation',
+          skuKey: 'plate_3in_insulation',
+          attributes: const {},
           consolidatedName: '3" Insulation Plates',
           orderQty: l1PlateOrder,
           unit: 'boxes',
@@ -702,6 +791,12 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Fasteners & Plates',
           name: '${_fastenerName(systemSpecs.deckType)} $l2Len — Layer 2 Insulation',
+          skuKey: 'fastener_insulation',
+          attributes: {
+            'fastenerName': _fastenerName(systemSpecs.deckType),
+            'length':       l2Len,
+            'deckType':     systemSpecs.deckType,
+          },
           orderQty: orderQty,
           unit: 'boxes',
           notes: '500/box — 4 per board, through L1+L2 ($l2type)',
@@ -729,6 +824,8 @@ class BomCalculator {
           category: 'Fasteners & Plates',
           name: '3" Insulation Plates — Layer 2',
           consolidationKey: 'plates_3in_insulation',
+          skuKey: 'plate_3in_insulation',
+          attributes: const {},
           consolidatedName: '3" Insulation Plates',
           orderQty: l2PlateOrder,
           unit: 'boxes',
@@ -766,6 +863,12 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Fasteners & Plates',
           name: '${_fastenerName(systemSpecs.deckType)} $taperLen — Tapered Insulation (max)',
+          skuKey: 'fastener_insulation',
+          attributes: {
+            'fastenerName': _fastenerName(systemSpecs.deckType),
+            'length':       taperLen,
+            'deckType':     systemSpecs.deckType,
+          },
           orderQty: orderQty,
           unit: 'boxes',
           notes: '500/box — sized for max thickness ${_ins(taperMaxIn)} at ridge',
@@ -793,6 +896,8 @@ class BomCalculator {
           category: 'Fasteners & Plates',
           name: '3" Insulation Plates — Tapered Insulation',
           consolidationKey: 'plates_3in_insulation',
+          skuKey: 'plate_3in_insulation',
+          attributes: const {},
           consolidatedName: '3" Insulation Plates',
           orderQty: taperPlateOrder,
           unit: 'boxes',
@@ -825,6 +930,12 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Fasteners & Plates',
           name: '${_fastenerName(systemSpecs.deckType)} $cbLen — Cover Board',
+          skuKey: 'fastener_insulation',
+          attributes: {
+            'fastenerName': _fastenerName(systemSpecs.deckType),
+            'length':       cbLen,
+            'deckType':     systemSpecs.deckType,
+          },
           orderQty: orderQty,
           unit: 'boxes',
           notes: '500/box — 4 per board ($cbtype)',
@@ -852,6 +963,8 @@ class BomCalculator {
           category: 'Fasteners & Plates',
           name: '3" Insulation Plates — Cover Board',
           consolidationKey: 'plates_3in_insulation',
+          skuKey: 'plate_3in_insulation',
+          attributes: const {},
           consolidatedName: '3" Insulation Plates',
           orderQty: cbPlateOrder,
           unit: 'boxes',
@@ -908,6 +1021,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Adhesives & Sealants',
           name: 'Versico CAV-GRIP 3V Low-VOC Adhesive/Primer$vocSuffix — #40 Cylinder (Field)',
+          skuKey: 'adhesive_cavgrip_3v_40lb',
+          attributes: {'voc': projectInfo.vocRegion, 'application': 'field'},
           orderQty: cylOrder,
           unit: 'cylinders',
           notes: '#40 cylinder, ~400 sf/cyl — spray application, field membrane only',
@@ -931,6 +1046,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Adhesives & Sealants',
           name: 'Versico UN-TACK Adhesive Remover & Cleaner — #8 Aerosol (Field)',
+          skuKey: 'cleaner_untack_8oz_aerosol',
+          attributes: {'application': 'field'},
           orderQty: cylOrder,
           unit: 'aerosols',
           notes: '#8 aerosol — one per CAV-GRIP 3V cylinder',
@@ -979,6 +1096,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Adhesives & Sealants',
           name: productName,
+          skuKey: 'adhesive_versiweld_bonding',
+          attributes: {'voc': projectInfo.vocRegion, 'packageGal': packageGal.toInt(), 'application': 'field'},
           orderQty: orderQty,
           unit: unit,
           notes: notes,
@@ -1015,6 +1134,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Adhesives & Sealants',
         name: 'OlyBond500 Insulation Adhesive (or FAST 100LV) — Dual Cartridge Set',
+        skuKey: 'adhesive_olybond_500_set',
+        attributes: const {},
         orderQty: orderQty,
         unit: 'sets',
         notes: '~1,500 sf/set @ 12" o.c. ribbons — adhered insulation layers',
@@ -1059,6 +1180,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Adhesives & Sealants',
           name: 'Versico CAV-GRIP 3V Low-VOC Adhesive/Primer$vocSuffix — #40 Cylinder',
+          skuKey: 'adhesive_cavgrip_3v_40lb',
+          attributes: {'voc': projectInfo.vocRegion, 'application': 'parapet'},
           orderQty: cavOrder,
           unit: 'cylinders',
           notes: '#40 cylinder, ~400 sf/cyl — parapet walls',
@@ -1084,6 +1207,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Adhesives & Sealants',
           name: 'Versico UN-TACK Adhesive Remover & Cleaner — #8 Aerosol',
+          skuKey: 'cleaner_untack_8oz_aerosol',
+          attributes: {'application': 'parapet'},
           orderQty: cavOrder,
           unit: 'aerosols',
           notes: '#8 aerosol — one per CAV-GRIP 3V cylinder',
@@ -1111,6 +1236,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Adhesives & Sealants',
           name: 'VersiWeld TPO Bonding Adhesive$vocSuffix — 5 Gal Pail (Parapet)',
+          skuKey: 'adhesive_versiweld_bonding',
+          attributes: {'voc': projectInfo.vocRegion, 'packageGal': 5, 'application': 'parapet'},
           orderQty: pails,
           unit: 'pails',
           notes: '5-gal pail, ~60 sf/gal — parapet wall flashing',
@@ -1151,6 +1278,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Adhesives & Sealants',
         name: 'Versico TPO Cut Edge Sealant$vocSuffix',
+        skuKey: 'sealant_cut_edge',
+        attributes: {'voc': projectInfo.vocRegion},
         orderQty: orderQty,
         unit: 'bottles',
         notes: '16 oz bottles, ~250 LF/bottle — 1/8" bead on cut edges',
@@ -1193,6 +1322,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Adhesives & Sealants',
           name: 'Versico Water Cut-Off Mastic',
+          skuKey: 'mastic_water_cutoff',
+          attributes: const {},
           orderQty: orderQty,
           unit: 'tubes',
           notes: '11 oz tubes, ~10 LF/tube — drains, pipe tops, under metal edging',
@@ -1230,6 +1361,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Adhesives & Sealants',
         name: 'Versico TPO Seam Tape (3" wide)',
+        skuKey: 'tape_tpo_seam_3in',
+        attributes: const {},
         orderQty: tapeOrder,
         unit: 'rolls',
         notes: "3\"×100' rolls — pressure-sensitive seam tape (requires TPO primer)",
@@ -1267,6 +1400,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Adhesives & Sealants',
         name: 'Deck Primer (Post Tear-Off Prep)',
+        skuKey: 'primer_deck_substrate',
+        attributes: const {},
         orderQty: subOrder,
         unit: 'pails',
         notes: '5-gal pails, ~200 sf/gal — preps deck after ${systemSpecs.existingRoofType} removal for new TPO system adhesion',
@@ -1307,6 +1442,10 @@ class BomCalculator {
           orderQty: orderQty,
           unit: 'pieces',
           notes: "10' pieces",
+          skuKey: parapet.terminationType == 'TPO Coated Drip Edge'
+              ? 'term_tpo_coated_drip_edge_10ft'
+              : 'term_bar_aluminum_10ft',
+          attributes: const {},
           trace: BomTrace(
             baseDescription: '${_lf(termBarLF)} ÷ 10\' pieces',
             baseQty: base,
@@ -1334,6 +1473,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Parapet & Termination',
           name: 'Low-VOC Water Cut-Off Mastic',
+          skuKey: 'mastic_water_cutoff_lowvoc',
+          attributes: const {},
           orderQty: orderQty,
           unit: 'tubes',
           notes: '~10 LF/tube — 7/16" bead under termination bar',
@@ -1363,6 +1504,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Parapet & Termination',
           name: 'Universal Single-Ply Sealant',
+          skuKey: 'sealant_universal_singleply',
+          attributes: const {},
           orderQty: orderQty,
           unit: 'tubes',
           notes: '~25 LF/tube — 1/4" bead along top edge',
@@ -1415,6 +1558,12 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Parapet & Termination',
           name: '$tbFastener $tbLength — Termination Bar (${parapet.wallType})',
+          skuKey: parapet.wallType == 'Wood'
+              ? 'fastener_termbar_wood'
+              : (parapet.wallType == 'Metal Stud'
+                  ? 'fastener_termbar_tek'
+                  : 'fastener_termbar_masonry'),
+          attributes: {'wallType': parapet.wallType, 'length': tbLength},
           orderQty: orderQty,
           unit: 'buckets',
           notes: '${tbBucketSize.toInt()}/bucket — $tbNotes',
@@ -1456,6 +1605,12 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Parapet & Termination',
         name: '$edgeFastName $edgeFastLen — Edge Metal (${metalScope.edgeMetalType})',
+        skuKey: 'fastener_edge_metal',
+        attributes: {
+          'fastenerName': edgeFastName,
+          'length':       edgeFastLen,
+          'deckType':     systemSpecs.deckType,
+        },
         orderQty: orderQty,
         unit: 'buckets',
         notes: '${edgeBucketSize.toInt()}/bucket — 12" o.c. eave/rake edge attachment',
@@ -1487,14 +1642,16 @@ class BomCalculator {
     final insideCorners = geometry.insideCorners;
     if (insideCorners > 0) {
       items.add(_eachItem('Details & Accessories', 'TPO Inside Corners (Prefab)',
-          insideCorners.toDouble(), wAcc, 'each', ''));
+          insideCorners.toDouble(), wAcc, 'each', '',
+          skuKey: 'accessory_corner_inside_prefab'));
     }
 
     // Outside corners — from geometry OR default 4
     final outsideCorners = geometry.outsideCorners > 0 ? geometry.outsideCorners : 4;
     if (outsideCorners > 0) {
       items.add(_eachItem('Details & Accessories', 'TPO Outside Corners (Prefab)',
-          outsideCorners.toDouble(), wAcc, 'each', ''));
+          outsideCorners.toDouble(), wAcc, 'each', '',
+          skuKey: 'accessory_corner_outside_prefab'));
     }
 
     // T-joint covers — estimated: 1 per roll minus perimeter
@@ -1504,6 +1661,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Details & Accessories',
         name: 'T-Joint Covers',
+        skuKey: 'accessory_tjoint_covers',
+        attributes: const {},
         orderQty: tJoints,
         unit: 'each',
         notes: 'Estimated ~0.75 per field roll',
@@ -1526,31 +1685,37 @@ class BomCalculator {
     // Drains
     if (drainCount > 0) {
       items.add(_eachItem('Details & Accessories', 'Roof Drain Assembly (${penetrations.drainType})',
-          drainCount.toDouble(), wAcc, 'each', penetrations.drainType));
+          drainCount.toDouble(), wAcc, 'each', penetrations.drainType,
+          skuKey: 'accessory_drain_assembly',
+          attributes: {'drainType': penetrations.drainType}));
     }
 
     // Pipe boots — small
     if (penetrations.smallPipeCount > 0) {
       items.add(_eachItem('Details & Accessories', 'Pipe Boot — Small (1–4")',
-          penetrations.smallPipeCount.toDouble(), wAcc, 'each', ''));
+          penetrations.smallPipeCount.toDouble(), wAcc, 'each', '',
+          skuKey: 'accessory_pipeboot_small'));
     }
 
     // Pipe boots — large
     if (penetrations.largePipeCount > 0) {
       items.add(_eachItem('Details & Accessories', 'Pipe Boot — Large (4–12")',
-          penetrations.largePipeCount.toDouble(), wAcc, 'each', ''));
+          penetrations.largePipeCount.toDouble(), wAcc, 'each', '',
+          skuKey: 'accessory_pipeboot_large'));
     }
 
     // Skylights
     if (penetrations.skylightCount > 0) {
       items.add(_eachItem('Details & Accessories', 'Skylight Flashing Kit',
-          penetrations.skylightCount.toDouble(), wAcc, 'each', ''));
+          penetrations.skylightCount.toDouble(), wAcc, 'each', '',
+          skuKey: 'accessory_skylight_kit'));
     }
 
     // Scuppers
     if (penetrations.scupperCount > 0) {
       items.add(_eachItem('Details & Accessories', 'Scupper Assembly',
-          penetrations.scupperCount.toDouble(), wAcc, 'each', ''));
+          penetrations.scupperCount.toDouble(), wAcc, 'each', '',
+          skuKey: 'accessory_scupper'));
     }
 
     // Expansion joint covers
@@ -1562,6 +1727,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Details & Accessories',
         name: 'Expansion Joint Cover',
+        skuKey: 'accessory_expansion_joint_cover',
+        attributes: const {},
         orderQty: orderQty,
         unit: 'pieces',
         notes: "10' pieces",
@@ -1584,7 +1751,8 @@ class BomCalculator {
     // Pitch pans
     if (penetrations.pitchPanCount > 0) {
       items.add(_eachItem('Details & Accessories', 'TPO Molded Sealant Pocket',
-          penetrations.pitchPanCount.toDouble(), wAcc, 'each', ''));
+          penetrations.pitchPanCount.toDouble(), wAcc, 'each', '',
+          skuKey: 'accessory_pitch_pan'));
     }
 
     // RTU flashing (perimeter rolls)
@@ -1606,6 +1774,12 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Details & Accessories',
         name: 'TPO Curb Flashing — RTU (6\'×100\')',
+        skuKey: 'tpo_rtu_curb_flashing',
+        attributes: {
+          'membraneType': membrane.membraneType,
+          'thickness':    membrane.thickness,
+          'color':        membrane.color,
+        },
         orderQty: orderQty,
         unit: 'rolls',
         notes: "RTU curbs — ${_lf(penetrations.rtuTotalLF)} perimeter, ${avgCurbHeightIn.toStringAsFixed(0)}\" curb height",
@@ -1636,6 +1810,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Details & Accessories',
           name: 'TPO Curb Wrap Corners — RTU',
+          skuKey: 'accessory_rtu_corner_wrap',
+          attributes: const {},
           orderQty: cwOrder,
           unit: 'each',
           notes: '4 corners per RTU — 60-mil reinforced VersiWeld',
@@ -1662,30 +1838,39 @@ class BomCalculator {
 
     if (metalScope.copingLF > 0) {
       items.add(_linearItem('Metal Scope', 'Coping Cap — ${metalScope.copingWidth}',
-          metalScope.copingLF, wMet, "10' sections"));
+          metalScope.copingLF, wMet, "10' sections",
+          skuKey: 'metal_coping_cap',
+          attributes: {'width': metalScope.copingWidth}));
     }
 
     if (metalScope.wallFlashingLF > 0) {
       items.add(_linearItem('Metal Scope', 'Wall Flashing',
-          metalScope.wallFlashingLF, wMet, "10' sections"));
+          metalScope.wallFlashingLF, wMet, "10' sections",
+          skuKey: 'metal_wall_flashing'));
     }
     if (metalScope.dripEdgeLF > 0) {
       items.add(_linearItem('Metal Scope', 'Drip Edge — ${metalScope.edgeMetalType}',
-          metalScope.dripEdgeLF, wMet, "10' sections"));
+          metalScope.dripEdgeLF, wMet, "10' sections",
+          skuKey: 'metal_drip_edge',
+          attributes: {'edgeMetalType': metalScope.edgeMetalType}));
     }
     if (metalScope.otherEdgeMetalLF > 0) {
       items.add(_linearItem('Metal Scope', 'Other Edge Metal',
-          metalScope.otherEdgeMetalLF, wMet, "10' sections"));
+          metalScope.otherEdgeMetalLF, wMet, "10' sections",
+          skuKey: 'metal_other_edge'));
     }
 
     if (metalScope.gutterLF > 0) {
       items.add(_linearItem('Metal Scope', 'Gutter — ${metalScope.gutterSize}',
-          metalScope.gutterLF, wMet, "10' sections"));
+          metalScope.gutterLF, wMet, "10' sections",
+          skuKey: 'metal_gutter',
+          attributes: {'size': metalScope.gutterSize}));
     }
 
     if (metalScope.downspoutCount > 0) {
       items.add(_eachItem('Metal Scope', 'Downspout',
-          metalScope.downspoutCount.toDouble(), wMet, 'each', ''));
+          metalScope.downspoutCount.toDouble(), wMet, 'each', '',
+          skuKey: 'metal_downspout'));
     }
 
     // TPO Reinforced Overlayment Strip — needed at all metal-to-membrane transitions
@@ -1701,6 +1886,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Metal Scope',
         name: 'TPO Reinforced Overlayment Strip (6" wide)',
+        skuKey: 'tpo_overlayment_strip_6in',
+        attributes: const {},
         orderQty: stripOrder,
         unit: 'rolls',
         notes: "6\"x100' — seals metal flanges to membrane per Versico spec",
@@ -1735,6 +1922,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Consumables',
         name: 'Hook Blades',
+        skuKey: 'accessory_hook_blades',
+        attributes: const {},
         orderQty: bladePacks,
         unit: 'packs',
         notes: '100 blades/pack',
@@ -1756,6 +1945,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Consumables',
         name: 'Rags & TPO Cleaner',
+        skuKey: 'cleaner_rags_tpo',
+        attributes: const {},
         orderQty: ragBoxes,
         unit: 'boxes',
         notes: '~1 box per 2,000 sf',
@@ -1785,6 +1976,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Vapor Retarder',
         name: 'Vapor Retarder — ${systemSpecs.vaporRetarder}',
+        skuKey: 'vapor_retarder',
+        attributes: {'type': systemSpecs.vaporRetarder},
         orderQty: vrOrder,
         unit: 'rolls',
         notes: "10'×100' rolls (1,000 sf/roll)",
@@ -1814,6 +2007,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Vapor Retarder',
           name: 'Vapor Retarder Primer',
+          skuKey: 'primer_vapor_retarder',
+          attributes: const {},
           orderQty: vrPOrder,
           unit: 'pails',
           notes: '5-gal pails, ~250 sf/gal',
@@ -1863,24 +2058,28 @@ class BomCalculator {
         final double primerCov;
         final String primerUnit;
         final double primerPkgSize;
+        final String primerSkuKey;
         switch (membrane.primerType) {
           case 'TPO Primer (225 sf/gal)':
             primerName = 'Versico TPO Primer$vocSuffix';
             primerCov = 225.0;
             primerUnit = 'gallons';
             primerPkgSize = 1.0;
+            primerSkuKey = 'primer_tpo_225';
             break;
           case 'CAV-PRIME Spray (1,760 sf/cyl)':
             primerName = 'Versico CAV-PRIME Low-VOC Primer$vocSuffix — #32 Cylinder';
             primerCov = 1760.0;
             primerUnit = 'cylinders';
             primerPkgSize = 1.0;
+            primerSkuKey = 'primer_cavprime_cylinder';
             break;
           default: // Low-VOC EPDM/TPO Primer
             primerName = 'Versico Low-VOC EPDM & TPO Primer$vocSuffix';
             primerCov = 700.0;
             primerUnit = 'gallons';
             primerPkgSize = 1.0;
+            primerSkuKey = 'primer_lowvoc_epdm_tpo_700';
         }
         final primerBase   = primedArea / primerCov;
         final primerWithW  = primerBase * (1 + wAcc);
@@ -1889,6 +2088,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Adhesives & Sealants',
           name: primerName,
+          skuKey: primerSkuKey,
+          attributes: {'voc': projectInfo.vocRegion},
           orderQty: primerOrder,
           unit: primerUnit,
           notes: '~${primerCov.toInt()} sf/${primerUnit == 'cylinders' ? 'cyl' : 'gal'} — required before all pressure-sensitive products',
@@ -1927,6 +2128,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Adhesives & Sealants',
         name: 'Versico Weathered Membrane Cleaner',
+        skuKey: 'cleaner_weathered_membrane',
+        attributes: {'voc': projectInfo.vocRegion},
         orderQty: cleanOrder,
         unit: 'gallons',
         notes: '~400 sf/gal — clean membrane before welding',
@@ -1973,6 +2176,8 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Adhesives & Sealants',
           name: 'Versico Lap Sealant',
+          skuKey: 'sealant_lap',
+          attributes: {'voc': projectInfo.vocRegion},
           orderQty: lapOrder,
           unit: 'tubes',
           notes: '11 oz tubes, ~22 LF/tube — 5/16" bead',
@@ -2012,6 +2217,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Parapet & Termination',
         name: 'VersiWeld RUSS Strip (6" wide) — Parapet Base',
+        skuKey: 'russ_strip_6in',
+        attributes: const {},
         orderQty: russOrder,
         unit: 'rolls',
         notes: "100' rolls — MA wall/deck transition per Versico spec",
@@ -2042,6 +2249,12 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Parapet & Termination',
         name: '$russFastName $russFastLen — RUSS Strip (12" o.c.)',
+        skuKey: 'fastener_russ_strip',
+        attributes: {
+          'fastenerName': russFastName,
+          'length':       russFastLen,
+          'deckType':     systemSpecs.deckType,
+        },
         orderQty: russFastOrder,
         unit: 'buckets',
         notes: '${russBucketSize.toInt()}/bucket — 12" o.c. through RUSS into deck',
@@ -2069,6 +2282,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Parapet & Termination',
         name: 'Seam Fastening Plates — RUSS Strip',
+        skuKey: 'plate_russ_seam_fastening',
+        attributes: const {},
         orderQty: russPlateOrder,
         unit: 'boxes',
         notes: '${russPlateBoxSize.toInt()}/box — one plate per RUSS fastener',
@@ -2109,6 +2324,8 @@ class BomCalculator {
       items.add(BomLineItem(
         category: 'Details & Accessories',
         name: 'TPO Walkway Pads (Heat Weldable)',
+        skuKey: 'tpo_walkway_pads',
+        attributes: const {},
         orderQty: walkOrder,
         unit: 'rolls',
         notes: "3'×50' rolls — HVAC access paths (~${walkwayPerRtu.toInt()} LF per RTU)",
@@ -2205,6 +2422,8 @@ class BomCalculator {
         notes: first.notes,
         consolidationKey: first.consolidationKey,
         consolidatedName: first.consolidatedName,
+        skuKey: first.skuKey,
+        attributes: first.attributes,
         trace: BomTrace(
           baseDescription: '${combinedBase.toStringAsFixed(0)} units ÷ ${pkg.toInt()} per ${first.unit}',
           baseQty: combinedBase,
@@ -2471,7 +2690,8 @@ class BomCalculator {
 
   /// Helper for simple "each" items (penetrations, accessories).
   static BomLineItem _eachItem(String cat, String name, double qty,
-      double waste, String unit, String notes) {
+      double waste, String unit, String notes,
+      {String? skuKey, Map<String, dynamic>? attributes}) {
     final withW    = qty * (1 + waste);
     final orderQty = withW.ceil().toDouble();
     return BomLineItem(
@@ -2480,6 +2700,8 @@ class BomCalculator {
       orderQty: orderQty,
       unit: unit,
       notes: notes,
+      skuKey: skuKey,
+      attributes: attributes,
       trace: BomTrace(
         baseDescription: '${qty.toInt()} $unit',
         baseQty: qty,
@@ -2498,7 +2720,8 @@ class BomCalculator {
 
   /// Helper for linear items sold in 10' pieces (coping, edge metal, gutter, etc.).
   static BomLineItem _linearItem(String cat, String name, double lf,
-      double waste, String notes) {
+      double waste, String notes,
+      {String? skuKey, Map<String, dynamic>? attributes}) {
     const pieceLen = 10.0;
     final base     = lf / pieceLen;
     final withW    = base * (1 + waste);
@@ -2509,6 +2732,8 @@ class BomCalculator {
       orderQty: orderQty,
       unit: 'pieces',
       notes: notes,
+      skuKey: skuKey,
+      attributes: attributes,
       trace: BomTrace(
         baseDescription: '${lf.toStringAsFixed(0)} LF ÷ 10\'',
         baseQty: base,
