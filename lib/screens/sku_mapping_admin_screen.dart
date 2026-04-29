@@ -182,19 +182,161 @@ class _SkuMappingAdminScreenState extends State<SkuMappingAdminScreen> {
           ),
           const SizedBox(height: 8),
         ],
-        for (final variant in variants) _variantRow(entry, variant),
-        const SizedBox(height: 4),
+
+        // Known variants — pre-populated rows the operator just needs to map.
+        if (entry.knownVariants.isNotEmpty) ...[
+          Text('Known variants  ·  ${entry.knownVariants.length} combinations',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textSecondary,
+                  letterSpacing: 0.5)),
+          const SizedBox(height: 6),
+          for (final preset in entry.knownVariants)
+            _knownVariantRow(entry, preset, variants),
+          const SizedBox(height: 8),
+        ],
+
+        // Custom variants — mapped tuples that don't match any known preset.
+        if (_customVariants(entry, variants).isNotEmpty) ...[
+          Text('Custom variants',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textSecondary,
+                  letterSpacing: 0.5)),
+          const SizedBox(height: 6),
+          for (final variant in _customVariants(entry, variants))
+            _variantRow(entry, variant),
+          const SizedBox(height: 8),
+        ],
+
+        // For skuKeys with no variants and no known presets, show ALL mapped
+        // (typically just the single entry).
+        if (entry.knownVariants.isEmpty)
+          for (final variant in variants) _variantRow(entry, variant),
+
         Align(
           alignment: Alignment.centerLeft,
           child: TextButton.icon(
             icon: const Icon(Icons.add, size: 16),
             label: Text(entry.variantAttributes.isEmpty
-                ? 'Set mapping'
-                : 'Add variant mapping'),
+                ? (variants.isEmpty ? 'Set mapping' : 'Replace mapping')
+                : 'Add custom variant'),
             onPressed: () => _openEditor(entry, null),
           ),
         ),
       ],
+    );
+  }
+
+  /// Returns mappings for `entry` that don't match any known preset.
+  /// Compared via attributesHash (the same key Firestore uses).
+  List<QxoSkuMapping> _customVariants(
+      SkuRegistryEntry entry, List<QxoSkuMapping> variants) {
+    if (entry.knownVariants.isEmpty) return const [];
+    final knownHashes = entry.knownVariants
+        .map((p) => QxoSkuMappingService.hashAttributes(p))
+        .toSet();
+    return variants
+        .where((v) => !knownHashes.contains(v.attributesHash))
+        .toList();
+  }
+
+  /// Locates the existing mapping (if any) for a known-variant preset.
+  QxoSkuMapping? _findMappingForPreset(
+      Map<String, dynamic> preset, List<QxoSkuMapping> variants) {
+    final hash = QxoSkuMappingService.hashAttributes(preset);
+    for (final v in variants) {
+      if (v.attributesHash == hash) return v;
+    }
+    return null;
+  }
+
+  /// Compact row for a known-variant preset. Shows attribute chips, mapped
+  /// status, and a Map/Edit button. Clicking opens the editor pre-filled.
+  Widget _knownVariantRow(
+    SkuRegistryEntry entry,
+    Map<String, dynamic> preset,
+    List<QxoSkuMapping> variants,
+  ) {
+    final existing = _findMappingForPreset(preset, variants);
+    final mapped = existing?.isMapped ?? false;
+
+    final chips = <Widget>[
+      for (final attr in entry.variantAttributes)
+        if (preset.containsKey(attr))
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: AppTheme.surfaceAlt,
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Text(
+              '${preset[attr]}',
+              style: const TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w600),
+            ),
+          ),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: 6, height: 6,
+            margin: const EdgeInsets.only(right: 8, top: 4),
+            decoration: BoxDecoration(
+              color: mapped ? Colors.green.shade600 : Colors.orange.shade400,
+              shape: BoxShape.circle,
+            ),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(spacing: 6, runSpacing: 4, children: chips),
+                if (mapped) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    '${existing!.qxoItemNumber}  ·  ${existing.qxoProductName ?? ""}',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.textSecondary),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (mapped)
+            TextButton.icon(
+              icon: const Icon(Icons.edit, size: 14),
+              label: const Text('Edit'),
+              onPressed: () => _openEditor(entry, existing,
+                  presetAttributes: preset),
+            )
+          else
+            FilledButton.tonalIcon(
+              icon: const Icon(Icons.link, size: 14),
+              label: const Text('Map'),
+              onPressed: () => _openEditor(entry, null,
+                  presetAttributes: preset),
+            ),
+          if (mapped)
+            IconButton(
+              icon: const Icon(Icons.delete_outline, size: 16),
+              color: Colors.red.shade400,
+              tooltip: 'Remove mapping',
+              onPressed: () async {
+                await _service.delete(entry.skuKey, existing!.attributes);
+              },
+            ),
+        ],
+      ),
     );
   }
 
@@ -278,12 +420,17 @@ class _SkuMappingAdminScreenState extends State<SkuMappingAdminScreen> {
     );
   }
 
-  Future<void> _openEditor(SkuRegistryEntry entry, QxoSkuMapping? existing) async {
+  Future<void> _openEditor(
+    SkuRegistryEntry entry,
+    QxoSkuMapping? existing, {
+    Map<String, dynamic>? presetAttributes,
+  }) async {
     await showDialog<void>(
       context: context,
       builder: (ctx) => _MappingEditorDialog(
         entry: entry,
         existing: existing,
+        presetAttributes: presetAttributes,
         service: _service,
       ),
     );
@@ -297,10 +444,12 @@ class _MappingEditorDialog extends StatefulWidget {
     required this.entry,
     required this.existing,
     required this.service,
+    this.presetAttributes,
   });
 
   final SkuRegistryEntry entry;
   final QxoSkuMapping? existing;
+  final Map<String, dynamic>? presetAttributes;
   final QxoSkuMappingService service;
 
   @override
@@ -322,7 +471,10 @@ class _MappingEditorDialogState extends State<_MappingEditorDialog> {
   void initState() {
     super.initState();
     for (final attr in widget.entry.variantAttributes) {
-      final initial = widget.existing?.attributes[attr]?.toString() ?? '';
+      // Priority: existing mapping value > preset value > empty.
+      final initial = widget.existing?.attributes[attr]?.toString() ??
+          widget.presetAttributes?[attr]?.toString() ??
+          '';
       _attrControllers[attr] = TextEditingController(text: initial);
     }
     if (widget.existing?.qxoItemNumber != null) {
@@ -334,6 +486,22 @@ class _MappingEditorDialogState extends State<_MappingEditorDialog> {
         brand: '',
         productId: '',
       );
+    } else if (widget.presetAttributes != null) {
+      // Pre-fill the search with attribute values so the operator can hit
+      // Search immediately. Pulls fastenerName + length first when present.
+      final p = widget.presetAttributes!;
+      final query = [
+        if (p['fastenerName'] != null) p['fastenerName'],
+        if (p['length'] != null) p['length'],
+        if (p['deckType'] != null) p['deckType'],
+        if (p['thickness'] != null) p['thickness'],
+        if (p['color'] != null) p['color'],
+      ].whereType<Object>().join(' ');
+      _searchCtrl.text = query;
+      // Run the search automatically once the widget mounts.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && query.isNotEmpty) _runSearch();
+      });
     }
     _notesCtrl.text = widget.existing?.notes ?? '';
   }

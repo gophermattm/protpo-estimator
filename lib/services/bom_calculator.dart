@@ -2662,6 +2662,15 @@ class BomCalculator {
   static double stackThicknessPublic(InsulationSystem ins, int throughLayer) =>
       _stackThicknessIn(ins, throughLayer);
 
+  /// Public: deck types the BOM knows how to fasten into.
+  static const List<String> kFastenerDeckTypes = [
+    'Metal', 'Wood', 'Concrete', 'LW Concrete', 'Gypsum', 'Tectum',
+  ];
+
+  /// Public: fastener lengths (formatted like "4.5\"") available per deck.
+  static List<String> fastenerLengthLabels(String deckType) =>
+      _fastenerLengthsIn(deckType).map(_fmtIn).toList();
+
   static String _ins(double t) => '${t == t.roundToDouble() ? t.toInt() : t}"';
   static String _sf(double v)  => '${v.toStringAsFixed(0)} sf';
   static String _lf(double v)  => '${v.toStringAsFixed(0)} LF';

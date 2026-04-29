@@ -7,6 +7,8 @@
 /// appears in the admin UI.
 library;
 
+import '../services/bom_calculator.dart';
+
 class SkuRegistryEntry {
   /// Stable identifier emitted by the BOM (snake_case).
   final String skuKey;
@@ -25,17 +27,42 @@ class SkuRegistryEntry {
   /// Optional notes shown to the operator (where to find the SKU, etc.).
   final String? notes;
 
+  /// Pre-defined variant combinations the BOM commonly emits. Admin shows
+  /// one row per known variant pre-populated with these attribute values
+  /// — operator just clicks "Map" and picks the QXO SKU. Custom variants
+  /// can still be added on top.
+  final List<Map<String, dynamic>> knownVariants;
+
   const SkuRegistryEntry({
     required this.skuKey,
     required this.displayName,
     required this.category,
     this.variantAttributes = const [],
     this.notes,
+    this.knownVariants = const [],
   });
 }
 
+/// Generates `(deckType × length)` combinations for fastener skuKeys. The
+/// fastener name is derived from the deck so the operator never has to type
+/// it: "Versico HPV" for wood, "HPVX" for metal/gypsum/tectum, etc.
+List<Map<String, dynamic>> _fastenerVariants() {
+  final out = <Map<String, dynamic>>[];
+  for (final deck in BomCalculator.kFastenerDeckTypes) {
+    final name = BomCalculator.fastenerNamePublic(deck);
+    for (final length in BomCalculator.fastenerLengthLabels(deck)) {
+      out.add({
+        'fastenerName': name,
+        'length':       length,
+        'deckType':     deck,
+      });
+    }
+  }
+  return out;
+}
+
 /// Master list. Order here drives display order in the admin UI.
-const List<SkuRegistryEntry> kSkuRegistry = [
+final List<SkuRegistryEntry> kSkuRegistry = [
   // ─── MEMBRANE ─────────────────────────────────────────────────────────────
   SkuRegistryEntry(
     skuKey: 'tpo_membrane_field',
@@ -99,30 +126,41 @@ const List<SkuRegistryEntry> kSkuRegistry = [
     displayName: 'Fastener — MA Membrane',
     category: 'Fasteners & Plates',
     variantAttributes: ['fastenerName', 'length', 'deckType'],
+    notes: 'Each (deck type × length) combination is a separate QXO SKU.',
+    knownVariants: _fastenerVariants(),
   ),
   SkuRegistryEntry(
     skuKey: 'fastener_insulation',
     displayName: 'Fastener — Insulation',
     category: 'Fasteners & Plates',
     variantAttributes: ['fastenerName', 'length', 'deckType'],
+    notes: 'Each (deck type × length) combination is a separate QXO SKU. '
+        'Same fastener line is used for L1, L2, taper, and cover board.',
+    knownVariants: _fastenerVariants(),
   ),
   SkuRegistryEntry(
     skuKey: 'fastener_rhinobond',
     displayName: 'Fastener — Rhinobond',
     category: 'Fasteners & Plates',
     variantAttributes: ['fastenerName', 'length', 'deckType'],
+    notes: 'Each (deck type × length) combination is a separate QXO SKU.',
+    knownVariants: _fastenerVariants(),
   ),
   SkuRegistryEntry(
     skuKey: 'fastener_edge_metal',
     displayName: 'Fastener — Edge Metal',
     category: 'Parapet & Termination',
     variantAttributes: ['fastenerName', 'length', 'deckType'],
+    notes: 'Each (deck type × length) combination is a separate QXO SKU.',
+    knownVariants: _fastenerVariants(),
   ),
   SkuRegistryEntry(
     skuKey: 'fastener_russ_strip',
     displayName: 'Fastener — RUSS Strip',
     category: 'Parapet & Termination',
     variantAttributes: ['fastenerName', 'length', 'deckType'],
+    notes: 'Each (deck type × length) combination is a separate QXO SKU.',
+    knownVariants: _fastenerVariants(),
   ),
   SkuRegistryEntry(
     skuKey: 'fastener_termbar_masonry',
