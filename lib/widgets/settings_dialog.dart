@@ -10,6 +10,7 @@ import 'package:uuid/uuid.dart';
 import '../models/customer.dart';
 import '../providers/estimator_providers.dart';
 import '../providers/job_providers.dart';
+import '../screens/sku_mapping_admin_screen.dart';
 import '../services/firestore_service.dart';
 import '../services/platform_utils.dart';
 import '../theme/app_theme.dart';
@@ -149,6 +150,17 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog>
         ),
       ),
       actions: [
+        TextButton.icon(
+          onPressed: () {
+            Navigator.pop(context);
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SkuMappingAdminScreen()),
+            );
+          },
+          icon: const Icon(Icons.link, size: 16),
+          label: const Text('SKU Mapping (BOM ↔ QXO)'),
+        ),
+        const Spacer(),
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: Text(isCompanyTab ? 'Cancel' : 'Close'),
