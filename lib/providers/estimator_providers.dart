@@ -643,6 +643,11 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
             parapetWalls: b.parapetWalls.copyWith(terminationType: type)),
       );
 
+  void updateParapetAdhesiveType(String type) => _updateActive(
+        (b) => b.copyWith(
+            parapetWalls: b.parapetWalls.copyWith(parapetAdhesiveType: type)),
+      );
+
   // ── Penetrations (active building) ────────────────────────────────────────
 
   void updatePenetrations(Penetrations penetrations) =>

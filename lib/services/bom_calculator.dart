@@ -33,6 +33,15 @@ class BomLineItem {
   final String notes;         // e.g. "10'×100', 1,000 sf/roll"
   final BomTrace trace;       // full calculation breakdown for hover math
 
+  /// When set, items sharing this key are merged into a single line by the
+  /// post-process consolidator. Use a stable identifier (not the display name)
+  /// for any SKU emitted from multiple sites — e.g. '3in_insulation_plates'.
+  final String? consolidationKey;
+
+  /// Display name used by the consolidator when collapsing duplicates.
+  /// If null, falls back to [name] (with any "— Layer X" suffix stripped).
+  final String? consolidatedName;
+
   const BomLineItem({
     required this.category,
     required this.name,
@@ -40,6 +49,8 @@ class BomLineItem {
     required this.unit,
     required this.notes,
     required this.trace,
+    this.consolidationKey,
+    this.consolidatedName,
   });
 
   /// True if this line has a non-zero quantity.
@@ -658,9 +669,11 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Fasteners & Plates',
           name: '3" Insulation Plates — Layer 1',
+          consolidationKey: 'plates_3in_insulation',
+          consolidatedName: '3" Insulation Plates',
           orderQty: l1PlateOrder,
           unit: 'boxes',
-          notes: '1,000/box — one plate per Layer 1 insulation fastener',
+          notes: '1,000/box — one plate per insulation fastener',
           trace: BomTrace(
             baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/box',
             baseQty: base,
@@ -715,9 +728,11 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Fasteners & Plates',
           name: '3" Insulation Plates — Layer 2',
+          consolidationKey: 'plates_3in_insulation',
+          consolidatedName: '3" Insulation Plates',
           orderQty: l2PlateOrder,
           unit: 'boxes',
-          notes: '1,000/box — one plate per Layer 2 insulation fastener',
+          notes: '1,000/box — one plate per insulation fastener',
           trace: BomTrace(
             baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/box',
             baseQty: base,
@@ -777,9 +792,11 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Fasteners & Plates',
           name: '3" Insulation Plates — Tapered Insulation',
+          consolidationKey: 'plates_3in_insulation',
+          consolidatedName: '3" Insulation Plates',
           orderQty: taperPlateOrder,
           unit: 'boxes',
-          notes: '1,000/box — one plate per tapered insulation fastener',
+          notes: '1,000/box — one plate per insulation fastener',
           trace: BomTrace(
             baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/box',
             baseQty: base,
@@ -834,9 +851,11 @@ class BomCalculator {
         items.add(BomLineItem(
           category: 'Fasteners & Plates',
           name: '3" Insulation Plates — Cover Board',
+          consolidationKey: 'plates_3in_insulation',
+          consolidatedName: '3" Insulation Plates',
           orderQty: cbPlateOrder,
           unit: 'boxes',
-          notes: '1,000/box — one plate per cover board fastener',
+          notes: '1,000/box — one plate per insulation fastener',
           trace: BomTrace(
             baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/box',
             baseQty: base,
@@ -1031,9 +1050,8 @@ class BomCalculator {
 
       if (skipParapetAdhesive) {
         warnings.add('Parapet adhesive omitted — wall height ${parapetHeightIn.toInt()}" per Versico spec (no adhesive required for short walls with ${parapet.terminationType.toLowerCase()}).');
-      } else {
-        // CAV-Grip 3v Low-VOC: ~400 sf per 40lb cylinder (double-sided vertical application)
-        // Applied to full parapet strip: wall face + deck overlap + top overlap
+      } else if (parapet.parapetAdhesiveType == 'CAV-GRIP 3V Spray') {
+        // CAV-GRIP 3V Low-VOC: ~400 sf per #40 cylinder (double-sided vertical spray)
         const cavGripCoverage = 400.0;
         final cavBase      = parapetTpoArea / cavGripCoverage;
         final cavWithW     = cavBase * (1 + wAcc);
@@ -1043,7 +1061,7 @@ class BomCalculator {
           name: 'Versico CAV-GRIP 3V Low-VOC Adhesive/Primer$vocSuffix — #40 Cylinder',
           orderQty: cavOrder,
           unit: 'cylinders',
-          notes: '#40 cylinder, ~400 sf/cyl — parapet walls (always adhered)',
+          notes: '#40 cylinder, ~400 sf/cyl — parapet walls',
           trace: BomTrace(
             baseDescription: '${_sf(parapetTpoArea)} ÷ 400 sf/cylinder',
             baseQty: cavBase,
@@ -1062,7 +1080,7 @@ class BomCalculator {
           ),
         ));
 
-        // UN-TACK Adhesive Remover & Cleaner — 1 cylinder per CAV-Grip cylinder (combo)
+        // UN-TACK Adhesive Remover & Cleaner — 1 aerosol per CAV-Grip cylinder
         items.add(BomLineItem(
           category: 'Adhesives & Sealants',
           name: 'Versico UN-TACK Adhesive Remover & Cleaner — #8 Aerosol',
@@ -1079,6 +1097,38 @@ class BomCalculator {
             breakdown: [
               'One UN-TACK per CAV-GRIP 3V cylinder',
               'ORDER QTY: ${cavOrder.toInt()} aerosols',
+            ],
+          ),
+        ));
+      } else {
+        // VersiWeld TPO Bonding Adhesive (default) — 5-gal pail, ~60 sf/gal applied
+        // to both surfaces (~30 sf/gal each). Parapet wall flashing is always adhered.
+        const coveragePerGal = 60.0;
+        const packageGal = 5.0;
+        final base    = parapetTpoArea / coveragePerGal;
+        final withW   = base * (1 + wAcc);
+        final pails   = (withW / packageGal).ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Adhesives & Sealants',
+          name: 'VersiWeld TPO Bonding Adhesive$vocSuffix — 5 Gal Pail (Parapet)',
+          orderQty: pails,
+          unit: 'pails',
+          notes: '5-gal pail, ~60 sf/gal — parapet wall flashing',
+          trace: BomTrace(
+            baseDescription: '${_sf(parapetTpoArea)} ÷ 60 sf/gal',
+            baseQty: base,
+            wastePercent: wAcc,
+            withWaste: withW,
+            packageSize: packageGal,
+            orderQty: pails,
+            breakdown: [
+              'Parapet TPO area: ${_sf(parapetTpoArea)}',
+              '  Wall: ${parapetHeightFt.toStringAsFixed(1)}\' + 4" base lap = ${parapetStripWidthFt.toStringAsFixed(2)}\' x ${_lf(parapet.parapetTotalLF)}',
+              'Coverage rate: 60 sf/gal',
+              'Base gallons:  ${base.toStringAsFixed(1)}',
+              'Waste:         ${_pct(wAcc)}%',
+              'With waste:    ${withW.toStringAsFixed(1)} gal',
+              'ORDER QTY:     ${pails.toInt()} pails (5-gal each)',
             ],
           ),
         ));
@@ -1123,14 +1173,18 @@ class BomCalculator {
       ));
     }
 
-    // Versico Water Cut-Off Mastic — used at T-joints, penetrations, and termination
-    // details. NOT applied continuously along field seams (those are hot-air welded
-    // or taped). Detail-driven formula prevents the prior 5–10× over-order.
+    // Versico Water Cut-Off Mastic — moisture barrier at compression details.
+    // Per Versico spec, used at: drains (gasket under drain ring), pipe flashing
+    // tops (against the pipe), and beneath conventional metal edging at compression
+    // terminations. NOT used along field seams (those are welded or taped) and
+    // NOT at T-joints (T-joints get lap sealant under the T-joint cover).
     if (totalArea > 0) {
-      final fieldRollsForMastic = (effectiveFieldArea / fieldRollCoverage).ceil();
-      final tJointEst = (fieldRollsForMastic * 0.75).ceil();
-      // ~6" mastic per T-joint, ~1 LF per drain, 5% allowance along termination bar.
-      final masticLF = tJointEst * 0.5 + drainCount * 1.0 + termBarLF * 0.05;
+      final pipeCount = penetrations.smallPipeCount + penetrations.largePipeCount;
+      // ~1 LF per drain, ~1 LF per pipe flashing top, ~5% of edge metal LF for
+      // compression terminations under conventional metal edging.
+      final masticLF = drainCount * 1.0
+          + pipeCount * 1.0
+          + metalScope.edgeMetalLF * 0.05;
       if (masticLF > 0) {
         const lfPerTube = 10.0;
         final base     = masticLF / lfPerTube;
@@ -1141,7 +1195,7 @@ class BomCalculator {
           name: 'Versico Water Cut-Off Mastic',
           orderQty: orderQty,
           unit: 'tubes',
-          notes: '11 oz tubes, ~10 LF/tube — 7/16" bead at T-joints, penetrations, terminations',
+          notes: '11 oz tubes, ~10 LF/tube — drains, pipe tops, under metal edging',
           trace: BomTrace(
             baseDescription: '${masticLF.toStringAsFixed(0)} LF detail seal ÷ 10 LF/tube',
             baseQty: base,
@@ -1150,11 +1204,11 @@ class BomCalculator {
             packageSize: 1,
             orderQty: orderQty,
             breakdown: [
-              'T-joints: ~0.75 × $fieldRollsForMastic field rolls = $tJointEst @ 0.5 LF each',
-              'Drain penetrations: $drainCount @ 1.0 LF each',
-              'Term bar transition (5% × ${termBarLF.toStringAsFixed(0)} LF): ${(termBarLF * 0.05).toStringAsFixed(1)} LF',
+              'Drains: $drainCount × 1.0 LF',
+              'Pipe flashing tops: $pipeCount × 1.0 LF',
+              'Under metal edging (5% × ${metalScope.edgeMetalLF.toStringAsFixed(0)} LF): ${(metalScope.edgeMetalLF * 0.05).toStringAsFixed(1)} LF',
               'Total detail LF: ${masticLF.toStringAsFixed(1)}',
-              'Coverage: 10 LF/tube (7/16" bead)',
+              'Coverage: 10 LF/tube',
               'Waste: ${_pct(wAcc)}%',
               'ORDER QTY: ${orderQty.toInt()} tubes',
             ],
@@ -2076,14 +2130,110 @@ class BomCalculator {
       ));
     }
 
+    final consolidated = _consolidate(items);
+
     return BomResult(
-      items: items,
+      items: consolidated,
       warnings: warnings,
       isComplete: hasArea && hasDeckType,
     );
   }
 
   // ─── PRIVATE HELPERS ─────────────────────────────────────────────────────────
+
+  /// Combines items that share the same [BomLineItem.consolidationKey] into a
+  /// single line. Sums their pre-package base/withWaste quantities, then ceils
+  /// once at the package level. Prevents ordering two boxes of the same SKU
+  /// across e.g. Layer 1 and Layer 2 fastener plates when one box would cover
+  /// the combined total.
+  static List<BomLineItem> _consolidate(List<BomLineItem> items) {
+    final groups = <String, List<BomLineItem>>{};
+    final order = <String>[];
+    for (final it in items) {
+      final key = it.consolidationKey;
+      if (key == null) continue;
+      groups.putIfAbsent(key, () {
+        order.add(key);
+        return [];
+      }).add(it);
+    }
+
+    if (groups.isEmpty) return items;
+
+    final mergedKeys = <String, BomLineItem>{};
+    for (final entry in groups.entries) {
+      final list = entry.value;
+      if (list.length == 1) {
+        mergedKeys[entry.key] = list.first;
+        continue;
+      }
+
+      final first = list.first;
+      // Trace.baseQty / trace.withWaste are already in RAW UNITS (fasteners,
+      // plates, gallons, etc.) — packageSize describes how many fit per
+      // ordered package. Sum the raw counts and ceil once at the package level.
+      final pkg = first.trace.packageSize;
+      double combinedBase = 0;
+      double combinedWithW = 0;
+      final breakdown = <String>['Combined from ${list.length} sources:'];
+      for (final sub in list) {
+        combinedBase  += sub.trace.baseQty;
+        combinedWithW += sub.trace.withWaste;
+        breakdown.add(
+          '  • ${sub.name}: ${sub.trace.baseQty.toStringAsFixed(0)} units '
+          '(would order ${sub.orderQty.toInt()} ${sub.unit} alone)',
+        );
+      }
+
+      final orderQty = (combinedWithW / pkg).ceil().toDouble();
+
+      breakdown.addAll([
+        'Combined units: ${combinedBase.toStringAsFixed(0)}',
+        'Package size:   ${pkg.toInt()} per ${first.unit.replaceAll(RegExp(r"es$|s$"), "")}',
+        'With waste:     ${combinedWithW.toStringAsFixed(0)} units = ${(combinedWithW / pkg).toStringAsFixed(2)} ${first.unit}',
+        'ORDER QTY:      ${orderQty.toInt()} ${first.unit} (was ${list.fold<double>(0, (a, b) => a + b.orderQty).toInt()} as separate lines)',
+      ]);
+
+      final displayName = first.consolidatedName ??
+          first.name.replaceFirst(RegExp(r'\s*[—-]\s*(Layer \d+|Tapered Insulation|Cover Board).*$'), '');
+
+      mergedKeys[entry.key] = BomLineItem(
+        category: first.category,
+        name: displayName,
+        orderQty: orderQty,
+        unit: first.unit,
+        notes: first.notes,
+        consolidationKey: first.consolidationKey,
+        consolidatedName: first.consolidatedName,
+        trace: BomTrace(
+          baseDescription: '${combinedBase.toStringAsFixed(0)} units ÷ ${pkg.toInt()} per ${first.unit}',
+          baseQty: combinedBase,
+          wastePercent: first.trace.wastePercent,
+          withWaste: combinedWithW,
+          packageSize: pkg,
+          orderQty: orderQty,
+          breakdown: breakdown,
+        ),
+      );
+    }
+
+    // Rebuild the items list, replacing the FIRST occurrence of each merged
+    // key with the merged item and dropping subsequent occurrences. Items with
+    // no consolidationKey pass through unchanged.
+    final emittedKeys = <String>{};
+    final result = <BomLineItem>[];
+    for (final it in items) {
+      final key = it.consolidationKey;
+      if (key == null) {
+        result.add(it);
+        continue;
+      }
+      if (emittedKeys.contains(key)) continue;
+      emittedKeys.add(key);
+      result.add(mergedKeys[key]!);
+    }
+    return result;
+  }
 
   // ─── WARRANTY-DRIVEN FASTENING DENSITIES ─────────────────────────────────────
 

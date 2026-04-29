@@ -159,6 +159,10 @@ class ParapetWalls {
 
   final String terminationType;     // from kTerminationTypes
 
+  /// Adhesive used on parapet wall flashing — from kAdhesiveTypes.
+  /// Default: VersiWeld TPO Bonding Adhesive (5-gal pail).
+  final String parapetAdhesiveType;
+
   const ParapetWalls({
     this.hasParapetWalls = false,
     this.parapetHeight = 0.0,
@@ -166,6 +170,7 @@ class ParapetWalls {
     this.wallType = 'Concrete Block',
     this.terminationBarLFOverride,
     this.terminationType = 'Termination Bar',
+    this.parapetAdhesiveType = 'VersiWeld TPO Bonding Adhesive',
   });
 
   factory ParapetWalls.initial() => const ParapetWalls();
@@ -196,6 +201,7 @@ class ParapetWalls {
     String? wallType,
     double? terminationBarLFOverride,
     String? terminationType,
+    String? parapetAdhesiveType,
   }) {
     return ParapetWalls(
       hasParapetWalls: hasParapetWalls ?? this.hasParapetWalls,
@@ -205,6 +211,7 @@ class ParapetWalls {
       terminationBarLFOverride:
           terminationBarLFOverride ?? this.terminationBarLFOverride,
       terminationType: terminationType ?? this.terminationType,
+      parapetAdhesiveType: parapetAdhesiveType ?? this.parapetAdhesiveType,
     );
   }
 
@@ -216,6 +223,7 @@ class ParapetWalls {
         wallType: wallType,
         terminationBarLFOverride: null,
         terminationType: terminationType,
+        parapetAdhesiveType: parapetAdhesiveType,
       );
 
   @override
@@ -227,12 +235,14 @@ class ParapetWalls {
           parapetTotalLF == other.parapetTotalLF &&
           wallType == other.wallType &&
           terminationBarLFOverride == other.terminationBarLFOverride &&
-          terminationType == other.terminationType;
+          terminationType == other.terminationType &&
+          parapetAdhesiveType == other.parapetAdhesiveType;
 
   @override
   int get hashCode => Object.hash(
         hasParapetWalls, parapetHeight, parapetTotalLF,
         wallType, terminationBarLFOverride, terminationType,
+        parapetAdhesiveType,
       );
 }
 

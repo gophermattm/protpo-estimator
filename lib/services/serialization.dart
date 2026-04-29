@@ -414,6 +414,7 @@ Map<String, dynamic> _parapetWallsToJson(ParapetWalls p) => {
   'wallType':                p.wallType,
   'terminationBarLFOverride':p.terminationBarLFOverride,
   'terminationType':         p.terminationType,
+  'parapetAdhesiveType':     p.parapetAdhesiveType,
 };
 
 ParapetWalls _parapetWallsFromJson(Map j) => ParapetWalls(
@@ -423,6 +424,7 @@ ParapetWalls _parapetWallsFromJson(Map j) => ParapetWalls(
   wallType:                 _s(j['wallType'], 'Concrete Block'),
   terminationBarLFOverride: (j['terminationBarLFOverride'] as num?)?.toDouble(),
   terminationType:          _s(j['terminationType'], 'Termination Bar'),
+  parapetAdhesiveType:      _s(j['parapetAdhesiveType'], 'VersiWeld TPO Bonding Adhesive'),
 );
 
 // ─── PENETRATIONS ─────────────────────────────────────────────────────────────

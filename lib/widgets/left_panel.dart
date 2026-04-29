@@ -220,6 +220,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   final _cTermBarLF      = TextEditingController();
   String _parapetWallType = 'Concrete Block';
   String _terminationType = 'Termination Bar';
+  String _parapetAdhesiveType = 'VersiWeld TPO Bonding Adhesive';
   bool   _termBarOverride = false;
 
   // ── Metal Scope ──────────────────────────────────────────────────────────────
@@ -450,6 +451,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _hasParapet      = par.hasParapetWalls;
       _parapetWallType = par.wallType;
       _terminationType = par.terminationType;
+      _parapetAdhesiveType = par.parapetAdhesiveType;
       _copingWidth     = met.copingWidth;
       _edgeMetalType   = met.edgeMetalType;
       _gutterSize      = met.gutterSize;
@@ -1868,6 +1870,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         _sp12,
         _dd('Termination Type', _terminationType, kTerminationTypes, (v) {
           setState(() => _terminationType = v!); n.updateTerminationType(v!); }),
+        _sp12,
+        _dd('Parapet Adhesive', _parapetAdhesiveType, kAdhesiveTypes, (v) {
+          setState(() => _parapetAdhesiveType = v!); n.updateParapetAdhesiveType(v!); }),
         if (_parapetArea > 0) ...[_sp16, _parapetBOM()],
     ]);
   }
