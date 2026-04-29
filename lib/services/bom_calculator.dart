@@ -587,20 +587,44 @@ class BomCalculator {
       ));
     }
 
-    // Insulation fasteners — one line item per MA layer, each with computed length
+    // Insulation fasteners — only the TOPMOST mechanically-attached layer emits
+    // fasteners. The fastener length is sized to penetrate the full stack from
+    // that layer down to the deck, capturing all layers below in the same pass.
+    // Emitting fasteners for every MA layer independently double-attaches and
+    // over-orders. When redundant MA flags are detected, a warning is added.
     if (totalArea > 0) {
       final l1MA = insulation.numberOfLayers >= 1 &&
           insulation.layer1.attachmentMethod == 'Mechanically Attached';
       final l2MA = insulation.numberOfLayers == 2 &&
           (insulation.layer2?.attachmentMethod == 'Mechanically Attached' ?? false);
+      final taperMAFlag = insulation.hasTaper &&
+          insulation.taperDefaults != null &&
+          insulation.taperDefaults!.attachmentMethod == 'Mechanically Attached';
       final cbMA = insulation.hasCoverBoard &&
           (insulation.coverBoard?.attachmentMethod == 'Mechanically Attached' ?? false);
+
+      // Topmost MA wins: cover board > tapered > L2 > L1.
+      final effectiveCbMA    = cbMA;
+      final effectiveTaperMA = taperMAFlag && !cbMA;
+      final effectiveL2MA    = l2MA && !taperMAFlag && !cbMA;
+      final effectiveL1MA    = l1MA && !l2MA && !taperMAFlag && !cbMA;
+
+      final maCount = (l1MA ? 1 : 0) + (l2MA ? 1 : 0) + (taperMAFlag ? 1 : 0) + (cbMA ? 1 : 0);
+      if (maCount > 1) {
+        final topName = cbMA ? 'cover board' : (taperMAFlag ? 'tapered insulation' : (l2MA ? 'Layer 2' : 'Layer 1'));
+        warnings.add(
+          'NOTE: $maCount insulation layers marked Mechanically Attached — '
+          'fasteners emitted only for topmost ($topName), which captures lower '
+          'layers in a single pass. Set lower layers to "Adhered" if redundant '
+          'attachment was unintended.',
+        );
+      }
 
       final insDensity = _insulationDensity(projectInfo.warrantyYears, systemSpecs.deckType);
       const insBoxSize = 500.0;
 
       // Layer 1 MA: fastener only passes through layer 1 stack
-      if (l1MA) {
+      if (effectiveL1MA) {
         final l1StackIn = _stackThicknessIn(insulation, 1);
         final l1Len     = _selectFastenerLen(systemSpecs.deckType, l1StackIn);
         final base      = totalArea * insDensity;
@@ -655,7 +679,7 @@ class BomCalculator {
       }
 
       // Layer 2 MA: fastener passes through BOTH layer 2 AND layer 1 to reach deck
-      if (l2MA) {
+      if (effectiveL2MA) {
         final l2StackIn = _stackThicknessIn(insulation, 2); // L1 + L2 thickness
         final l2Len     = _selectFastenerLen(systemSpecs.deckType, l2StackIn);
         final base      = totalArea * insDensity;
@@ -712,10 +736,7 @@ class BomCalculator {
       }
 
       // Tapered insulation MA: fastener passes through flat layers + tapered max
-      final taperMA = insulation.hasTaper &&
-          insulation.taperDefaults != null &&
-          insulation.taperDefaults!.attachmentMethod == 'Mechanically Attached' &&
-          taperMaxIn > 0;
+      final taperMA = effectiveTaperMA && taperMaxIn > 0;
       if (taperMA) {
         // Stack = flat layers + tapered max thickness (no cover board)
         double taperStackIn = 0;
@@ -777,7 +798,7 @@ class BomCalculator {
       }
 
       // Cover board MA: passes through cover board + insulation stack
-      if (cbMA) {
+      if (effectiveCbMA) {
         final cbStackIn = _stackThicknessIn(insulation, 3, taperMaxThickness: taperMaxIn); // full stack
         final cbLen     = _selectFastenerLen(systemSpecs.deckType, cbStackIn);
         final base      = totalArea * insDensity;
@@ -838,27 +859,31 @@ class BomCalculator {
     // 4. ADHESIVES & SEALANTS
     // ══════════════════════════════════════════════════════════════════════════
 
-    // Bonding adhesive — separate parapet (CAV-Grip 3v) from field (Cav-Grip III)
-    final adheredFieldArea = isFA ? totalArea : 0.0;
-    final adheredInsArea = [
-      if (insulation.numberOfLayers >= 1 && insulation.layer1.attachmentMethod == 'Adhered') totalArea,
+    // Bonding adhesive — split into membrane-bond (VersiWeld) and insulation-bond (OlyBond).
+    // VersiWeld TPO Bonding Adhesive is for membrane-to-substrate only.
+    // Insulation adhered to deck or to itself uses OlyBond500 / FAST 100LV (separate SKU).
+    final adheredMembraneArea = isFA ? totalArea : 0.0;
+
+    final adheredInsulationLayers = [
+      if (insulation.numberOfLayers >= 1 && insulation.layer1.attachmentMethod == 'Adhered') 1,
       if (insulation.numberOfLayers == 2 &&
-          (insulation.layer2?.attachmentMethod == 'Adhered' ?? false)) totalArea,
+          (insulation.layer2?.attachmentMethod == 'Adhered' ?? false)) 1,
       if (insulation.hasTaper && insulation.taperDefaults != null &&
           insulation.taperDefaults!.attachmentMethod == 'Adhered')
-        totalArea,
+        1,
       if (insulation.hasCoverBoard &&
-          (insulation.coverBoard?.attachmentMethod == 'Adhered' ?? false)) totalArea,
-    ].fold(0.0, (a, b) => a + b);
+          (insulation.coverBoard?.attachmentMethod == 'Adhered' ?? false)) 1,
+    ].length;
+    final adheredInsArea = adheredInsulationLayers * totalArea;
 
-    final totalFieldAdheredArea = adheredFieldArea + adheredInsArea;
-    if (totalFieldAdheredArea > 0) {
+    // ── Membrane bonding adhesive (membrane-to-substrate only) ────────────────
+    if (adheredMembraneArea > 0) {
       final isSprayAdhesive = membrane.adhesiveType == 'CAV-GRIP 3V Spray';
 
       if (isSprayAdhesive) {
         // CAV-GRIP 3V spray: ~400 sf per #40 cylinder
         const coveragePerCyl = 400.0;
-        final cylBase = totalFieldAdheredArea / coveragePerCyl;
+        final cylBase = adheredMembraneArea / coveragePerCyl;
         final cylWithW = cylBase * (1 + wAcc);
         final cylOrder = cylWithW.ceil().toDouble();
         items.add(BomLineItem(
@@ -866,17 +891,16 @@ class BomCalculator {
           name: 'Versico CAV-GRIP 3V Low-VOC Adhesive/Primer$vocSuffix — #40 Cylinder (Field)',
           orderQty: cylOrder,
           unit: 'cylinders',
-          notes: '#40 cylinder, ~400 sf/cyl — spray application, field membrane',
+          notes: '#40 cylinder, ~400 sf/cyl — spray application, field membrane only',
           trace: BomTrace(
-            baseDescription: '${_sf(totalFieldAdheredArea)} ÷ 400 sf/cyl',
+            baseDescription: '${_sf(adheredMembraneArea)} ÷ 400 sf/cyl',
             baseQty: cylBase,
             wastePercent: wAcc,
             withWaste: cylWithW,
             packageSize: 1,
             orderQty: cylOrder,
             breakdown: [
-              if (isFA) 'FA membrane area: ${_sf(totalArea)}',
-              if (adheredInsArea > 0) 'Adhered insulation area: ${_sf(adheredInsArea)}',
+              'FA membrane area: ${_sf(adheredMembraneArea)}',
               'Coverage rate: ~400 sf per #40 cylinder',
               'Base: ${cylBase.toStringAsFixed(2)} cylinders',
               'Waste: ${_pct(wAcc)}%',
@@ -904,7 +928,7 @@ class BomCalculator {
       } else {
         // VersiWeld TPO Bonding Adhesive: ~60 sf per gallon — auto-select package by area
         const coveragePerGal = 60.0;
-        final base  = totalFieldAdheredArea / coveragePerGal;
+        final base  = adheredMembraneArea / coveragePerGal;
         final withW = base * (1 + wAcc);
 
         // Smart package sizing:
@@ -915,15 +939,15 @@ class BomCalculator {
         final String unit;
         final String notes;
         final double packageGal;
-        if (totalFieldAdheredArea < 120) {
+        if (adheredMembraneArea < 120) {
           productName = 'VersiWeld TPO Bonding Adhesive$vocSuffix — 1 Gal';
           unit = 'cans';
           notes = '1-gal, ~60 sf/gal — small area brush/roller application';
           packageGal = 1.0;
-        } else if (totalFieldAdheredArea < 600) {
+        } else if (adheredMembraneArea < 600) {
           productName = 'VersiWeld TPO Bonding Adhesive$vocSuffix — 5 Gal Pail';
           unit = 'pails';
-          notes = '5-gal pail, ~60 sf/gal — field membrane & insulation';
+          notes = '5-gal pail, ~60 sf/gal — field membrane only';
           packageGal = 5.0;
         } else {
           productName = 'VersiWeld TPO Bonding Adhesive$vocSuffix — 15 Gal';
@@ -940,25 +964,59 @@ class BomCalculator {
           unit: unit,
           notes: notes,
           trace: BomTrace(
-            baseDescription: '${_sf(totalFieldAdheredArea)} ÷ 60 sf/gal',
+            baseDescription: '${_sf(adheredMembraneArea)} ÷ 60 sf/gal',
             baseQty: base,
             wastePercent: wAcc,
             withWaste: withW,
             packageSize: packageGal,
             orderQty: orderQty,
             breakdown: [
-              if (isFA)        'FA membrane area: ${_sf(totalArea)}',
-              if (adheredInsArea > 0) 'Adhered insulation area: ${_sf(adheredInsArea)}',
+              'FA membrane area: ${_sf(adheredMembraneArea)}',
               'Coverage rate: 60 sf/gal',
               'Base gallons:  ${base.toStringAsFixed(1)}',
               'Waste:         ${_pct(wAcc)}%',
               'With waste:    ${withW.toStringAsFixed(1)} gal',
-              'Auto-selected: ${packageGal.toInt()}-gal $unit (${_sf(totalFieldAdheredArea)} adhered area)',
+              'Auto-selected: ${packageGal.toInt()}-gal $unit (${_sf(adheredMembraneArea)} adhered membrane)',
               'ORDER QTY:     ${orderQty.toInt()} $unit',
             ],
           ),
         ));
       }
+    }
+
+    // ── Insulation adhesive (separate SKU from membrane bond) ─────────────────
+    // Per Versico spec, insulation adhered to deck or underlying insulation uses a
+    // dual-cartridge urethane adhesive (OlyBond500 / FAST 100LV).
+    // Coverage @ 12" o.c. ribbon application: ~1,500 sf per dual-cartridge set.
+    if (adheredInsulationLayers > 0) {
+      const sfPerSet = 1500.0;
+      final base = adheredInsArea / sfPerSet;
+      final withW = base * (1 + wAcc);
+      final orderQty = withW.ceil().toDouble();
+      items.add(BomLineItem(
+        category: 'Adhesives & Sealants',
+        name: 'OlyBond500 Insulation Adhesive (or FAST 100LV) — Dual Cartridge Set',
+        orderQty: orderQty,
+        unit: 'sets',
+        notes: '~1,500 sf/set @ 12" o.c. ribbons — adhered insulation layers',
+        trace: BomTrace(
+          baseDescription: '${_sf(adheredInsArea)} ÷ 1,500 sf/set',
+          baseQty: base,
+          wastePercent: wAcc,
+          withWaste: withW,
+          packageSize: 1,
+          orderQty: orderQty,
+          breakdown: [
+            'Adhered insulation layers: $adheredInsulationLayers',
+            '  ($adheredInsulationLayers × ${_sf(totalArea)} = ${_sf(adheredInsArea)} adhered area)',
+            'Coverage: ~1,500 sf per dual-cartridge set @ 12" o.c. ribbons',
+            'Base sets:  ${base.toStringAsFixed(2)}',
+            'Waste:      ${_pct(wAcc)}%',
+            'With waste: ${withW.toStringAsFixed(2)} sets',
+            'ORDER QTY:  ${orderQty.toInt()} sets',
+          ],
+        ),
+      ));
     }
 
     // ── Parapet wall adhesive & cleaner (always adhered, separate products) ──
@@ -1027,11 +1085,14 @@ class BomCalculator {
       }
     }
 
-    // Cut-edge sealant — estimated from seam LF
-    // Seam LF ≈ totalArea / rollWidth (each roll creates one seam)
+    // Cut-edge sealant — applied to membrane reinforcement at cut edges along field seams.
+    // Corrected seam LF: (fieldRolls − 1) shared seams × 100' roll length.
+    // Plus a small detail allowance for penetration cuts.
     if (totalArea > 0) {
-      final rollWidthFt  = double.tryParse(membrane.rollWidth.replaceAll("'", '')) ?? 10.0;
-      final seamLF       = totalArea / rollWidthFt;
+      final fieldRollsForSeam = (effectiveFieldArea / fieldRollCoverage).ceil();
+      final fieldSeamLF = max(0, fieldRollsForSeam - 1) * 100.0;
+      final detailCutLF = drainCount * 4.0; // ~4 LF per drain (boot perimeter)
+      final seamLF = fieldSeamLF + detailCutLF;
       // 1 bottle (16 oz) covers ~250 LF of cut edge (Versico spec: 225–275 LF/bottle)
       const lfPerBottle  = 250.0;
       final base         = seamLF / lfPerBottle;
@@ -1044,14 +1105,16 @@ class BomCalculator {
         unit: 'bottles',
         notes: '16 oz bottles, ~250 LF/bottle — 1/8" bead on cut edges',
         trace: BomTrace(
-          baseDescription: '${seamLF.toStringAsFixed(0)} LF seams ÷ 250 LF/bottle',
+          baseDescription: '${seamLF.toStringAsFixed(0)} LF cut edge ÷ 250 LF/bottle',
           baseQty: base,
           wastePercent: wAcc,
           withWaste: withW,
           packageSize: 1,
           orderQty: orderQty,
           breakdown: [
-            'Est. seam LF: ${_sf(totalArea)} ÷ ${rollWidthFt.toInt()} ft roll = ${seamLF.toStringAsFixed(0)} LF',
+            'Field seams: max(0, $fieldRollsForSeam − 1) × 100\' = ${fieldSeamLF.toStringAsFixed(0)} LF',
+            'Detail cuts: $drainCount drains × 4 LF = ${detailCutLF.toStringAsFixed(0)} LF',
+            'Total cut edge LF: ${seamLF.toStringAsFixed(0)}',
             'Coverage: 250 LF/bottle',
             'Waste: ${_pct(wAcc)}%',
             'ORDER QTY: ${orderQty.toInt()} bottles',
@@ -1060,44 +1123,52 @@ class BomCalculator {
       ));
     }
 
-    // Versico Water Cut-Off Mastic — seam LF at T-joints, laps, penetrations
+    // Versico Water Cut-Off Mastic — used at T-joints, penetrations, and termination
+    // details. NOT applied continuously along field seams (those are hot-air welded
+    // or taped). Detail-driven formula prevents the prior 5–10× over-order.
     if (totalArea > 0) {
-      final rollWidthFtWco = double.tryParse(membrane.rollWidth.replaceAll("'", '')) ?? 10.0;
-      final seamLFWco      = totalArea / rollWidthFtWco;
-      // 1 tube (11 oz) covers ~10 LF (Versico spec: 10 LF/tube with 7/16" bead)
-      const lfPerTube      = 10.0;
-      final base           = seamLFWco / lfPerTube;
-      final withW          = base * (1 + wAcc);
-      final orderQty       = withW.ceil().toDouble();
-      items.add(BomLineItem(
-        category: 'Adhesives & Sealants',
-        name: 'Versico Water Cut-Off Mastic',
-        orderQty: orderQty,
-        unit: 'tubes',
-        notes: '11 oz tubes, ~10 LF/tube — 7/16" bead at T-joints, laps, penetrations',
-        trace: BomTrace(
-          baseDescription: '${seamLFWco.toStringAsFixed(0)} LF seams ÷ 10 LF/tube',
-          baseQty: base,
-          wastePercent: wAcc,
-          withWaste: withW,
-          packageSize: 1,
+      final fieldRollsForMastic = (effectiveFieldArea / fieldRollCoverage).ceil();
+      final tJointEst = (fieldRollsForMastic * 0.75).ceil();
+      // ~6" mastic per T-joint, ~1 LF per drain, 5% allowance along termination bar.
+      final masticLF = tJointEst * 0.5 + drainCount * 1.0 + termBarLF * 0.05;
+      if (masticLF > 0) {
+        const lfPerTube = 10.0;
+        final base     = masticLF / lfPerTube;
+        final withW    = base * (1 + wAcc);
+        final orderQty = withW.ceil().toDouble();
+        items.add(BomLineItem(
+          category: 'Adhesives & Sealants',
+          name: 'Versico Water Cut-Off Mastic',
           orderQty: orderQty,
-          breakdown: [
-            'Est. seam LF: ${_sf(totalArea)} ÷ ${rollWidthFtWco.toInt()} ft roll = ${seamLFWco.toStringAsFixed(0)} LF',
-            'Coverage: 10 LF/tube (7/16" bead)',
-            'Waste: ${_pct(wAcc)}%',
-            'ORDER QTY: ${orderQty.toInt()} tubes',
-          ],
-        ),
-      ));
+          unit: 'tubes',
+          notes: '11 oz tubes, ~10 LF/tube — 7/16" bead at T-joints, penetrations, terminations',
+          trace: BomTrace(
+            baseDescription: '${masticLF.toStringAsFixed(0)} LF detail seal ÷ 10 LF/tube',
+            baseQty: base,
+            wastePercent: wAcc,
+            withWaste: withW,
+            packageSize: 1,
+            orderQty: orderQty,
+            breakdown: [
+              'T-joints: ~0.75 × $fieldRollsForMastic field rolls = $tJointEst @ 0.5 LF each',
+              'Drain penetrations: $drainCount @ 1.0 LF each',
+              'Term bar transition (5% × ${termBarLF.toStringAsFixed(0)} LF): ${(termBarLF * 0.05).toStringAsFixed(1)} LF',
+              'Total detail LF: ${masticLF.toStringAsFixed(1)}',
+              'Coverage: 10 LF/tube (7/16" bead)',
+              'Waste: ${_pct(wAcc)}%',
+              'ORDER QTY: ${orderQty.toInt()} tubes',
+            ],
+          ),
+        ));
+      }
     }
 
     // ── Seam tape (when seamType == 'Tape' instead of hot-air welded) ───────
     // Versico seam tape: 3" wide pressure-sensitive, 100' rolls.
-    // Seam LF = total seam length from roll layout.
+    // Corrected seam LF: (fieldRolls − 1) shared seams × 100' roll length.
     if (membrane.seamType == 'Tape' && totalArea > 0) {
-      final rollWidthFtTape = double.tryParse(membrane.rollWidth.replaceAll("'", '')) ?? 10.0;
-      final seamLFTape = totalArea / rollWidthFtTape;
+      final fieldRollsForTape = (effectiveFieldArea / fieldRollCoverage).ceil();
+      final seamLFTape = max(0, fieldRollsForTape - 1) * 100.0;
       const tapeRollLF = 100.0;
       final tapeBase = seamLFTape / tapeRollLF;
       final tapeWithW = tapeBase * (1 + wAcc);
@@ -1116,7 +1187,7 @@ class BomCalculator {
           packageSize: 1,
           orderQty: tapeOrder,
           breakdown: [
-            'Seam LF: ${_sf(totalArea)} ÷ ${rollWidthFtTape.toInt()}\' roll width = ${seamLFTape.toStringAsFixed(0)} LF',
+            'Field seams: max(0, $fieldRollsForTape − 1) × 100\' = ${seamLFTape.toStringAsFixed(0)} LF',
             'Roll length: 100\' per roll',
             'Waste: ${_pct(wAcc)}%',
             'ORDER QTY: ${tapeOrder.toInt()} rolls',

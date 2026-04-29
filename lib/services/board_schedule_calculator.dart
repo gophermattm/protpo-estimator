@@ -133,15 +133,17 @@ class BoardScheduleCalculator {
     if (rate == 0) return BoardScheduleResult.empty;
 
     final panelW = input.panelWidthFt;
-    final numRows = (input.distance / panelW).ceil();
-    final panelsWide = (input.roofWidthFt / panelW).ceil();
+    final numRows = (input.distance / panelW).ceil(); // rows are discrete (slope steps)
+    // Keep panelsWide as a precise fraction so we ceil ONCE per letter at the end,
+    // not on every row. Avoids ~5–10% over-count on roofs whose width isn't a
+    // multiple of the panel width (e.g. a 50' roof with 4' panels = 12.5).
+    final panelsWidePrecise = input.roofWidthFt / panelW;
     final seqLen = sequence.panels.length;
     final seqRise = sequence.sequenceRise;
 
     final rows = <BoardRow>[];
-    final taperedCounts = <String, int>{};
-    final flatFillCounts = <double, int>{};
-    int totalFlatFillPanels = 0;
+    final taperedCountsPrecise = <String, double>{};
+    final flatFillCountsPrecise = <double, double>{};
 
     // For average taper thickness: sum of (avgThickness × panelArea) / totalArea
     double taperThicknessVolumeSum = 0;
@@ -176,14 +178,13 @@ class BoardScheduleCalculator {
         panelThickEdge: panel.thickEdge,
       ));
 
-      // Counts
-      taperedCounts[panel.letter] =
-          (taperedCounts[panel.letter] ?? 0) + panelsWide;
+      // Accumulate fractional counts (ceiling applied per-letter after the loop)
+      taperedCountsPrecise[panel.letter] =
+          (taperedCountsPrecise[panel.letter] ?? 0) + panelsWidePrecise;
 
       if (flatFill > 0) {
-        flatFillCounts[flatFill] =
-            (flatFillCounts[flatFill] ?? 0) + panelsWide;
-        totalFlatFillPanels += panelsWide;
+        flatFillCountsPrecise[flatFill] =
+            (flatFillCountsPrecise[flatFill] ?? 0) + panelsWidePrecise;
       }
 
       // Volume accumulation for average thickness
@@ -191,14 +192,30 @@ class BoardScheduleCalculator {
       taperThicknessVolumeSum += rowAvg;
     }
 
+    // Ceil per-letter (one rounding) instead of per-row (numRows roundings)
+    final taperedCounts = <String, int>{
+      for (final e in taperedCountsPrecise.entries) e.key: e.value.ceil(),
+    };
+    final flatFillCounts = <double, int>{
+      for (final e in flatFillCountsPrecise.entries) e.key: e.value.ceil(),
+    };
+
     final totalTapered =
         taperedCounts.values.fold<int>(0, (a, b) => a + b);
+    final totalFlatFillPanels =
+        flatFillCounts.values.fold<int>(0, (a, b) => a + b);
     final totalPanels = totalTapered + totalFlatFillPanels;
     final totalWithWaste = (totalPanels * (1 + input.wasteFactor)).ceil();
 
     final panelArea = panelW * panelW; // sq ft per panel (4×4 = 16)
-    final totalTaperedSF = totalTapered * panelArea;
-    final totalFlatFillSF = totalFlatFillPanels * panelArea;
+    // Compute SF from the precise (pre-ceil) fractional counts so square-footage
+    // reflects the actual roof area under tapered/flat-fill, not the ceiled overage.
+    final taperedPanelsPrecise =
+        taperedCountsPrecise.values.fold<double>(0, (a, b) => a + b);
+    final flatFillPanelsPrecise =
+        flatFillCountsPrecise.values.fold<double>(0, (a, b) => a + b);
+    final totalTaperedSF = taperedPanelsPrecise * panelArea;
+    final totalFlatFillSF = flatFillPanelsPrecise * panelArea;
 
     final maxThick = input.minThickness + (input.distance * rate);
     final avgTaper =
