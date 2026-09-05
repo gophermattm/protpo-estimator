@@ -286,7 +286,9 @@ class ValidationEngine {
 
     // ── PIPE BOOTS → require clamping ring + cut-edge sealant ──
     if (pen.smallPipeCount + pen.largePipeCount > 0) {
-      final hasClampRing = bomNames.any((n) => n.contains('clamp') || n.contains('pipe seal'));
+      // Pre-molded boots (what the BOM emits) ship with their clamping ring.
+      final hasClampRing = bomNames.any((n) =>
+          n.contains('clamp') || n.contains('pipe seal') || n.contains('pipe boot'));
       if (!hasClampRing) {
         missing.add(const MissingCompanionItem(
           triggerItem: 'Pipe Boots',
@@ -327,7 +329,7 @@ class ValidationEngine {
           isCritical: true,
         ));
       }
-      final hasPrimer = bomNames.any((n) => n.contains('tpo primer'));
+      final hasPrimer = _hasMembranePrimer(bomNames);
       if (!hasPrimer) {
         missing.add(const MissingCompanionItem(
           triggerItem: 'Parapet Wall Flashings',
@@ -336,18 +338,18 @@ class ValidationEngine {
           isCritical: true,
         ));
       }
-      // Check RUSS fastener spacing for high wind/long warranty
+      // RUSS fastener spacing for high wind / long warranty — the BOM applies
+      // 6" O.C. in these cases (BomCalculator.russSpacingIn); this is a note.
       if (projectInfo.warrantyYears > 20 || _parseWindFromInfo(projectInfo) >= 90) {
         issues.add(ValidationIssue(severity: IssueSeverity.info,
             category: 'Versico Spec',
-            message: 'RUSS fastener spacing: 6" O.C. required (warranty >${projectInfo.warrantyYears > 20 ? "20yr" : ""}${_parseWindFromInfo(projectInfo) >= 90 ? " wind ${_parseWindFromInfo(projectInfo).toInt()} mph" : ""}).',
-            fix: 'Verify BOM RUSS fastener quantity uses 6" O.C. instead of standard 12" O.C.'));
+            message: 'RUSS fastener spacing: 6" O.C. applied (warranty >${projectInfo.warrantyYears > 20 ? "20yr" : ""}${_parseWindFromInfo(projectInfo) >= 90 ? " wind ${_parseWindFromInfo(projectInfo).toInt()} mph" : ""}).'));
       }
     }
 
     // ── CORNERS → require TPO primer ──
     if (geo.insideCorners + geo.outsideCorners > 0) {
-      final hasPrimer = bomNames.any((n) => n.contains('tpo primer'));
+      final hasPrimer = _hasMembranePrimer(bomNames);
       if (!hasPrimer) {
         missing.add(const MissingCompanionItem(
           triggerItem: 'Inside/Outside Corners',
@@ -384,13 +386,12 @@ class ValidationEngine {
     }
 
     // ── SCUPPERS → require EPDM flashing layers + primer ──
+    // Detail note only — the BOM has no line for this, so it was a permanent
+    // health-score penalty as a missing item (eval F12).
     if (pen.scupperCount > 0) {
-      missing.add(const MissingCompanionItem(
-        triggerItem: 'Scuppers',
-        missingItem: 'VersiGard EPDM Pressure-Sensitive Flashing (6" + 12" wide) + EPDM Primer',
-        reason: 'Versico scupper detail requires two layers: first 6" wide, second 12" wide with 3" overlaps. EPDM primer on both TPO and scupper surfaces. Single-ply sealant at top edge.',
-        isCritical: false,
-      ));
+      issues.add(const ValidationIssue(severity: IssueSeverity.info,
+          category: 'Versico Spec',
+          message: 'Scupper detail: VersiGard EPDM pressure-sensitive flashing (6" + 12" wide) with EPDM primer on both surfaces, single-ply sealant at top edge. Not itemised on the BOM.'));
     }
 
     // ── RTU CURBS → require curb wrap corners ──
@@ -441,7 +442,7 @@ class ValidationEngine {
 
     // ── SEAM TAPE → requires TPO primer underneath ──
     if (membrane.seamType == 'Tape') {
-      final hasPrimer = bomNames.any((n) => n.contains('tpo primer'));
+      final hasPrimer = _hasMembranePrimer(bomNames);
       if (!hasPrimer) {
         missing.add(const MissingCompanionItem(
           triggerItem: 'Seam Tape Installation',
@@ -513,6 +514,13 @@ class ValidationEngine {
   }
 
   // ─── HELPERS ───────────────────────────────────────────────────────────────
+
+  /// True when the BOM carries a membrane primer line. Matches every primer
+  /// SKU the BOM can emit (TPO Primer, Low-VOC EPDM & TPO Primer, CAV-PRIME)
+  /// while excluding vapor-retarder and deck primers. The old check was
+  /// `contains('tpo primer')`, which missed CAV-PRIME (eval F12).
+  static bool _hasMembranePrimer(Set<String> bomNames) => bomNames.any((n) =>
+      n.contains('primer') && !n.contains('vapor') && !n.contains('deck primer'));
 
   static double _parseWindFromInfo(ProjectInfo info) {
     final ws = info.designWindSpeed;

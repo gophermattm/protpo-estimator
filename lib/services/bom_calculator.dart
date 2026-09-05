@@ -2259,8 +2259,9 @@ class BomCalculator {
         ),
       ));
 
-      // RUSS fasteners — 12" O.C. through RUSS into deck
-      const russSpacing = 12.0;
+      // RUSS fasteners — 12" O.C. through RUSS into deck; 6" O.C. for >20-yr
+      // warranty or ≥90 mph design wind (Versico spec, eval F12).
+      final russSpacing = russSpacingIn(projectInfo.warrantyYears, windSpeedMph);
       const russBucketSize = 500.0;
       final russFastBase = parapet.parapetTotalLF * 12.0 / russSpacing;
       final russFastWithW = russFastBase * (1 + wAcc);
@@ -2269,7 +2270,7 @@ class BomCalculator {
       final russFastLen  = _selectFastenerLen(systemSpecs.deckType, 0); // through RUSS only, no insulation
       items.add(BomLineItem(
         category: 'Parapet & Termination',
-        name: '$russFastName $russFastLen — RUSS Strip (12" o.c.)',
+        name: '$russFastName $russFastLen — RUSS Strip (${russSpacing.toInt()}" o.c.)',
         skuKey: 'fastener_russ_strip',
         attributes: {
           'fastenerName': russFastName,
@@ -2278,7 +2279,7 @@ class BomCalculator {
         },
         orderQty: russFastOrder,
         unit: 'buckets',
-        notes: '${russBucketSize.toInt()}/bucket — 12" o.c. through RUSS into deck',
+        notes: '${russBucketSize.toInt()}/bucket — ${russSpacing.toInt()}" o.c. through RUSS into deck',
         trace: BomTrace(
           baseDescription: '${russFastBase.toStringAsFixed(0)} fasteners ÷ ${russBucketSize.toInt()}/bucket',
           baseQty: russFastBase,
@@ -2288,8 +2289,8 @@ class BomCalculator {
           orderQty: russFastOrder,
           breakdown: [
             'Parapet LF: ${_lf(parapet.parapetTotalLF)}',
-            'Spacing: 12" o.c.',
-            '${parapet.parapetTotalLF.toStringAsFixed(0)} × 1/ft = ${russFastBase.toStringAsFixed(0)} fasteners',
+            'Spacing: ${russSpacing.toInt()}" o.c.${russSpacing < 12 ? " (>20-yr warranty or ≥90 mph)" : ""}',
+            '${parapet.parapetTotalLF.toStringAsFixed(0)} LF × ${(12 / russSpacing).toStringAsFixed(0)}/ft = ${russFastBase.toStringAsFixed(0)} fasteners',
             'Waste: ${_pct(wAcc)}%',
             'Bucket size: ${russBucketSize.toInt()}/bucket',
             'ORDER QTY: ${russFastOrder.toInt()} buckets',
@@ -2779,6 +2780,11 @@ class BomCalculator {
       ),
     );
   }
+
+  /// RUSS strip fastener spacing (inches o.c.): 12" standard, 6" when the
+  /// warranty exceeds 20 years or the design wind speed is ≥ 90 mph.
+  static double russSpacingIn(int warrantyYears, double windSpeedMph) =>
+      (warrantyYears > 20 || windSpeedMph >= 90) ? 6.0 : 12.0;
 
   // ─── WIND SPEED HELPERS ─────────────────────────────────────────────────────
 

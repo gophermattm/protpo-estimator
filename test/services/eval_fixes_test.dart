@@ -46,6 +46,7 @@ void main() {
   _f6f7();
   _f10();
   _f14();
+  _f12();
   group('F1 — tapered MA without board schedule', () {
     final ins = const InsulationSystem(
       numberOfLayers: 0,
@@ -299,6 +300,74 @@ void _f14() {
       );
       // 45×50 + 60×5 + 800 = 2250 + 300 + 800
       expect(t, closeTo(3350, 0.001));
+    });
+  });
+}
+
+void _f12() {
+  ValidationResult validate({
+    required MembraneSystem membrane,
+    ParapetWalls parapet = const ParapetWalls(),
+    Penetrations penetrations = const Penetrations(),
+    int warrantyYears = 20,
+    String? wind,
+  }) {
+    final info = ProjectInfo(estimateDate: DateTime(2026, 1, 1), projectName: 'x',
+        warrantyYears: warrantyYears, designWindSpeed: wind);
+    final geo = _rect(100, 50);
+    const ins = InsulationSystem();
+    final bom = BomCalculator.calculate(
+      projectInfo: info, geometry: geo, systemSpecs: const SystemSpecs(),
+      insulation: ins, membrane: membrane, parapet: parapet,
+      penetrations: penetrations, metalScope: const MetalScope(), boardSchedule: null);
+    return ValidationEngine.validate(
+      projectInfo: info, geometry: geo, systemSpecs: const SystemSpecs(),
+      insulation: ins, membrane: membrane, parapet: parapet,
+      penetrations: penetrations, metalScope: const MetalScope(), bom: bom);
+  }
+
+  group('F12 — validation false positives', () {
+    test('pre-molded pipe boots satisfy the clamping-ring requirement', () {
+      final v = validate(membrane: const MembraneSystem(),
+          penetrations: const Penetrations(smallPipeCount: 3));
+      expect(v.missingItems.any((m) => m.missingItem.contains('Clamping')), isFalse);
+    });
+
+    test('CAV-PRIME primer on the BOM satisfies every "TPO Primer" companion check', () {
+      final v = validate(
+        membrane: const MembraneSystem(primerType: 'CAV-PRIME Spray (1,760 sf/cyl)', seamType: 'Tape'),
+        parapet: const ParapetWalls(hasParapetWalls: true, parapetHeight: 24, parapetTotalLF: 300),
+      );
+      expect(v.missingItems.where((m) => m.missingItem == 'TPO Primer'), isEmpty);
+    });
+
+    test('scupper detail is an info note, not a permanent missing-item penalty', () {
+      final v = validate(membrane: const MembraneSystem(),
+          penetrations: const Penetrations(scupperCount: 2));
+      expect(v.missingItems.any((m) => m.triggerItem == 'Scuppers'), isFalse);
+      expect(v.issues.any((i) => i.severity == IssueSeverity.info && i.message.contains('Scupper')), isTrue);
+    });
+  });
+
+  group('F12 — RUSS fastener spacing follows warranty / wind', () {
+    BomLineItem russFast(int warranty, String? wind) {
+      final bom = BomCalculator.calculate(
+        projectInfo: ProjectInfo(estimateDate: DateTime(2026, 1, 1),
+            warrantyYears: warranty, designWindSpeed: wind),
+        geometry: _rect(100, 50), systemSpecs: const SystemSpecs(),
+        insulation: const InsulationSystem(), membrane: const MembraneSystem(),
+        parapet: const ParapetWalls(hasParapetWalls: true, parapetHeight: 24, parapetTotalLF: 100),
+        penetrations: const Penetrations(), metalScope: const MetalScope(), boardSchedule: null);
+      return bom.items.firstWhere((i) => i.skuKey == 'fastener_russ_strip');
+    }
+    test('20-yr, 85 mph → 12" o.c. → 100 fasteners per 100 LF', () {
+      expect(russFast(20, '85 mph').trace.baseQty, 100);
+    });
+    test('25-yr → 6" o.c. → 200 fasteners per 100 LF', () {
+      expect(russFast(25, '85 mph').trace.baseQty, 200);
+    });
+    test('20-yr, 115 mph → 6" o.c.', () {
+      expect(russFast(20, '115 mph').trace.baseQty, 200);
     });
   });
 }
