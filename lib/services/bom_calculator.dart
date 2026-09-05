@@ -847,15 +847,27 @@ class BomCalculator {
         ));
       }
 
-      // Tapered insulation MA: fastener passes through flat layers + tapered max
-      final taperMA = effectiveTaperMA && taperMaxIn > 0;
-      if (taperMA) {
+      // Tapered insulation MA: fastener passes through flat layers + tapered max.
+      // When no board schedule exists yet (no drains placed) the ridge thickness
+      // is unknown — still emit the fasteners over the full roof area, size the
+      // length from the min thickness, and warn that the length is an estimate.
+      // Skipping the line entirely silently under-orders (eval F1).
+      if (effectiveTaperMA) {
+        final taperEstimated = taperMaxIn <= 0;
+        final taperThickForLen = taperEstimated
+            ? (insulation.taperDefaults?.minThickness ?? 0.0)
+            : taperMaxIn;
+        if (taperEstimated) {
+          warnings.add('WARNING: Tapered insulation fastener length estimated from '
+              'min thickness — place drains to size fasteners for the ridge thickness.');
+        }
         // Stack = flat layers + tapered max thickness (no cover board)
         double taperStackIn = 0;
         if (insulation.numberOfLayers >= 1) taperStackIn += insulation.layer1.thickness;
         if (insulation.numberOfLayers == 2 && insulation.layer2 != null) taperStackIn += insulation.layer2!.thickness;
-        taperStackIn += taperMaxIn;
-        final taperLen  = _selectFastenerLen(systemSpecs.deckType, taperStackIn);
+        taperStackIn += taperThickForLen;
+        final taperLen  = _selectFastenerLen(systemSpecs.deckType, taperStackIn) +
+            (taperEstimated ? ' (est.)' : '');
         final taperSF   = boardSchedule?.totalTaperedSF ?? totalArea;
         final base      = taperSF * insDensity;
         final withW     = base * (1 + wAcc);
@@ -871,7 +883,9 @@ class BomCalculator {
           },
           orderQty: orderQty,
           unit: 'boxes',
-          notes: '500/box — sized for max thickness ${_ins(taperMaxIn)} at ridge',
+          notes: taperEstimated
+              ? '500/box — length estimated (no drains placed)'
+              : '500/box — sized for max thickness ${_ins(taperMaxIn)} at ridge',
           trace: BomTrace(
             baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ 500/box',
             baseQty: base,
@@ -881,7 +895,9 @@ class BomCalculator {
             orderQty: orderQty,
             breakdown: [
               _fastenerBreakdown(systemSpecs.deckType, taperStackIn, 'Tapered ISO fastener (at max thickness)'),
-              'Note: Fastener length based on max taper thickness ${_ins(taperMaxIn)} at ridge',
+              taperEstimated
+                  ? 'Note: No board schedule — length based on min thickness ${_ins(taperThickForLen)}; place drains to size for ridge'
+                  : 'Note: Fastener length based on max taper thickness ${_ins(taperMaxIn)} at ridge',
               '${_sf(taperSF)} tapered area × $insDensity/sf = ${base.toStringAsFixed(0)} fasteners',
               'Waste: ${_pct(wAcc)}%',
               'ORDER QTY: ${orderQty.toInt()} boxes (500/box)',
