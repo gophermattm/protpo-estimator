@@ -250,10 +250,13 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       .fold(0.0, (sum, s) => sum + s.perimeter);
   double get _perimWidth => double.tryParse(_cPerimeterWidth.text) ?? 0;
   int    get _cornerCnt  => int.tryParse(_cCornerCount.text) ?? 4;
-  double get _cornerArea => _perimWidth > 0 ? _cornerCnt * _perimWidth * _perimWidth : 0;
-  double get _perimArea  => _perimWidth > 0
-      ? (_totalPerimeter * _perimWidth - _cornerCnt * _perimWidth * _perimWidth).clamp(0, 1e9) : 0;
-  double get _fieldArea  => (_totalArea - _cornerArea - _perimArea).clamp(0.0, double.infinity);
+  WindZones get _zones => _perimWidth > 0
+      ? WindZones.fromDimensions(totalArea: _totalArea, totalPerimeter: _totalPerimeter,
+          outsideCorners: _cornerCnt, zoneWidth: _perimWidth)
+      : WindZones(fieldZoneArea: _totalArea);
+  double get _cornerArea => _zones.cornerZoneArea;
+  double get _perimArea  => _zones.perimeterZoneArea;
+  double get _fieldArea  => _zones.fieldZoneArea;
 
   double get _parapetArea {
     final h  = double.tryParse(_cParapetHeight.text) ?? 0;
@@ -464,13 +467,12 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
   // ─── Push zone areas to provider ─────────────────────────────────────────────
   void _pushZones(double pw) {
-    final ca = _cornerCnt * pw * pw;
-    final pa = (_totalPerimeter * pw - ca).clamp(0.0, 1e9);
-    final fa = (_totalArea - ca - pa).clamp(0.0, 1e9);
     final n = ref.read(estimatorProvider.notifier);
-    n.updateWindZones(WindZones(
-      perimeterZoneWidth: pw, cornerZoneWidth: pw,
-      cornerZoneArea: ca, perimeterZoneArea: pa, fieldZoneArea: fa,
+    n.updateWindZones(WindZones.fromDimensions(
+      totalArea: _totalArea,
+      totalPerimeter: _totalPerimeter,
+      outsideCorners: _cornerCnt,
+      zoneWidth: pw,
     ));
     n.updateOutsideCorners(_cornerCnt);
   }

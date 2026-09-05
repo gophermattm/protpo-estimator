@@ -10,6 +10,7 @@ import 'package:protpo_app/models/drainage_zone.dart';
 import 'package:protpo_app/services/qxo_pricing_service.dart';
 import 'package:protpo_app/services/r_value_calculator.dart';
 import 'package:protpo_app/services/zip_lookup.dart';
+import 'package:protpo_app/services/validation_engine.dart';
 
 RoofGeometry _rect(double w, double h) => RoofGeometry(shapes: [
       RoofShape(shapeIndex: 1, edgeLengths: [w, h, w, h],
@@ -36,6 +37,7 @@ BomResult _bom({
 void main() {
   _f8();
   _f2f3();
+  _f4f5();
   group('F1 — tapered MA without board schedule', () {
     final ins = const InsulationSystem(
       numberOfLayers: 0,
@@ -128,6 +130,49 @@ void _f2f3() {
     });
     test('assembly R-32 vs required R-30 → no warning', () {
       expect(warned(run(assemblyR: 32)), isFalse);
+    });
+  });
+}
+
+void _f4f5() {
+  group('F4 — multi-shape geometry', () {
+    final geo = RoofGeometry(shapes: [
+      const RoofShape(shapeIndex: 1, edgeLengths: [100, 50, 100, 50]),
+      const RoofShape(shapeIndex: 2, edgeLengths: [40, 40, 40, 40]),
+    ]);
+    test('totalPerimeter sums every Add shape', () {
+      expect(geo.totalArea, 6600);
+      expect(geo.totalPerimeter, 460);
+    });
+    test('Subtract shapes do not add perimeter', () {
+      final g = RoofGeometry(shapes: [
+        const RoofShape(shapeIndex: 1, edgeLengths: [100, 50, 100, 50]),
+        const RoofShape(shapeIndex: 2, operation: 'Subtract', edgeLengths: [10, 10, 10, 10]),
+      ]);
+      expect(g.totalArea, 4900);
+      expect(g.totalPerimeter, 300);
+    });
+    test('validation warns that tapered schedule uses the first shape only', () {
+      final ins = const InsulationSystem(hasTaper: true, taperDefaults: TaperDefaults());
+      final bom = _bom(insulation: ins, geometry: geo);
+      final v = ValidationEngine.validate(
+        projectInfo: ProjectInfo(estimateDate: DateTime(2026, 1, 1), projectName: 'x'),
+        geometry: geo, systemSpecs: const SystemSpecs(), insulation: ins,
+        membrane: const MembraneSystem(), parapet: const ParapetWalls(),
+        penetrations: const Penetrations(), metalScope: const MetalScope(), bom: bom);
+      expect(v.issues.any((i) => i.category == 'Geometry' &&
+          i.message.contains('first shape')), isTrue);
+    });
+  });
+
+  group('F5 — wind zone areas', () {
+    test('perimeter zone excludes corner squares; field = total − corners − perimeter', () {
+      final z = WindZones.fromDimensions(
+          totalArea: 10000, totalPerimeter: 400, outsideCorners: 4, zoneWidth: 5);
+      expect(z.cornerZoneArea, 100);     // 4 × 5²
+      expect(z.perimeterZoneArea, 1800); // 400×5 − 2×4×5²
+      expect(z.fieldZoneArea, 8100);
+      expect(z.totalArea, 10000);
     });
   });
 }

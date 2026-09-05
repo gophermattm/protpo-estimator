@@ -474,6 +474,34 @@ class WindZones {
 
   double get totalArea => cornerZoneArea + perimeterZoneArea + fieldZoneArea;
 
+  /// Derives zone areas from roof dimensions and a single zone width.
+  ///
+  ///   corner    = corners × w²
+  ///   perimeter = P × w − 2 × corners × w²   (edge band minus the corner squares)
+  ///   field     = total − corner − perimeter
+  ///
+  /// The old left-panel formula used `P × w − corners × w²` for the perimeter
+  /// zone, which is the whole edge band including corners, so the corner area
+  /// was counted twice and the field zone under-counted by 4w² (eval F5).
+  factory WindZones.fromDimensions({
+    required double totalArea,
+    required double totalPerimeter,
+    required int outsideCorners,
+    required double zoneWidth,
+  }) {
+    final w = zoneWidth;
+    final ca = outsideCorners * w * w;
+    final pa = (totalPerimeter * w - 2 * outsideCorners * w * w).clamp(0.0, 1e9);
+    final fa = (totalArea - ca - pa).clamp(0.0, 1e9);
+    return WindZones(
+      perimeterZoneWidth: w,
+      cornerZoneWidth: w,
+      cornerZoneArea: ca,
+      perimeterZoneArea: pa,
+      fieldZoneArea: fa,
+    );
+  }
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -538,10 +566,20 @@ class RoofGeometry {
     return area.clamp(0.0, double.infinity);
   }
 
+  /// Sum of every Add shape's perimeter. Subtract shapes (cut-outs) do not
+  /// contribute — an interior cut-out adds edge but a notch on the boundary
+  /// changes it unpredictably, so they are ignored rather than guessed.
+  /// This is an approximation for touching/overlapping shapes; the exact
+  /// value would need a polygon union. Previously only shapes.first was used
+  /// (eval F4).
   double get totalPerimeter {
     if (totalPerimeterOverride != null) return totalPerimeterOverride!;
-    if (shapes.isEmpty) return 0.0;
-    return shapes.first.calculatedPerimeter;
+    double p = 0.0;
+    for (final s in shapes) {
+      if (s.operation == 'Subtract') continue;
+      p += s.calculatedPerimeter;
+    }
+    return p;
   }
 
   RoofGeometry copyWith({

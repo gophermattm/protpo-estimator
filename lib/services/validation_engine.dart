@@ -189,6 +189,15 @@ class ValidationEngine {
       }
     }
 
+    // Multi-shape roofs: tapered board schedule and watershed zones are built
+    // from the first shape's polygon only (eval F4).
+    if (geo.shapes.length > 1 && insul.hasTaper) {
+      issues.add(const ValidationIssue(severity: IssueSeverity.warning,
+          category: 'Geometry',
+          message: 'Multi-shape roof: tapered board schedule and drainage zones use the first shape only.',
+          fix: 'Model the tapered area as a single shape, or verify the board schedule manually.'));
+    }
+
     // Note: wind speed check is handled in _validateVersicoSpecs where ProjectInfo is available
   }
 
