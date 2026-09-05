@@ -21,6 +21,8 @@ import '../models/building_state.dart';
 import '../models/section_models.dart';
 import '../models/project_info.dart';
 import '../providers/estimator_providers.dart';
+import '../services/bom_totals.dart';
+import '../providers/pricing_providers.dart';
 import '../services/bom_calculator.dart';
 import '../models/insulation_system.dart';
 import '../services/platform_utils.dart';
@@ -490,51 +492,20 @@ class _ProjectValueCard extends ConsumerWidget {
     final bom = ref.watch(allBuildingBomsProvider);
     final manualItems = ref.watch(bomManualItemsProvider);
 
-    double totalCost = 0;
-    double totalValue = 0;
-    int unpricedCount = 0;
+    final totals = computeBomTotals(
+      items: bom.expand((b) => b.activeItems),
+      pricedItems: pricedItems,
+      globalMargin: globalMargin,
+      itemMarginOverrides: overrides,
+      edits: edits,
+      deleted: deleted,
+      manualItems: manualItems,
+    );
+    final totalCost = totals.cost;
+    final totalValue = totals.value;
+    final unpricedCount = totals.unpricedCount;
 
-    // Calculate from live BOM items (respecting deletions and edits)
-    for (final bomResult in bom) {
-      for (final item in bomResult.activeItems) {
-        final itemKey = '${item.category}:${item.name}';
-        if (deleted.contains(itemKey)) continue;
-        final edit = edits[itemKey];
-        final priced = pricedItems?[item.name];
-        final unitPrice = edit?.unitPrice ?? priced?.unitPrice;
-        final qty = edit?.qty ?? item.orderQty;
-        if (unitPrice != null && unitPrice > 0) {
-          final lineCost = unitPrice * qty;
-          totalCost += lineCost;
-          final margin = overrides[item.name] ?? globalMargin;
-          totalValue += margin < 1.0 ? lineCost / (1 - margin) : lineCost;
-        } else {
-          unpricedCount++;
-        }
-      }
-    }
-
-    // Add manual items
-    for (final m in manualItems) {
-      if (m.unitPrice != null && m.unitPrice! > 0) {
-        final lineCost = m.unitPrice! * m.qty;
-        totalCost += lineCost;
-        totalValue += globalMargin < 1.0 ? lineCost / (1 - globalMargin) : lineCost;
-      }
-    }
-
-    double laborTotal = 0;
-    if (laborEnabled) {
-      final laborDeleted = ref.watch(laborDeletedItemsProvider);
-      final laborEdits = ref.watch(laborLineEditsProvider);
-      final laborManual = ref.watch(laborManualItemsProvider);
-      for (final li in laborItems) {
-        if (laborDeleted.contains(li.name)) continue;
-        final le = laborEdits[li.name];
-        laborTotal += (le?.qty ?? li.quantity) * (le?.rate ?? li.rate);
-      }
-      for (final m in laborManual) laborTotal += m.total;
-    }
+    final laborTotal = ref.watch(projectLaborTotalProvider);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),

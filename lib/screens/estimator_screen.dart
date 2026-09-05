@@ -18,6 +18,7 @@ import '../widgets/left_panel.dart';
 import '../widgets/center_panel.dart';
 import '../widgets/right_panel.dart';
 import '../providers/estimator_providers.dart';
+import '../providers/pricing_providers.dart';
 import '../models/estimator_state.dart';
 import '../services/firestore_service.dart';
 import 'job_list_sheet.dart';
@@ -104,7 +105,7 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
         name: estName,
         estimatorState: serialized,
         totalArea: totalArea,
-        totalValue: 0,
+        totalValue: ref.read(projectTotalValueProvider),
         buildingCount: state.buildings.length,
       );
       await FirestoreService.instance.updateEstimate(jobId, draft);
@@ -146,7 +147,7 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
         name: estName,
         estimatorState: serialized,
         totalArea: totalArea,
-        totalValue: 0,
+        totalValue: ref.read(projectTotalValueProvider),
         buildingCount: state.buildings.length,
       );
       await FirestoreService.instance.updateEstimate(jobId, draft);

@@ -13,6 +13,9 @@ import 'package:protpo_app/services/zip_lookup.dart';
 import 'package:protpo_app/services/validation_engine.dart';
 import 'package:protpo_app/services/board_schedule_calculator.dart';
 import 'package:protpo_app/data/board_schedules.dart';
+import 'package:protpo_app/services/bom_totals.dart';
+import 'package:protpo_app/providers/estimator_providers.dart' show BomLineEdit, ManualBomItem, LaborLineEdit, ManualLaborItem;
+import 'package:protpo_app/models/labor_models.dart';
 
 RoofGeometry _rect(double w, double h) => RoofGeometry(shapes: [
       RoofShape(shapeIndex: 1, edgeLengths: [w, h, w, h],
@@ -41,6 +44,8 @@ void main() {
   _f2f3();
   _f4f5();
   _f6f7();
+  _f10();
+  _f14();
   group('F1 — tapered MA without board schedule', () {
     final ins = const InsulationSystem(
       numberOfLayers: 0,
@@ -216,6 +221,84 @@ void _f6f7() {
       expect(r.totalFlatFillPanels, 81);
       // footprint SF counts each row once: 8 rows × 6.75 × 16
       expect(r.totalFlatFillSF, closeTo(864, 0.01));
+    });
+  });
+}
+
+void _f10() {
+  group('F10 — BOM totals honour edits, deletions and manual lines', () {
+    BomLineItem li(String cat, String name, double qty) => BomLineItem(
+        category: cat, name: name, orderQty: qty, unit: 'each', notes: '',
+        trace: BomTrace(baseDescription: '', baseQty: qty, wastePercent: 0,
+            withWaste: qty, packageSize: 1, orderQty: qty, breakdown: const []));
+    final items = [li('Membrane', 'Roll', 2), li('Fasteners & Plates', 'Screw', 5), li('Metal Scope', 'Coping', 1)];
+    final priced = {
+      'Roll':   const QxoPricedItem(bomName: 'Roll', qxoItemNumber: '1', qxoProductName: '', qxoBrand: '', unitPrice: 100, orderQty: 2),
+      'Screw':  const QxoPricedItem(bomName: 'Screw', qxoItemNumber: '2', qxoProductName: '', qxoBrand: '', unitPrice: 10, orderQty: 5),
+      'Coping': const QxoPricedItem(bomName: 'Coping', qxoItemNumber: '3', qxoProductName: '', qxoBrand: '', unitPrice: 40, orderQty: 1),
+    };
+
+    test('qty edit, deletion and manual item all flow into cost and value', () {
+      final t = computeBomTotals(
+        items: items, pricedItems: priced, globalMargin: 0.30,
+        itemMarginOverrides: const {},
+        edits: {'Membrane:Roll': const BomLineEdit(qty: 3)},
+        deleted: {'Metal Scope:Coping'},
+        manualItems: [const ManualBomItem(id: 'm', category: 'Misc', description: 'Tarp', qty: 1, unitPrice: 50)],
+      );
+      // Roll 100×3 + Screw 10×5 + Tarp 50 = 400 ; Coping deleted
+      expect(t.cost, closeTo(400, 0.001));
+      expect(t.value, closeTo(400 / 0.7, 0.001));
+      expect(t.unpricedCount, 0);
+    });
+
+    test('per-item margin override and unit-price override apply', () {
+      final t = computeBomTotals(
+        items: items, pricedItems: priced, globalMargin: 0.30,
+        itemMarginOverrides: const {'Roll': 0.5},
+        edits: {'Fasteners & Plates:Screw': const BomLineEdit(unitPrice: 20)},
+        deleted: const {}, manualItems: const [],
+      );
+      // Roll 200 @50% → 400 ; Screw 20×5=100 @30% → 142.857 ; Coping 40 @30% → 57.143
+      expect(t.cost, closeTo(340, 0.001));
+      expect(t.value, closeTo(400 + 100 / 0.7 + 40 / 0.7, 0.001));
+    });
+
+    test('includeFasteners=false drops the fastener category from totals', () {
+      final t = computeBomTotals(
+        items: items, pricedItems: priced, globalMargin: 0.0,
+        itemMarginOverrides: const {}, edits: const {}, deleted: const {},
+        manualItems: const [], includeFasteners: false,
+      );
+      expect(t.cost, closeTo(240, 0.001));
+    });
+
+    test('unpriced lines are counted, not silently skipped', () {
+      final t = computeBomTotals(
+        items: items, pricedItems: {'Roll': priced['Roll']!}, globalMargin: 0.3,
+        itemMarginOverrides: const {}, edits: const {}, deleted: const {}, manualItems: const [],
+      );
+      expect(t.unpricedCount, 2);
+    });
+  });
+}
+
+void _f14() {
+  group('F14 — labor total honours edits, deletions and manual lines', () {
+    final items = const [
+      LaborLineItem(name: 'Install TPO Membrane', unit: 'SQ', rate: 45, quantity: 50),
+      LaborLineItem(name: 'Drains', unit: 'each', rate: 50, quantity: 4),
+      LaborLineItem(name: 'Dump Fees', unit: 'each', rate: 450, quantity: 1),
+    ];
+    test('sums rate × qty with overrides applied', () {
+      final t = computeLaborTotal(
+        items: items,
+        edits: {'Drains': const LaborLineEdit(rate: 60, qty: 5)},
+        deleted: {'Dump Fees'},
+        manualItems: [const ManualLaborItem(id: 'x', name: 'Crane', rate: 800, quantity: 1)],
+      );
+      // 45×50 + 60×5 + 800 = 2250 + 300 + 800
+      expect(t, closeTo(3350, 0.001));
     });
   });
 }

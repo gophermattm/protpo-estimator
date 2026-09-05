@@ -42,6 +42,7 @@ import '../services/r_value_calculator.dart';
 import '../services/qxo_pricing_service.dart';
 import '../models/labor_models.dart';
 import '../providers/estimator_providers.dart';
+import 'bom_totals.dart';
 import '../services/board_schedule_calculator.dart';
 import '../services/watershed_calculator.dart';
 import '../services/drain_distance_calculator.dart';
@@ -722,19 +723,21 @@ List<List<pw.Widget>> _bomPages(BomResult bom, {
 
   // ── Project Total summary ────────────────────────────────────────────────
   if (pricedItems != null && pricedItems.isNotEmpty) {
-    double grandCost = 0;
-    double grandValue = 0;
-    int unpricedCount = 0;
-    for (final item in pricedItems.values) {
-      final cost = item.totalCost;
-      if (cost != null && cost > 0) {
-        grandCost += cost;
-        final margin = itemMarginOverrides[item.bomName] ?? globalMargin;
-        grandValue += margin < 1.0 ? cost / (1 - margin) : cost;
-      } else {
-        unpricedCount++;
-      }
-    }
+    // Same function the in-app summary uses, so the printed total equals the
+    // sum of the printed rows (edits, deletions, manual lines, fastener toggle).
+    final totals = computeBomTotals(
+      items: bom.items,
+      pricedItems: pricedItems,
+      globalMargin: globalMargin,
+      itemMarginOverrides: itemMarginOverrides,
+      edits: bomEdits,
+      deleted: bomDeleted,
+      manualItems: bomManualItems,
+      includeFasteners: includeFasteners,
+    );
+    final grandCost = totals.cost;
+    final grandValue = totals.value;
+    final unpricedCount = totals.unpricedCount;
     final isCustomer = viewType == 'customer';
     final totalWidget = pw.Container(
       padding: const pw.EdgeInsets.symmetric(horizontal: 16, vertical: 12),
