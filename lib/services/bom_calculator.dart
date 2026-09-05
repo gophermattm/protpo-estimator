@@ -1283,12 +1283,14 @@ class BomCalculator {
       }
     }
 
+    // Field seam length — ONE estimate shared by cut-edge sealant, seam tape
+    // and membrane cleaner (eval F16): (fieldRolls − 1) shared seams × 100'.
+    final fieldRollsForSeam = (effectiveFieldArea / fieldRollCoverage).ceil();
+    final fieldSeamLF = _fieldSeamLF(effectiveFieldArea, fieldRollCoverage);
+
     // Cut-edge sealant — applied to membrane reinforcement at cut edges along field seams.
-    // Corrected seam LF: (fieldRolls − 1) shared seams × 100' roll length.
     // Plus a small detail allowance for penetration cuts.
     if (totalArea > 0) {
-      final fieldRollsForSeam = (effectiveFieldArea / fieldRollCoverage).ceil();
-      final fieldSeamLF = max(0, fieldRollsForSeam - 1) * 100.0;
       final detailCutLF = drainCount * 4.0; // ~4 LF per drain (boot perimeter)
       final seamLF = fieldSeamLF + detailCutLF;
       // 1 bottle (16 oz) covers ~250 LF of cut edge (Versico spec: 225–275 LF/bottle)
@@ -1373,8 +1375,8 @@ class BomCalculator {
     // Versico seam tape: 3" wide pressure-sensitive, 100' rolls.
     // Corrected seam LF: (fieldRolls − 1) shared seams × 100' roll length.
     if (membrane.seamType == 'Tape' && totalArea > 0) {
-      final fieldRollsForTape = (effectiveFieldArea / fieldRollCoverage).ceil();
-      final seamLFTape = max(0, fieldRollsForTape - 1) * 100.0;
+      final fieldRollsForTape = fieldRollsForSeam;
+      final seamLFTape = fieldSeamLF;
       const tapeRollLF = 100.0;
       final tapeBase = seamLFTape / tapeRollLF;
       final tapeWithW = tapeBase * (1 + wAcc);
@@ -2140,7 +2142,7 @@ class BomCalculator {
     // Membrane Cleaner — required accessory per Versico spec
     if (totalArea > 0) {
       const cleanerCoverage = 400.0; // sf per gallon
-      final seamLFClean = totalArea / (double.tryParse(membrane.rollWidth.replaceAll("'", '')) ?? 10.0);
+      final seamLFClean = fieldSeamLF;
       // Cleaner needed for all seam areas before welding
       final cleanArea = seamLFClean * 0.5; // ~6" strip on each side of seam
       final cleanBase = cleanArea / cleanerCoverage;
@@ -2162,7 +2164,7 @@ class BomCalculator {
           packageSize: 1,
           orderQty: cleanOrder,
           breakdown: [
-            'Seam LF: ${seamLFClean.toStringAsFixed(0)} LF',
+            'Field seams: max(0, $fieldRollsForSeam − 1) × 100\' = ${seamLFClean.toStringAsFixed(0)} LF',
             'Clean area (~6" each side): ${cleanArea.toStringAsFixed(0)} sf',
             'Coverage: 400 sf/gal',
             'ORDER QTY: ${cleanOrder.toInt()} gallons (min 1)',
@@ -2779,6 +2781,12 @@ class BomCalculator {
         ],
       ),
     );
+  }
+
+  /// Field seam length: (rolls − 1) shared seams × 100' roll length.
+  static double _fieldSeamLF(double fieldArea, double rollCoverage) {
+    final rolls = (fieldArea / rollCoverage).ceil();
+    return max(0, rolls - 1) * 100.0;
   }
 
   /// RUSS strip fastener spacing (inches o.c.): 12" standard, 6" when the

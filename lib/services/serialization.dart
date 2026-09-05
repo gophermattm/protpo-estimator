@@ -178,15 +178,28 @@ Map<String, dynamic> _roofShapeToJson(RoofShape s) => {
   'shapeType':   s.shapeType,
   'operation':   s.operation,
   'edgeLengths': s.edgeLengths,
+  'edgeTypes':   s.edgeTypes,
 };
 
-RoofShape _roofShapeFromJson(Map<String, dynamic> j) => RoofShape(
-  shapeIndex:  _i(j['shapeIndex'], 1),
-  shapeType:   _s(j['shapeType'], 'Rectangle'),
-  operation:   _s(j['operation'], 'Add'),
-  edgeLengths: (j['edgeLengths'] as List? ?? [])
-      .map((e) => (e as num).toDouble()).toList(),
-);
+RoofShape _roofShapeFromJson(Map<String, dynamic> j) {
+  final shapeType = _s(j['shapeType'], 'Rectangle');
+  final edgeLengths = (j['edgeLengths'] as List? ?? [])
+      .map((e) => (e as num).toDouble()).toList();
+  // edgeTypes were not serialised before 2026-09-05 (eval F13); older docs
+  // fall back to the per-shape defaults so the edge count always matches.
+  final storedTypes = (j['edgeTypes'] as List?)?.map((e) => e.toString()).toList();
+  final edgeCount = kEdgeCountByShape[shapeType] ?? edgeLengths.length;
+  final edgeTypes = (storedTypes != null && storedTypes.length == edgeCount)
+      ? storedTypes
+      : (kShapeDefaultEdgeTypes[shapeType] ?? List.filled(edgeCount, kDefaultEdgeType));
+  return RoofShape(
+    shapeIndex:  _i(j['shapeIndex'], 1),
+    shapeType:   shapeType,
+    operation:   _s(j['operation'], 'Add'),
+    edgeLengths: edgeLengths,
+    edgeTypes:   List<String>.from(edgeTypes),
+  );
+}
 
 Map<String, dynamic> _drainToJson(DrainLocation d) => {'x': d.x, 'y': d.y};
 DrainLocation _drainFromJson(Map<String, dynamic> j) =>

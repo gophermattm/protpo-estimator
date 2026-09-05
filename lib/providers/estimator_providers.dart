@@ -219,7 +219,8 @@ final rValueValidationProvider = Provider<List<ValidationMessage>>((ref) {
 final boardScheduleProvider = Provider<BoardScheduleResult?>((ref) {
   final insulation = ref.watch(insulationSystemProvider);
   final geo = ref.watch(roofGeometryProvider);
-  return _computeBoardSchedule(geo, insulation);
+  final waste = ref.watch(projectInfoProvider.select((p) => p.wasteMaterial));
+  return computeBoardSchedule(geo, insulation, wasteFactor: waste);
 });
 
 /// Watershed zones for the active building — one per drain/scupper when
@@ -825,7 +826,8 @@ final allBuildingBomsProvider = Provider<List<BomResult>>((ref) {
   final state       = ref.watch(estimatorProvider);
   final projectInfo = ref.watch(projectInfoProvider);
   return state.buildings.map((b) {
-    final schedule = _computeBoardSchedule(b.roofGeometry, b.insulationSystem);
+    final schedule = computeBoardSchedule(b.roofGeometry, b.insulationSystem,
+        wasteFactor: projectInfo.wasteMaterial);
     return BomCalculator.calculate(
       projectInfo:  projectInfo,
       geometry:     b.roofGeometry,
@@ -1377,7 +1379,12 @@ Offset scupperWorldPosition(ScupperLocation scupper, List<Offset> vertices) {
 /// only one low point exists.
 ///
 /// Returns null if taper is disabled, no low points, or no valid polygon.
-BoardScheduleResult? _computeBoardSchedule(RoofGeometry geo, InsulationSystem insulation) {
+/// Board schedule for one building (all drainage zones aggregated).
+/// Public so the PDF export uses this exact function instead of a copy.
+/// [wasteFactor] comes from ProjectInfo.wasteMaterial (was hardcoded 10%,
+/// eval F15).
+BoardScheduleResult? computeBoardSchedule(RoofGeometry geo, InsulationSystem insulation,
+    {double wasteFactor = 0.10}) {
   if (!insulation.hasTaper || insulation.taperDefaults == null) return null;
   if (geo.drainLocations.isEmpty && geo.scupperLocations.isEmpty) return null;
 
@@ -1422,6 +1429,7 @@ BoardScheduleResult? _computeBoardSchedule(RoofGeometry geo, InsulationSystem in
       manufacturer: defaults.manufacturer,
       profileType: defaults.profileType,
       roofWidthFt: roofWidth,
+      wasteFactor: wasteFactor,
     ));
   }
 
@@ -1436,6 +1444,7 @@ BoardScheduleResult? _computeBoardSchedule(RoofGeometry geo, InsulationSystem in
       manufacturer: defaults.manufacturer,
       profileType: defaults.profileType,
       roofWidthFt: zone.effectiveWidth,
+      wasteFactor: wasteFactor,
     ));
     zoneResults.add(result);
   }
@@ -1443,12 +1452,13 @@ BoardScheduleResult? _computeBoardSchedule(RoofGeometry geo, InsulationSystem in
   if (zoneResults.isEmpty) return null;
   if (zoneResults.length == 1) return zoneResults.first;
 
-  return _aggregateZoneResults(zoneResults, zones);
+  return _aggregateZoneResults(zoneResults, zones, wasteFactor);
 }
 
 /// Aggregates multiple per-zone BoardScheduleResults into one combined result.
 BoardScheduleResult _aggregateZoneResults(
-    List<BoardScheduleResult> zoneResults, List<ZoneWatershed> zones) {
+    List<BoardScheduleResult> zoneResults, List<ZoneWatershed> zones,
+    double wasteFactor) {
   final taperedCounts = <String, int>{};
   final flatFillCounts = <double, int>{};
   int totalTapered = 0;
@@ -1490,8 +1500,7 @@ BoardScheduleResult _aggregateZoneResults(
   }
 
   final totalPanels = totalTapered + totalFlatFill;
-  // Use the waste factor from the first result (should be consistent)
-  final totalWithWaste = (totalPanels * 1.10).ceil();
+  final totalWithWaste = (totalPanels * (1 + wasteFactor)).ceil();
 
   final avgThickness = totalZoneArea > 0
       ? weightedAvgThicknessSum / totalZoneArea

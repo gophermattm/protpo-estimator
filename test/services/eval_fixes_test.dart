@@ -16,6 +16,9 @@ import 'package:protpo_app/data/board_schedules.dart';
 import 'package:protpo_app/services/bom_totals.dart';
 import 'package:protpo_app/providers/estimator_providers.dart' show BomLineEdit, ManualBomItem, LaborLineEdit, ManualLaborItem;
 import 'package:protpo_app/models/labor_models.dart';
+import 'package:protpo_app/services/serialization.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:protpo_app/providers/estimator_providers.dart' show estimatorProvider, boardScheduleProvider;
 
 RoofGeometry _rect(double w, double h) => RoofGeometry(shapes: [
       RoofShape(shapeIndex: 1, edgeLengths: [w, h, w, h],
@@ -47,6 +50,7 @@ void main() {
   _f10();
   _f14();
   _f12();
+  _f13f15f16();
   group('F1 — tapered MA without board schedule', () {
     final ins = const InsulationSystem(
       numberOfLayers: 0,
@@ -368,6 +372,55 @@ void _f12() {
     });
     test('20-yr, 115 mph → 6" o.c.', () {
       expect(russFast(20, '115 mph').trace.baseQty, 200);
+    });
+  });
+}
+
+void _f13f15f16() {
+  group('F13 — edge types survive save/load', () {
+    test('roofGeometry JSON round-trip preserves edgeTypes', () {
+      final geo = RoofGeometry(shapes: [
+        const RoofShape(shapeIndex: 1, shapeType: 'Rectangle',
+            edgeLengths: [100, 50, 100, 50],
+            edgeTypes: ['Parapet', 'Rake Edge', 'Eave', 'Headwall']),
+      ]);
+      final back = roofGeometryFromJson(roofGeometryToJson(geo));
+      expect(back.shapes.first.edgeTypes, ['Parapet', 'Rake Edge', 'Eave', 'Headwall']);
+    });
+    test('old documents without edgeTypes load with per-edge defaults', () {
+      final j = roofGeometryToJson(RoofGeometry(shapes: [
+        const RoofShape(shapeIndex: 1, edgeLengths: [10, 10, 10, 10]),
+      ]));
+      (j['shapes'] as List).first.remove('edgeTypes');
+      final back = roofGeometryFromJson(j);
+      expect(back.shapes.first.edgeTypes, hasLength(4));
+    });
+  });
+
+  group('F15 — board schedule waste follows project waste', () {
+    test('multi-zone aggregate uses ProjectInfo.wasteMaterial, not 10%', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(estimatorProvider.notifier);
+      n.updateProjectInfo(ProjectInfo(estimateDate: DateTime(2026, 1, 1), wasteMaterial: 0.15));
+      n.updateRoofGeometry(RoofGeometry(
+        shapes: [const RoofShape(shapeIndex: 1, edgeLengths: [100, 50, 100, 50])],
+        drainLocations: const [DrainLocation(x: 25, y: -25), DrainLocation(x: 75, y: -25)],
+      ));
+      n.setTaperedEnabled(true);
+      final r = c.read(boardScheduleProvider)!;
+      expect(r.totalPanelsWithWaste, (r.totalPanels * 1.15).ceil());
+    });
+  });
+
+  group('F16 — one seam-length estimate', () {
+    test('membrane cleaner and cut-edge sealant quote the same seam LF', () {
+      final bom = _bom(insulation: const InsulationSystem(), membrane: const MembraneSystem());
+      final cleaner = bom.items.firstWhere((i) => i.skuKey == 'cleaner_weathered_membrane');
+      final cutEdge = bom.items.firstWhere((i) => i.skuKey == 'sealant_cut_edge');
+      // 5000 sf ÷ 1000 sf/roll = 5 rolls → (5 − 1) × 100' = 400 LF field seams
+      expect(cutEdge.trace.breakdown.any((l) => l.contains('= 400 LF')), isTrue);
+      expect(cleaner.trace.breakdown.any((l) => l.contains('400 LF')), isTrue);
     });
   });
 }

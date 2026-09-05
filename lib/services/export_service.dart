@@ -305,8 +305,9 @@ Future<Uint8List> _buildPdf(
 
     // Board schedule page (only when tapered insulation is configured
     // and drains/scuppers are placed)
-    final boardSchedule = _computeBoardScheduleForExport(
-        building.roofGeometry, building.insulationSystem);
+    final boardSchedule = computeBoardSchedule(
+        building.roofGeometry, building.insulationSystem,
+        wasteFactor: state.projectInfo.wasteMaterial);
     if (boardSchedule != null && boardSchedule.rows.isNotEmpty) {
       doc.addPage(pw.Page(
         pageFormat: fmt,
@@ -2305,130 +2306,6 @@ class _ScopeEntry {
 }
 
 // ─── TAPERED BOARD SCHEDULE PAGE ──────────────────────────────────────────────
-
-/// Computes a board schedule for the PDF export (duplicates logic from
-/// estimator_providers to avoid provider dependencies in export code).
-BoardScheduleResult? _computeBoardScheduleForExport(
-    RoofGeometry geo, InsulationSystem insulation) {
-  if (!insulation.hasTaper || insulation.taperDefaults == null) return null;
-  if (geo.drainLocations.isEmpty && geo.scupperLocations.isEmpty) return null;
-
-  final primaryShape = geo.shapes.isNotEmpty ? geo.shapes.first : null;
-  if (primaryShape == null) return null;
-  final ptsRaw = _pdfBuildPolygon(primaryShape);
-  if (ptsRaw == null || ptsRaw.isEmpty) return null;
-  final vertices = ptsRaw.map((p) => Offset(p[0], p[1])).toList();
-
-  final lowPoints = <Offset>[
-    ...geo.drainLocations.map((d) => Offset(d.x, d.y)),
-    ...geo.scupperLocations.map((s) {
-      if (s.edgeIndex >= vertices.length) return Offset.zero;
-      final a = vertices[s.edgeIndex];
-      final b = vertices[(s.edgeIndex + 1) % vertices.length];
-      return Offset(
-        a.dx + (b.dx - a.dx) * s.position,
-        a.dy + (b.dy - a.dy) * s.position,
-      );
-    }),
-  ];
-  if (lowPoints.isEmpty) return null;
-
-  final totalArea = geo.totalArea;
-  if (totalArea <= 0) return null;
-
-  final defaults = insulation.taperDefaults!;
-
-  final zones = WatershedCalculator.computeZones(
-    polygonVertices: vertices,
-    lowPoints: lowPoints,
-    totalPolygonArea: totalArea,
-  );
-
-  if (zones.isEmpty || zones.every((z) => z.maxDistance <= 0)) {
-    final distance = DrainDistanceCalculator.bestTaperDistance(
-      polygonVertices: vertices,
-      drainXs: lowPoints.map((p) => p.dx).toList(),
-      drainYs: lowPoints.map((p) => p.dy).toList(),
-    );
-    if (distance <= 0) return null;
-    final roofWidth = DrainDistanceCalculator.roofWidthPerpendicular(vertices);
-    if (roofWidth <= 0) return null;
-    return BoardScheduleCalculator.compute(BoardScheduleInput(
-      distance: distance,
-      taperRate: defaults.taperRate,
-      minThickness: defaults.minThickness,
-      manufacturer: defaults.manufacturer,
-      profileType: defaults.profileType,
-      roofWidthFt: roofWidth,
-    ));
-  }
-
-  // Aggregate per-zone schedules
-  final zoneResults = <BoardScheduleResult>[];
-  for (final zone in zones) {
-    if (zone.maxDistance <= 0 || zone.effectiveWidth <= 0) continue;
-    final result = BoardScheduleCalculator.compute(BoardScheduleInput(
-      distance: zone.maxDistance,
-      taperRate: defaults.taperRate,
-      minThickness: defaults.minThickness,
-      manufacturer: defaults.manufacturer,
-      profileType: defaults.profileType,
-      roofWidthFt: zone.effectiveWidth,
-    ));
-    zoneResults.add(result);
-  }
-  if (zoneResults.isEmpty) return null;
-  if (zoneResults.length == 1) return zoneResults.first;
-
-  // Merge results
-  final taperedCounts = <String, int>{};
-  final flatFillCounts = <double, int>{};
-  int totalTapered = 0;
-  int totalFlatFill = 0;
-  double totalTaperedSF = 0;
-  double totalFlatFillSF = 0;
-  double maxThickness = 0;
-  double minThickness = double.infinity;
-  double weightedAvgSum = 0;
-  double totalArea2 = 0;
-  final warnings = <String>{};
-  for (int i = 0; i < zoneResults.length; i++) {
-    final r = zoneResults[i];
-    final zone = zones[i];
-    r.taperedPanelCounts.forEach((k, v) {
-      taperedCounts[k] = (taperedCounts[k] ?? 0) + v;
-    });
-    r.flatFillCounts.forEach((k, v) {
-      flatFillCounts[k] = (flatFillCounts[k] ?? 0) + v;
-    });
-    totalTapered += r.totalTaperedPanels;
-    totalFlatFill += r.totalFlatFillPanels;
-    totalTaperedSF += r.totalTaperedSF;
-    totalFlatFillSF += r.totalFlatFillSF;
-    if (r.maxThicknessAtRidge > maxThickness) maxThickness = r.maxThicknessAtRidge;
-    if (r.minThicknessAtDrain < minThickness) minThickness = r.minThicknessAtDrain;
-    weightedAvgSum += r.avgTaperThickness * zone.area;
-    totalArea2 += zone.area;
-    for (final w in r.warnings) warnings.add(w);
-  }
-  final totalPanels = totalTapered + totalFlatFill;
-  return BoardScheduleResult(
-    rows: zoneResults.expand((r) => r.rows).toList(),
-    maxThickness: maxThickness,
-    taperedPanelCounts: taperedCounts,
-    flatFillCounts: flatFillCounts,
-    totalTaperedPanels: totalTapered,
-    totalFlatFillPanels: totalFlatFill,
-    totalPanels: totalPanels,
-    totalPanelsWithWaste: (totalPanels * 1.10).ceil(),
-    totalTaperedSF: totalTaperedSF,
-    totalFlatFillSF: totalFlatFillSF,
-    minThicknessAtDrain: minThickness == double.infinity ? 0 : minThickness,
-    avgTaperThickness: totalArea2 > 0 ? weightedAvgSum / totalArea2 : 0,
-    maxThicknessAtRidge: maxThickness,
-    warnings: warnings.toList(),
-  );
-}
 
 /// Builds the content for the tapered board schedule page.
 List<pw.Widget> _boardSchedulePageContent(
