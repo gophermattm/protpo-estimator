@@ -1129,7 +1129,7 @@ final laborLineItemsProvider = Provider<List<LaborLineItem>>((ref) {
   }
 
   // ── INSULATION ──
-  if (insulation.layer1.thickness > 0 && area > 0) {
+  if (insulation.numberOfLayers >= 1 && insulation.layer1.thickness > 0 && area > 0) {
     items.add(LaborLineItem(
       name: 'Install ISO Board (Layer 1)', unit: 'SQ',
       rate: crew.rateFor('Install ISO Board'), quantity: squares,
@@ -1210,7 +1210,7 @@ final laborLineItemsProvider = Provider<List<LaborLineItem>>((ref) {
   if (penetrations.pitchPanCount > 0) {
     items.add(LaborLineItem(
       name: 'Install Sealant Pockets', unit: 'each',
-      rate: crew.rateFor('Install Custom Curb (exhaust fan)'),
+      rate: crew.rateFor('Install Sealant Pockets'),
       quantity: penetrations.pitchPanCount.toDouble(),
     ));
   }
@@ -1240,14 +1240,14 @@ final laborLineItemsProvider = Provider<List<LaborLineItem>>((ref) {
   if (metal.wallFlashingLF > 0) {
     items.add(LaborLineItem(
       name: 'Install Wall Flashing', unit: 'LF',
-      rate: crew.rateFor('Install Drip Edge and Tape'),
+      rate: crew.rateFor('Install Wall Flashing'),
       quantity: metal.wallFlashingLF,
     ));
   }
   if (metal.gutterLF > 0) {
     items.add(LaborLineItem(
       name: 'Install Gutter', unit: 'LF',
-      rate: crew.rateFor('Install Cap Metal (per foot)'),
+      rate: crew.rateFor('Install Gutter'),
       quantity: metal.gutterLF,
     ));
   }
