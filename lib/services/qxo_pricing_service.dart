@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'bom_calculator.dart' show BomLineItem;
 import 'qxo_api_service.dart';
 import 'qxo_sku_mapping_service.dart';
+import 'uom_reconciler.dart';
 
 /// Pricing service that resolves BOM items to QXO catalog SKUs.
 ///
@@ -37,7 +38,8 @@ class QxoPricingService {
   Future<Map<String, QxoPricedItem>> fetchBomPricing(
       List<String> bomItemNames,
       {Map<String, int> bomQuantities = const {},
-      Map<String, double> bomPackageSizes = const {}}) async {
+      Map<String, double> bomPackageSizes = const {},
+      Map<String, String> bomUnits = const {}}) async {
     if (bomItemNames.isEmpty) return {};
 
     final result = <String, QxoPricedItem>{};
@@ -141,6 +143,7 @@ class QxoPricingService {
         packQty: item.packQty,
         orderQty: orderQty,
         confidence: confidences[bomName],
+        bomUnit: bomUnits[bomName],
       );
     }
 
@@ -596,6 +599,7 @@ class QxoPricingService {
     final fuzzyFallbackLines = <BomLineItem>[];
     final fuzzyFallbackQty = <String, int>{};
     final fuzzyFallbackPkg = <String, double>{};
+    final fuzzyFallbackUnit = <String, String>{};
 
     // Step 1: Deterministic mapping lookup for every line that has a skuKey.
     final mappingRequests = <({String skuKey, Map<String, dynamic>? attributes})>[];
@@ -605,6 +609,7 @@ class QxoPricingService {
         fuzzyFallbackLines.add(line);
         fuzzyFallbackQty[line.name] = line.orderQty.toInt();
         fuzzyFallbackPkg[line.name] = line.trace.packageSize;
+        fuzzyFallbackUnit[line.name] = line.unit;
         continue;
       }
       final id = QxoSkuMappingService.buildDocId(line.skuKey!, line.attributes);
@@ -635,6 +640,7 @@ class QxoPricingService {
         fuzzyFallbackLines.add(line);
         fuzzyFallbackQty[line.name] = line.orderQty.toInt();
         fuzzyFallbackPkg[line.name] = line.trace.packageSize;
+        fuzzyFallbackUnit[line.name] = line.unit;
       }
     }
 
@@ -670,6 +676,7 @@ class QxoPricingService {
             uom: uom,
             orderQty: line.orderQty.toInt(),
             confidence: 1.0, // deterministic = full confidence
+            bomUnit: line.unit,
           );
         }
       }
@@ -679,7 +686,8 @@ class QxoPricingService {
     if (fuzzyFallbackLines.isNotEmpty) {
       final names = fuzzyFallbackLines.map((l) => l.name).toList();
       final fuzzy = await fetchBomPricing(names,
-          bomQuantities: fuzzyFallbackQty, bomPackageSizes: fuzzyFallbackPkg);
+          bomQuantities: fuzzyFallbackQty, bomPackageSizes: fuzzyFallbackPkg,
+          bomUnits: fuzzyFallbackUnit);
       for (final entry in fuzzy.entries) {
         result.putIfAbsent(entry.key, () => entry.value);
       }
@@ -706,6 +714,10 @@ class QxoPricedItem {
   /// so the user can verify the match manually.
   final double? confidence;
 
+  /// The BOM line's package unit ("boxes", "rolls"…) at pricing time, so the
+  /// QXO [uom] can be checked against it (eval F9). Null on legacy results.
+  final String? bomUnit;
+
   const QxoPricedItem({
     required this.bomName,
     required this.qxoItemNumber,
@@ -716,7 +728,19 @@ class QxoPricedItem {
     this.packQty,
     this.orderQty,
     this.confidence,
+    this.bomUnit,
   });
+
+  /// Whether the QXO unit of measure agrees with the BOM's package unit.
+  UomStatus get uomStatus => reconcileUom(bomUnit: bomUnit, qxoUom: uom);
+
+  /// True when the line total (unitPrice × BOM qty) is priced in a different
+  /// unit than the BOM counts — e.g. BOM "boxes" vs QXO "EA". Verify before
+  /// trusting the price.
+  bool get hasUomMismatch => uomStatus == UomStatus.mismatch;
+
+  String get uomMismatchLabelText =>
+      uomMismatchLabel(bomUnit: bomUnit, qxoUom: uom);
 
   /// Total cost = unitPrice * orderQty (or null if either is missing)
   double? get totalCost =>

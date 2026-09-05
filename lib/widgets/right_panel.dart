@@ -1637,10 +1637,15 @@ class _SummarySection extends ConsumerWidget {
         for (final item in bom.activeItems)
           item.name: item.trace.packageSize,
       };
+      final bomUnits = {
+        for (final item in bom.activeItems)
+          item.name: item.unit,
+      };
       final pricedItems = await QxoPricingService().fetchBomPricing(
         bomNames,
         bomQuantities: bomQuantities,
         bomPackageSizes: bomPackageSizes,
+        bomUnits: bomUnits,
       );
 
       if (pricedItems.isEmpty) {

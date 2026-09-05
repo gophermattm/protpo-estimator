@@ -176,11 +176,16 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
         for (final item in activeItems)
           item.name: item.trace.packageSize,
       };
+      final bomUnits = {
+        for (final item in activeItems)
+          item.name: item.unit,
+      };
       debugPrint('[QXO] Fetching pricing for ${bomNames.length} items: ${bomNames.take(3)}...');
       final result = await QxoPricingService().fetchBomPricing(
         bomNames,
         bomQuantities: bomQuantities,
         bomPackageSizes: bomPackageSizes,
+        bomUnits: bomUnits,
       );
       debugPrint('[QXO] Got pricing for ${result.length} items');
       setState(() {
@@ -504,6 +509,7 @@ class _ProjectValueCard extends ConsumerWidget {
     final totalCost = totals.cost;
     final totalValue = totals.value;
     final unpricedCount = totals.unpricedCount;
+    final uomMismatchCount = pricedItems?.values.where((p) => p.hasUomMismatch).length ?? 0;
 
     final laborTotal = ref.watch(projectLaborTotalProvider);
 
@@ -528,6 +534,9 @@ class _ProjectValueCard extends ConsumerWidget {
               if (unpricedCount > 0)
                 Text('$unpricedCount items not yet priced',
                     style: TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+              if (uomMismatchCount > 0)
+                Text('$uomMismatchCount unit mismatches (BOM vs QXO) — verify before quoting',
+                    style: TextStyle(fontSize: 10, color: Colors.orange.shade700, fontWeight: FontWeight.w600)),
             ],
           )),
           AnimatedSwitcher(
@@ -884,11 +893,23 @@ class _BomRow extends ConsumerWidget {
                 ],
               ),
             )),
-            // Unit
-            SizedBox(width: 48, child: Text(
-                edit?.unit ?? pricedItem?.uom ?? item.unit,
-                style: TextStyle(fontSize: 11, color: edit?.unit != null ? Colors.amber.shade700 : AppTheme.textSecondary),
-                textAlign: TextAlign.right)),
+            // Unit — flags when QXO prices in a different unit than the BOM counts (F9)
+            SizedBox(width: 48, child: Tooltip(
+              message: (pricedItem?.hasUomMismatch ?? false) && edit?.unit == null
+                  ? 'Unit mismatch — ${pricedItem!.uomMismatchLabelText}. '
+                    'Line total may be off by the pack size. Verify or edit the unit/price.'
+                  : '',
+              child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                if ((pricedItem?.hasUomMismatch ?? false) && edit?.unit == null)
+                  Icon(Icons.warning_amber_rounded, size: 12, color: Colors.orange.shade700),
+                Text(
+                  edit?.unit ?? pricedItem?.uom ?? item.unit,
+                  style: TextStyle(fontSize: 11, color: edit?.unit != null
+                      ? Colors.amber.shade700
+                      : (pricedItem?.hasUomMismatch ?? false) ? Colors.orange.shade700 : AppTheme.textSecondary),
+                  textAlign: TextAlign.right),
+              ]),
+            )),
             // Cost (double-tap to edit)
             SizedBox(width: 64, child: GestureDetector(
               onDoubleTap: () => _showEditDialog(context, ref, itemKey, item, pricedItem, edit),

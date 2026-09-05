@@ -969,6 +969,10 @@ pw.Widget _categoryTable(List<BomLineItem> items, {
             if (priced?.packQty != null && priced!.packQty! > 1) {
               costStr += ' /${priced.packQty}pk';
             }
+            // F9: QXO prices in a different unit than the BOM counts
+            if (rd.unitPriceOverride == null && (priced?.hasUomMismatch ?? false)) {
+              costStr += ' (!) per ${priced!.uom}';
+            }
           }
 
           rowChildren.addAll([
