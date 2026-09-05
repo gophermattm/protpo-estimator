@@ -17,9 +17,27 @@ class QxoPricingService {
   /// a map of { bomItemName: QxoPricedItem } with pack-adjusted order quantities.
   ///
   /// [bomItems] maps item name → BOM quantity needed (e.g. 109 screws).
+  /// Number of QXO packages to order for a BOM line.
+  ///
+  /// [bomQty] is the BOM order quantity, [bomPackageSize] is how many raw
+  /// units one BOM package holds (1 = BOM counts raw units), and [qxoPackQty]
+  /// is the QXO item's units-per-package. When the BOM already counts packages
+  /// (bomPackageSize > 1) the quantity is NOT divided again — doing so turned
+  /// "3 boxes of 500" into ceil(3/500) = 1 box (eval F8).
+  static int packAdjustedOrderQty({
+    required int bomQty,
+    required int? qxoPackQty,
+    required double bomPackageSize,
+  }) {
+    final pack = qxoPackQty ?? 1;
+    if (pack <= 1 || bomPackageSize > 1) return bomQty;
+    return (bomQty / pack).ceil();
+  }
+
   Future<Map<String, QxoPricedItem>> fetchBomPricing(
       List<String> bomItemNames,
-      {Map<String, int> bomQuantities = const {}}) async {
+      {Map<String, int> bomQuantities = const {},
+      Map<String, double> bomPackageSizes = const {}}) async {
     if (bomItemNames.isEmpty) return {};
 
     final result = <String, QxoPricedItem>{};
@@ -102,14 +120,14 @@ class QxoPricingService {
       final bomQty = bomQuantities[bomName];
       int? orderQty;
       if (bomQty != null && bomQty > 0) {
-        final packSize = item.packQty ?? 1;
-        if (packSize > 1) {
-          // Ceiling division: 109 screws / 250 per bucket = 1 bucket
-          orderQty = (bomQty / packSize).ceil();
+        orderQty = packAdjustedOrderQty(
+          bomQty: bomQty,
+          qxoPackQty: item.packQty,
+          bomPackageSize: bomPackageSizes[bomName] ?? 1,
+        );
+        if (orderQty != bomQty) {
           debugPrint('[QXO]   Pack adjust: $bomName needs $bomQty, '
-              'pack of $packSize ${item.uom ?? uom ?? "EA"} → order $orderQty');
-        } else {
-          orderQty = bomQty;
+              'pack of ${item.packQty} ${item.uom ?? uom ?? "EA"} → order $orderQty');
         }
       }
 
@@ -577,6 +595,7 @@ class QxoPricingService {
     final result = <String, QxoPricedItem>{};
     final fuzzyFallbackLines = <BomLineItem>[];
     final fuzzyFallbackQty = <String, int>{};
+    final fuzzyFallbackPkg = <String, double>{};
 
     // Step 1: Deterministic mapping lookup for every line that has a skuKey.
     final mappingRequests = <({String skuKey, Map<String, dynamic>? attributes})>[];
@@ -585,6 +604,7 @@ class QxoPricingService {
       if (line.skuKey == null) {
         fuzzyFallbackLines.add(line);
         fuzzyFallbackQty[line.name] = line.orderQty.toInt();
+        fuzzyFallbackPkg[line.name] = line.trace.packageSize;
         continue;
       }
       final id = QxoSkuMappingService.buildDocId(line.skuKey!, line.attributes);
@@ -614,6 +634,7 @@ class QxoPricingService {
       } else {
         fuzzyFallbackLines.add(line);
         fuzzyFallbackQty[line.name] = line.orderQty.toInt();
+        fuzzyFallbackPkg[line.name] = line.trace.packageSize;
       }
     }
 
@@ -657,7 +678,8 @@ class QxoPricingService {
     // Step 4: Legacy fuzzy fallback for unmapped lines.
     if (fuzzyFallbackLines.isNotEmpty) {
       final names = fuzzyFallbackLines.map((l) => l.name).toList();
-      final fuzzy = await fetchBomPricing(names, bomQuantities: fuzzyFallbackQty);
+      final fuzzy = await fetchBomPricing(names,
+          bomQuantities: fuzzyFallbackQty, bomPackageSizes: fuzzyFallbackPkg);
       for (final entry in fuzzy.entries) {
         result.putIfAbsent(entry.key, () => entry.value);
       }

@@ -7,6 +7,7 @@ import 'package:protpo_app/models/system_specs.dart';
 import 'package:protpo_app/models/insulation_system.dart';
 import 'package:protpo_app/models/section_models.dart';
 import 'package:protpo_app/models/drainage_zone.dart';
+import 'package:protpo_app/services/qxo_pricing_service.dart';
 
 RoofGeometry _rect(double w, double h) => RoofGeometry(shapes: [
       RoofShape(shapeIndex: 1, edgeLengths: [w, h, w, h],
@@ -31,6 +32,7 @@ BomResult _bom({
     );
 
 void main() {
+  _f8();
   group('F1 — tapered MA without board schedule', () {
     final ins = const InsulationSystem(
       numberOfLayers: 0,
@@ -53,6 +55,26 @@ void main() {
     test('warns that fastener length is estimated until drains are placed', () {
       final bom = _bom(insulation: ins);
       expect(bom.warnings.any((w) => w.contains('fastener length') && w.contains('drain')), isTrue);
+    });
+  });
+}
+
+// ── F8 ──────────────────────────────────────────────────────────────────────
+
+void _f8() {
+  group('F8 — QXO pack adjustment', () {
+    test('raw unit count is divided by QXO pack size', () {
+      expect(QxoPricingService.packAdjustedOrderQty(
+          bomQty: 987, qxoPackQty: 500, bomPackageSize: 1), 2);
+    });
+    test('BOM quantity already in packages is NOT divided again', () {
+      // BOM says 2 boxes (500/box). QXO item packs 500. Order 2, not ceil(2/500)=1.
+      expect(QxoPricingService.packAdjustedOrderQty(
+          bomQty: 2, qxoPackQty: 500, bomPackageSize: 500), 2);
+    });
+    test('no QXO pack info passes quantity through', () {
+      expect(QxoPricingService.packAdjustedOrderQty(
+          bomQty: 7, qxoPackQty: null, bomPackageSize: 1), 7);
     });
   });
 }

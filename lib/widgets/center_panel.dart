@@ -170,10 +170,15 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
         for (final item in activeItems)
           item.name: item.orderQty.ceil(),
       };
+      final bomPackageSizes = {
+        for (final item in activeItems)
+          item.name: item.trace.packageSize,
+      };
       debugPrint('[QXO] Fetching pricing for ${bomNames.length} items: ${bomNames.take(3)}...');
       final result = await QxoPricingService().fetchBomPricing(
         bomNames,
         bomQuantities: bomQuantities,
+        bomPackageSizes: bomPackageSizes,
       );
       debugPrint('[QXO] Got pricing for ${result.length} items');
       setState(() {
