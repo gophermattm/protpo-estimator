@@ -11,6 +11,8 @@ import 'package:protpo_app/services/qxo_pricing_service.dart';
 import 'package:protpo_app/services/r_value_calculator.dart';
 import 'package:protpo_app/services/zip_lookup.dart';
 import 'package:protpo_app/services/validation_engine.dart';
+import 'package:protpo_app/services/board_schedule_calculator.dart';
+import 'package:protpo_app/data/board_schedules.dart';
 
 RoofGeometry _rect(double w, double h) => RoofGeometry(shapes: [
       RoofShape(shapeIndex: 1, edgeLengths: [w, h, w, h],
@@ -38,6 +40,7 @@ void main() {
   _f8();
   _f2f3();
   _f4f5();
+  _f6f7();
   group('F1 — tapered MA without board schedule', () {
     final ins = const InsulationSystem(
       numberOfLayers: 0,
@@ -173,6 +176,46 @@ void _f4f5() {
       expect(z.perimeterZoneArea, 1800); // 400×5 − 2×4×5²
       expect(z.fieldZoneArea, 8100);
       expect(z.totalArea, 10000);
+    });
+  });
+}
+
+void _f6f7() {
+  BoardScheduleResult run(double minT, {double distance = 47}) =>
+      BoardScheduleCalculator.compute(BoardScheduleInput(
+        distance: distance, taperRate: '1/4:12', minThickness: minT,
+        manufacturer: 'Versico', profileType: 'extended', roofWidthFt: 27));
+
+  group('F6 — base flat fill honours minThickness at drain', () {
+    test('min 1.0" over an X panel (0.5" thin edge) adds 0.5" base fill on every row', () {
+      final r = run(1.0);
+      expect(r.rows.first.flatFillThickness, 0.5);
+      expect(r.rows[3].flatFillThickness, 0.5);
+      // installed thickness = panel thin edge + fill = reported thinEdge
+      expect(r.rows.first.panelThinEdge + r.rows.first.flatFillThickness,
+          closeTo(r.rows.first.thinEdge, 0.001));
+    });
+    test('min 0.5" matches the panel thin edge → no base fill', () {
+      expect(run(0.5).rows.first.flatFillThickness, 0.0);
+    });
+  });
+
+  group('F7 — flat fill decomposed into stock thicknesses', () {
+    test('decomposeFlatFill splits into ≤4.0" boards, largest first', () {
+      expect(BoardScheduleCalculator.decomposeFlatFill(8.0), [4.0, 4.0]);
+      expect(BoardScheduleCalculator.decomposeFlatFill(4.5), [4.0, 0.5]);
+      expect(BoardScheduleCalculator.decomposeFlatFill(2.5), [2.5]);
+      expect(BoardScheduleCalculator.decomposeFlatFill(0.0), isEmpty);
+    });
+    test('47ft run, min 0.5": cycle 2 rows (8.0" fill) count as two 4.0" boards', () {
+      final r = run(0.5);
+      // rows 4–7 fill 4.0 (1 board), rows 8–11 fill 8.0 (2 boards): (4 + 8) × 6.75 = 81
+      expect(r.flatFillCounts.keys, everyElement(isIn(kFlatStockThicknesses)));
+      expect(r.flatFillCounts[4.0], 81);
+      expect(r.flatFillCounts.containsKey(8.0), isFalse);
+      expect(r.totalFlatFillPanels, 81);
+      // footprint SF counts each row once: 8 rows × 6.75 × 16
+      expect(r.totalFlatFillSF, closeTo(864, 0.01));
     });
   });
 }

@@ -118,6 +118,25 @@ class BoardScheduleResult {
 class BoardScheduleCalculator {
   BoardScheduleCalculator._();
 
+  /// Rounds down to the nearest 0.5".
+  static double _floorHalf(double v) => (v * 2).floorToDouble() / 2;
+
+  /// Splits a total flat-fill thickness into orderable stock boards, largest
+  /// first (e.g. 8.0 → [4.0, 4.0], 4.5 → [4.0, 0.5]). Stock sizes come from
+  /// [kFlatStockThicknesses]. Anything below the smallest stock is dropped.
+  static List<double> decomposeFlatFill(double thickness) {
+    final stock = List<double>.from(kFlatStockThicknesses)
+      ..sort((a, b) => b.compareTo(a));
+    final out = <double>[];
+    var remaining = _floorHalf(thickness);
+    while (remaining >= stock.last - 1e-9) {
+      final pick = stock.firstWhere((t) => t <= remaining + 1e-9);
+      out.add(pick);
+      remaining -= pick;
+    }
+    return out;
+  }
+
   /// Core computation: builds the board schedule from [input].
   static BoardScheduleResult compute(BoardScheduleInput input) {
     if (input.distance <= 0) return BoardScheduleResult.empty;
@@ -141,9 +160,18 @@ class BoardScheduleCalculator {
     final seqLen = sequence.panels.length;
     final seqRise = sequence.sequenceRise;
 
+    // Base flat fill: manufacturer sequences all start at the first panel's
+    // thin edge (0.5" for every sequence in board_schedules.dart). If the
+    // design min thickness at the drain is thicker, flat stock goes under
+    // every row to make up the difference (eval F6). Rounded down to 0.5".
+    final baseFill = _floorHalf(
+        math.max(0.0, input.minThickness - sequence.panels.first.thinEdge));
+
     final rows = <BoardRow>[];
     final taperedCountsPrecise = <String, double>{};
     final flatFillCountsPrecise = <double, double>{};
+    // Footprint under flat fill (each row counted once regardless of layers).
+    double flatFillFootprintPrecise = 0;
 
     // For average taper thickness: sum of (avgThickness × panelArea) / totalArea
     double taperThicknessVolumeSum = 0;
@@ -160,10 +188,9 @@ class BoardScheduleCalculator {
 
       // Flat fill: additional flat stock needed when we cycle past the first
       // sequence. Rounded down to nearest 0.5".
-      double flatFill = 0;
+      double flatFill = baseFill;
       if (cycleNumber > 0) {
-        final raw = cycleNumber * seqRise;
-        flatFill = (raw * 2).floorToDouble() / 2; // round down to 0.5
+        flatFill += _floorHalf(cycleNumber * seqRise);
       }
 
       rows.add(BoardRow(
@@ -183,8 +210,13 @@ class BoardScheduleCalculator {
           (taperedCountsPrecise[panel.letter] ?? 0) + panelsWidePrecise;
 
       if (flatFill > 0) {
-        flatFillCountsPrecise[flatFill] =
-            (flatFillCountsPrecise[flatFill] ?? 0) + panelsWidePrecise;
+        // Decompose into orderable stock thicknesses (eval F7): an 8.0" fill
+        // is two 4.0" boards, not a single 8.0" board that does not exist.
+        for (final layer in decomposeFlatFill(flatFill)) {
+          flatFillCountsPrecise[layer] =
+              (flatFillCountsPrecise[layer] ?? 0) + panelsWidePrecise;
+        }
+        flatFillFootprintPrecise += panelsWidePrecise;
       }
 
       // Volume accumulation for average thickness
@@ -212,10 +244,8 @@ class BoardScheduleCalculator {
     // reflects the actual roof area under tapered/flat-fill, not the ceiled overage.
     final taperedPanelsPrecise =
         taperedCountsPrecise.values.fold<double>(0, (a, b) => a + b);
-    final flatFillPanelsPrecise =
-        flatFillCountsPrecise.values.fold<double>(0, (a, b) => a + b);
     final totalTaperedSF = taperedPanelsPrecise * panelArea;
-    final totalFlatFillSF = flatFillPanelsPrecise * panelArea;
+    final totalFlatFillSF = flatFillFootprintPrecise * panelArea;
 
     final maxThick = input.minThickness + (input.distance * rate);
     final avgTaper =

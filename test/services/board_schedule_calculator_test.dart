@@ -23,24 +23,24 @@ void main() {
       expect(result.rows.length, 12);
     });
 
-    test('first row is X panel with no flat fill, thinEdge ≈ 1.0, thickEdge ≈ 2.0', () {
+    test('first row is X panel over 0.5" base fill (min 1.0" − 0.5" thin edge), thinEdge ≈ 1.0, thickEdge ≈ 2.0', () {
       final r = result.rows.first;
       expect(r.panelDesignation, 'X');
-      expect(r.flatFillThickness, 0.0);
+      expect(r.flatFillThickness, 0.5);
       expect(r.thinEdge, closeTo(1.0, 0.01));
       expect(r.thickEdge, closeTo(2.0, 0.01));
     });
 
-    test('row 4 (index 3) is ZZ panel with no flat fill', () {
+    test('row 4 (index 3) is ZZ panel with only the 0.5" base fill', () {
       final r = result.rows[3];
       expect(r.panelDesignation, 'ZZ');
-      expect(r.flatFillThickness, 0.0);
+      expect(r.flatFillThickness, 0.5);
     });
 
-    test('row 5 (index 4) resets to X with flat fill > 0', () {
+    test('row 5 (index 4) resets to X with 4.5" fill (0.5 base + one 4.0 cycle)', () {
       final r = result.rows[4];
       expect(r.panelDesignation, 'X');
-      expect(r.flatFillThickness, greaterThan(0));
+      expect(r.flatFillThickness, 4.5);
     });
 
     test('maxThickness ≈ 12.75"', () {
@@ -60,26 +60,28 @@ void main() {
       expect(result.totalTaperedPanels, 84);
     });
 
-    test('flat fill counts by thickness', () {
-      // Cycle 1 (rows 4-7): flatFill = 1 × 4.0 = 4.0  → 4 rows × 7 = 28
-      // Cycle 2 (rows 8-11): flatFill = 2 × 4.0 = 8.0  → 4 rows × 7 = 28
-      expect(result.flatFillCounts[4.0], 28);
-      expect(result.flatFillCounts[8.0], 28);
+    test('flat fill counts by stock thickness', () {
+      // 27' wide ÷ 4' = 6.75 panels wide, ceiled once per thickness.
+      // Base 0.5" fill on all 12 rows: 12 × 6.75 = 81
+      // Cycle 1 (rows 4-7): +4.0 → one 4.0" board:  4 × 6.75
+      // Cycle 2 (rows 8-11): +8.0 → two 4.0" boards: 8 × 6.75  → 81 total
+      expect(result.flatFillCounts[0.5], 81);
+      expect(result.flatFillCounts[4.0], 81);
+      expect(result.flatFillCounts.containsKey(8.0), isFalse);
     });
 
-    test('total flat fill panels = 56', () {
-      // 8 rows with flat fill × 7 panels wide
-      expect(result.totalFlatFillPanels, 56);
+    test('total flat fill panels = 162', () {
+      expect(result.totalFlatFillPanels, 162);
     });
 
-    test('total panels = 140', () {
-      // 84 tapered + 56 flat fill
-      expect(result.totalPanels, 140);
+    test('total panels = 246', () {
+      // 84 tapered + 162 flat fill
+      expect(result.totalPanels, 246);
     });
 
-    test('total panels with 10% waste = 154', () {
-      // ceil(140 * 1.10) = 154
-      expect(result.totalPanelsWithWaste, 154);
+    test('total panels with 10% waste = 271', () {
+      // ceil(246 * 1.10) = 271
+      expect(result.totalPanelsWithWaste, 271);
     });
 
     test('warning about max thickness > 8"', () {
@@ -99,14 +101,12 @@ void main() {
       expect(result.maxThicknessAtRidge, closeTo(12.75, 0.01));
     });
 
-    test('total tapered SF based on panel area', () {
-      // 84 panels × 4×4 = 1344 SF
-      expect(result.totalTaperedSF, closeTo(84 * 16.0, 0.01));
+    test('total tapered SF is footprint (pre-ceil): 12 rows × 6.75 × 16', () {
+      expect(result.totalTaperedSF, closeTo(12 * 6.75 * 16.0, 0.01));
     });
 
-    test('total flat fill SF based on panel area', () {
-      // 56 panels × 4×4 = 896 SF
-      expect(result.totalFlatFillSF, closeTo(56 * 16.0, 0.01));
+    test('total flat fill SF is footprint under fill: all 12 rows', () {
+      expect(result.totalFlatFillSF, closeTo(12 * 6.75 * 16.0, 0.01));
     });
   });
 
