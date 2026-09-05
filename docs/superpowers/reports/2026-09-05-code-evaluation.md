@@ -1,5 +1,7 @@
 # ProTPO Code Evaluation — 2026-09-05
 
+> **Status (same day):** All 16 findings fixed on branch `fix/eval-2026-09-05` (9 commits, TDD, one regression test per finding in `test/services/eval_fixes_test.dart` + `test/providers/labor_line_items_test.dart`). Suite 187 pass / 0 fail. `flutter build web` OK. Not merged, not deployed. F2 table verified against two IECC 2021 renderings: Z1 20 / Z2–3 25 / Z4–5 30 / **Z6–8 35** (the report's [Unverified] guess had Z6 at 30 — corrected to 35).
+
 Scope: full `lib/` (32.4k lines Dart, 46 files) at commit `4544c57`, plus the test suite. Focus per brief: functional correctness and calculation accuracy. Method: line-by-line read of every calculation engine (BOM, board schedule, R-value, wind zones, watershed, labor, pricing, export totals), cross-file tracing of provider wiring and serialization, and throwaway tests to confirm the two highest-impact claims.
 
 Legend: **CONFIRMED** = reproduced by test or unambiguous code trace. **[Inference]** = follows from the code but not executed. **[Unverified]** = depends on a Versico/IECC/ASHRAE source not available in the repo.
