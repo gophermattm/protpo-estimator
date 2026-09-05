@@ -135,7 +135,13 @@ final rValueResultProvider = Provider<RValueResult?>((ref) {
   final insulation = ref.watch(insulationSystemProvider);
   final projectInfo = ref.watch(projectInfoProvider);
   final boardSchedule = ref.watch(boardScheduleProvider);
+  return computeRValue(insulation, projectInfo, boardSchedule);
+});
 
+/// Pure R-value computation for one building. Shared by the active-building
+/// provider and the all-buildings BOM so every panel uses the same number.
+RValueResult? computeRValue(InsulationSystem insulation, ProjectInfo projectInfo,
+    BoardScheduleResult? boardSchedule) {
   // No flat insulation layers and no tapered — nothing to calculate
   final hasLayers = insulation.numberOfLayers >= 1 && insulation.layer1.thickness > 0;
   final hasTapered = insulation.hasTaper && insulation.taperDefaults != null;
@@ -170,7 +176,7 @@ final rValueResultProvider = Provider<RValueResult?>((ref) {
         : null,
     requiredRValue: projectInfo.requiredRValue,
   );
-});
+}
 
 /// R-value validation messages for the active building.
 final rValueValidationProvider = Provider<List<ValidationMessage>>((ref) {
@@ -796,6 +802,7 @@ final bomProvider = Provider<BomResult>((ref) {
   final penetrations = ref.watch(penetrationsProvider);
   final metal       = ref.watch(metalScopeProvider);
   final boardSchedule = ref.watch(boardScheduleProvider);
+  final rValue = ref.watch(rValueResultProvider);
 
   return BomCalculator.calculate(
     projectInfo:   projectInfo,
@@ -807,6 +814,7 @@ final bomProvider = Provider<BomResult>((ref) {
     penetrations:  penetrations,
     metalScope:    metal,
     boardSchedule: boardSchedule,
+    assemblyRValue: rValue?.totalRValue,
   );
 });
 
@@ -816,17 +824,21 @@ final bomProvider = Provider<BomResult>((ref) {
 final allBuildingBomsProvider = Provider<List<BomResult>>((ref) {
   final state       = ref.watch(estimatorProvider);
   final projectInfo = ref.watch(projectInfoProvider);
-  return state.buildings.map((b) => BomCalculator.calculate(
-    projectInfo:  projectInfo,
-    geometry:     b.roofGeometry,
-    systemSpecs:  b.systemSpecs,
-    insulation:   b.insulationSystem,
-    membrane:     b.membraneSystem,
-    parapet:      b.parapetWalls,
-    penetrations: b.penetrations,
-    metalScope:   b.metalScope,
-    boardSchedule: _computeBoardSchedule(b.roofGeometry, b.insulationSystem),
-  )).toList();
+  return state.buildings.map((b) {
+    final schedule = _computeBoardSchedule(b.roofGeometry, b.insulationSystem);
+    return BomCalculator.calculate(
+      projectInfo:  projectInfo,
+      geometry:     b.roofGeometry,
+      systemSpecs:  b.systemSpecs,
+      insulation:   b.insulationSystem,
+      membrane:     b.membraneSystem,
+      parapet:      b.parapetWalls,
+      penetrations: b.penetrations,
+      metalScope:   b.metalScope,
+      boardSchedule: schedule,
+      assemblyRValue: computeRValue(b.insulationSystem, projectInfo, schedule)?.totalRValue,
+    );
+  }).toList();
 });
 
 /// Aggregate BOM across all buildings.

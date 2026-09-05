@@ -2,18 +2,21 @@
 ///
 /// Offline IECC Climate Zone lookup by 3-digit ZIP prefix.
 /// Data source: IECC 2021 Appendix B + DOE Building Energy Codes map.
-/// R-value requirements: ASHRAE 90.1-2019 Table 5.5.3.1 (commercial roof, above-deck).
+/// R-value requirements: IECC 2021 Table C402.1.3 via RValueCalculator.requiredRForZone
+/// (single source of truth — do not add a second table here).
 /// Wind speed: ASCE 7-16 conservative defaults by zone (Risk Cat II).
 ///
 /// No network call required. Lookup is instantaneous.
 /// Coverage: all 50 states + DC (~939 ZIP prefixes).
+
+import 'r_value_calculator.dart';
 
 class ZipLookupResult {
   final String zip;
   final String climateZone;       // e.g. "Zone 4A (Mixed-Humid)"
   final String zoneCode;          // e.g. "4" — numeric only for calculations
   final String designWindSpeed;   // e.g. "115 mph"
-  final double requiredRValue;    // ASHRAE 90.1 commercial roof minimum
+  final double requiredRValue;    // IECC 2021 above-deck minimum
   final bool found;               // false if ZIP prefix not in table
 
   const ZipLookupResult({
@@ -52,7 +55,7 @@ class ZipLookupService {
       climateZone:      _zoneNames[zone]!,
       zoneCode:         zone,
       designWindSpeed:  _zoneWind[zone]!,
-      requiredRValue:   _zoneR[zone]!,
+      requiredRValue:   RValueCalculator.requiredRForZone('Zone $zone') ?? 25.0,
       found:            true,
     );
   }
@@ -75,10 +78,6 @@ class ZipLookupService {
     '5': '110 mph', '6': '110 mph', '7': '105 mph', '8': '105 mph',
   };
 
-  static const Map<String, double> _zoneR = {
-    '1': 20.0, '2': 20.0, '3': 20.0, '4': 25.0,
-    '5': 30.0, '6': 30.0, '7': 35.0, '8': 35.0,
-  };
 
   // ── ZIP prefix → zone ──────────────────────────────────────────────────────
   // 939 prefixes covering all 50 states + DC.

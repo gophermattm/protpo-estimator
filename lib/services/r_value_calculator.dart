@@ -345,18 +345,22 @@ class RValueCalculator {
   }
 
   // ─── IECC 2021 MINIMUM R-VALUE BY CLIMATE ZONE ──────────────────────────────
-  // Source: IECC 2021 Table C402.1.3 — Roof/ceiling continuous insulation
-  // [Inference] Values below are for standard commercial roof assemblies.
-  // Local amendments may require higher R-values — verify with AHJ.
+  // Source: IECC 2021 Table C402.1.3, "Roofs — Insulation entirely above roof
+  // deck", All-other occupancy column (continuous insulation). Verified against
+  // two published renderings of the 2021 table on 2026-09-05 (Ohio IECC 2021
+  // and Colorado OSA 2024, both on UpCodes). Group R differs only in Zone 0/1
+  // (R-25ci). Local amendments may require higher R-values — verify with AHJ.
+  //
+  // This is the single source of truth: ZipLookupService reads from here.
 
   static const Map<String, double> _iecc2021MinR = {
-    'Zone 1': 15.0,
-    'Zone 2': 20.0,
-    'Zone 3': 20.0,
-    'Zone 4': 25.0,
-    'Zone 5': 25.0,
-    'Zone 6': 25.0,
-    'Zone 7': 30.0,
+    'Zone 1': 20.0,
+    'Zone 2': 25.0,
+    'Zone 3': 25.0,
+    'Zone 4': 30.0,
+    'Zone 5': 30.0,
+    'Zone 6': 35.0,
+    'Zone 7': 35.0,
     'Zone 8': 35.0,
   };
 

@@ -8,6 +8,8 @@ import 'package:protpo_app/models/insulation_system.dart';
 import 'package:protpo_app/models/section_models.dart';
 import 'package:protpo_app/models/drainage_zone.dart';
 import 'package:protpo_app/services/qxo_pricing_service.dart';
+import 'package:protpo_app/services/r_value_calculator.dart';
+import 'package:protpo_app/services/zip_lookup.dart';
 
 RoofGeometry _rect(double w, double h) => RoofGeometry(shapes: [
       RoofShape(shapeIndex: 1, edgeLengths: [w, h, w, h],
@@ -33,6 +35,7 @@ BomResult _bom({
 
 void main() {
   _f8();
+  _f2f3();
   group('F1 — tapered MA without board schedule', () {
     final ins = const InsulationSystem(
       numberOfLayers: 0,
@@ -75,6 +78,56 @@ void _f8() {
     test('no QXO pack info passes quantity through', () {
       expect(QxoPricingService.packAdjustedOrderQty(
           bomQty: 7, qxoPackQty: null, bomPackageSize: 1), 7);
+    });
+  });
+}
+
+void _f2f3() {
+  group('F2 — required R-value table (IECC 2021 C402.1.3, above deck)', () {
+    test('RValueCalculator.requiredRForZone matches IECC 2021', () {
+      expect(RValueCalculator.requiredRForZone('Zone 1'), 20);
+      expect(RValueCalculator.requiredRForZone('Zone 2'), 25);
+      expect(RValueCalculator.requiredRForZone('Zone 3'), 25);
+      expect(RValueCalculator.requiredRForZone('Zone 4A (Mixed-Humid)'), 30);
+      expect(RValueCalculator.requiredRForZone('Zone 5'), 30);
+      expect(RValueCalculator.requiredRForZone('Zone 6'), 35);
+      expect(RValueCalculator.requiredRForZone('Zone 7'), 35);
+      expect(RValueCalculator.requiredRForZone('Zone 8'), 35);
+    });
+    test('ZIP lookup uses the same table (KC 64101 = Zone 4 → R-30)', () {
+      final r = ZipLookupService.lookup('64101');
+      expect(r.zoneCode, '4');
+      expect(r.requiredRValue, RValueCalculator.requiredRForZone('Zone 4'));
+      expect(r.requiredRValue, 30);
+    });
+  });
+
+  group('F3 — BOM uses the assembly R-value it is given', () {
+    final taperedOnly = const InsulationSystem(
+      numberOfLayers: 0, hasTaper: true, taperDefaults: TaperDefaults());
+    BomResult run({double? assemblyR}) => BomCalculator.calculate(
+      projectInfo: ProjectInfo(estimateDate: DateTime(2026, 1, 1),
+          requiredRValue: 30, climateZone: 'Zone 4'),
+      geometry: _rect(100, 50),
+      systemSpecs: const SystemSpecs(),
+      insulation: taperedOnly,
+      membrane: const MembraneSystem(fieldAttachment: 'Fully Adhered'),
+      parapet: const ParapetWalls(),
+      penetrations: const Penetrations(),
+      metalScope: const MetalScope(),
+      boardSchedule: null,
+      assemblyRValue: assemblyR,
+    );
+    bool warned(BomResult b) => b.warnings.any((w) => w.contains('may not meet code'));
+
+    test('no R-value provided → no code warning (BOM no longer guesses)', () {
+      expect(warned(run()), isFalse);
+    });
+    test('assembly R-25 vs required R-30 → warning', () {
+      expect(warned(run(assemblyR: 25)), isTrue);
+    });
+    test('assembly R-32 vs required R-30 → no warning', () {
+      expect(warned(run(assemblyR: 32)), isFalse);
     });
   });
 }

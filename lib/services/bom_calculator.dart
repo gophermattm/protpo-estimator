@@ -135,6 +135,10 @@ class BomCalculator {
     required Penetrations penetrations,
     required MetalScope metalScope,
     BoardScheduleResult? boardSchedule,
+    /// Total assembly R-value from RValueCalculator (the app's single R-value
+    /// engine). When null the BOM does not judge code compliance — it used to
+    /// run its own inconsistent estimate that ignored tapered insulation (eval F3).
+    double? assemblyRValue,
   }) {
     final warnings = <String>[];
     final items    = <BomLineItem>[];
@@ -191,8 +195,9 @@ class BomCalculator {
     }
 
     // R-value validation
-    if (projectInfo.requiredRValue != null && projectInfo.requiredRValue! > 0 && totalArea > 0) {
-      final actualR = _estimateRValue(insulation);
+    if (assemblyRValue != null && projectInfo.requiredRValue != null &&
+        projectInfo.requiredRValue! > 0 && totalArea > 0) {
+      final actualR = assemblyRValue;
       if (actualR < projectInfo.requiredRValue!) {
         warnings.add('WARNING: Insulation R-value ~${actualR.toStringAsFixed(1)} may not meet code requirement of R-${projectInfo.requiredRValue!.toStringAsFixed(0)} for ${projectInfo.climateZone ?? "this zone"}.');
       }
@@ -2798,36 +2803,5 @@ class BomCalculator {
       idx = min(idx + 1, tiers.length - 1);
     }
     return tiers[idx];
-  }
-
-  /// Estimate total R-value from insulation layers.
-  /// Polyiso: ~5.7 R/inch, EPS: ~3.8 R/inch, XPS: ~5.0 R/inch, other: ~4.0 R/inch.
-  static double _estimateRValue(InsulationSystem ins) {
-    double r = 0;
-    if (ins.numberOfLayers >= 1) r += _layerRValue(ins.layer1.type, ins.layer1.thickness);
-    if (ins.numberOfLayers == 2 && ins.layer2 != null) {
-      r += _layerRValue(ins.layer2!.type, ins.layer2!.thickness);
-    }
-    if (ins.hasCoverBoard && ins.coverBoard != null) {
-      r += _layerRValue(ins.coverBoard!.type, ins.coverBoard!.thickness);
-    }
-    return r;
-  }
-
-  static double _layerRValue(String type, double thicknessInches) {
-    final lower = type.toLowerCase();
-    double rPerInch;
-    if (lower.contains('polyiso')) {
-      rPerInch = 5.7;
-    } else if (lower.contains('xps')) {
-      rPerInch = 5.0;
-    } else if (lower.contains('eps')) {
-      rPerInch = 3.8;
-    } else if (lower.contains('mineral') || lower.contains('rock wool')) {
-      rPerInch = 4.2;
-    } else {
-      rPerInch = 4.0; // generic fallback
-    }
-    return rPerInch * thicknessInches;
   }
 }

@@ -930,7 +930,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       final result = ZipLookupService.lookup(zip);
 
       if (result.found) {
-        final rLabel = 'R-${result.requiredRValue.toStringAsFixed(0)} (ASHRAE 90.1)';
+        final rLabel = 'R-${result.requiredRValue.toStringAsFixed(0)} (IECC 2021)';
         setState(() {
           _zipLoading     = false;
           _climateZone    = result.climateZone;
