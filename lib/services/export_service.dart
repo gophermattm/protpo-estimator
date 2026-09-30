@@ -332,8 +332,7 @@ Future<Uint8List> _buildPdf(
     final bomPages = _bomPages(bom, pricedItems: pricedItems,
         globalMargin: globalMargin, itemMarginOverrides: itemMarginOverrides,
         viewType: viewType,
-        bomEdits: bomEdits, bomDeleted: bomDeleted, bomManualItems: bomManualItems,
-        includeFasteners: sections.fasteningSchedule);
+        bomEdits: bomEdits, bomDeleted: bomDeleted, bomManualItems: bomManualItems);
     for (final pageContent in bomPages) {
       doc.addPage(pw.Page(
         pageFormat: fmt,
@@ -684,7 +683,6 @@ List<List<pw.Widget>> _bomPages(BomResult bom, {
   Map<String, BomLineEdit> bomEdits = const {},
   Set<String> bomDeleted = const {},
   List<ManualBomItem> bomManualItems = const [],
-  bool includeFasteners = true,
 }) {
   final pages = <List<pw.Widget>>[];
   List<pw.Widget> current = [];
@@ -693,11 +691,8 @@ List<List<pw.Widget>> _bomPages(BomResult bom, {
   const rowsPerPage = 30; // approximate
 
   for (final entry in bom.byCategory.entries) {
-    // Skip the Fasteners & Plates category when fastening schedule is disabled
-    if (!includeFasteners &&
-        entry.key.toLowerCase().contains('fastener')) {
-      continue;
-    }
+    // Fasteners & Plates are always listed and priced — hiding the fastening
+    // schedule page must not drop them from the material total.
     // Filter out deleted items
     final items = entry.value.where((i) =>
         i.hasQuantity && !bomDeleted.contains('${i.category}:${i.name}')).toList();
@@ -725,7 +720,7 @@ List<List<pw.Widget>> _bomPages(BomResult bom, {
   // ── Project Total summary ────────────────────────────────────────────────
   if (pricedItems != null && pricedItems.isNotEmpty) {
     // Same function the in-app summary uses, so the printed total equals the
-    // sum of the printed rows (edits, deletions, manual lines, fastener toggle).
+    // sum of the printed rows (edits, deletions, manual lines).
     final totals = computeBomTotals(
       items: bom.items,
       pricedItems: pricedItems,
@@ -734,7 +729,6 @@ List<List<pw.Widget>> _bomPages(BomResult bom, {
       edits: bomEdits,
       deleted: bomDeleted,
       manualItems: bomManualItems,
-      includeFasteners: includeFasteners,
     );
     final grandCost = totals.cost;
     final grandValue = totals.value;

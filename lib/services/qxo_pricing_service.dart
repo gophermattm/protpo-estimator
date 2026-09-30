@@ -731,6 +731,33 @@ class QxoPricedItem {
     this.bomUnit,
   });
 
+  /// Saved with the estimate so prices survive reload (see job_providers).
+  Map<String, dynamic> toJson() => {
+        'bomName': bomName,
+        'qxoItemNumber': qxoItemNumber,
+        'qxoProductName': qxoProductName,
+        'qxoBrand': qxoBrand,
+        'unitPrice': unitPrice,
+        'uom': uom,
+        'packQty': packQty,
+        'orderQty': orderQty,
+        'confidence': confidence,
+        'bomUnit': bomUnit,
+      };
+
+  factory QxoPricedItem.fromJson(Map j) => QxoPricedItem(
+        bomName: j['bomName'] as String? ?? '',
+        qxoItemNumber: j['qxoItemNumber'] as String? ?? '',
+        qxoProductName: j['qxoProductName'] as String? ?? '',
+        qxoBrand: j['qxoBrand'] as String? ?? '',
+        unitPrice: (j['unitPrice'] as num?)?.toDouble(),
+        uom: j['uom'] as String?,
+        packQty: (j['packQty'] as num?)?.toInt(),
+        orderQty: (j['orderQty'] as num?)?.toInt(),
+        confidence: (j['confidence'] as num?)?.toDouble(),
+        bomUnit: j['bomUnit'] as String?,
+      );
+
   /// Whether the QXO unit of measure agrees with the BOM's package unit.
   UomStatus get uomStatus => reconcileUom(bomUnit: bomUnit, qxoUom: uom);
 

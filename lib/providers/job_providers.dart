@@ -17,6 +17,7 @@ import '../models/estimate.dart';
 import '../models/estimator_state.dart';
 import '../providers/estimator_providers.dart';
 import '../services/serialization.dart';
+import '../services/qxo_pricing_service.dart';
 import '../services/firestore_service.dart';
 import '../models/customer.dart';
 import '../models/job.dart';
@@ -90,8 +91,8 @@ const kOverridesKey = 'overrides';
 double? _numOrNull(dynamic v) => (v as num?)?.toDouble();
 
 /// Serializes BOM/labor edits, deletions, manual lines and per-item margins
-/// so they are saved with the estimate (they used to be lost on reload).
-/// QXO prices are not stored — they are re-fetched.
+/// and the last QXO price pull so they are saved with the estimate (they
+/// used to be lost on reload). "Get QXO Prices" refreshes the prices.
 Map<String, dynamic> estimateOverridesToJson(dynamic ref) {
   final Map<String, BomLineEdit> bomEdits = ref.read(bomLineEditsProvider);
   final Set<String> bomDeleted = ref.read(bomDeletedItemsProvider);
@@ -100,7 +101,10 @@ Map<String, dynamic> estimateOverridesToJson(dynamic ref) {
   final Map<String, LaborLineEdit> laborEdits = ref.read(laborLineEditsProvider);
   final Set<String> laborDeleted = ref.read(laborDeletedItemsProvider);
   final List<ManualLaborItem> laborManual = ref.read(laborManualItemsProvider);
+  final Map<String, QxoPricedItem>? prices = ref.read(pricedItemsProvider);
   return {
+    if (prices != null)
+      'qxoPrices': {for (final e in prices.entries) e.key: e.value.toJson()},
     'bomEdits': {
       for (final e in bomEdits.entries)
         e.key: {
@@ -152,6 +156,13 @@ Map<String, dynamic> estimateOverridesToJson(dynamic ref) {
 void applyEstimateOverrides(dynamic ref, dynamic json) {
   if (json is! Map) return;
   try {
+    final prices = json['qxoPrices'];
+    ref.read(pricedItemsProvider.notifier).state = prices is Map
+        ? <String, QxoPricedItem>{
+            for (final e in prices.entries)
+              e.key as String: QxoPricedItem.fromJson(e.value as Map),
+          }
+        : null;
     final bomEdits = (json['bomEdits'] as Map? ?? {});
     ref.read(bomLineEditsProvider.notifier).state = <String, BomLineEdit>{
       for (final e in bomEdits.entries)

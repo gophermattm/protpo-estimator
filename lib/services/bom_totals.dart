@@ -39,7 +39,6 @@ BomTotals computeBomTotals({
   required Map<String, BomLineEdit> edits,
   required Set<String> deleted,
   required List<ManualBomItem> manualItems,
-  bool includeFasteners = true,
 }) {
   double cost = 0;
   double value = 0;
@@ -47,7 +46,6 @@ BomTotals computeBomTotals({
 
   for (final item in items) {
     if (!item.hasQuantity) continue;
-    if (!includeFasteners && item.category.toLowerCase().contains('fastener')) continue;
     final key = '${item.category}:${item.name}';
     if (deleted.contains(key)) continue;
     final edit = edits[key];

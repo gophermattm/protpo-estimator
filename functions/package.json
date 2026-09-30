@@ -1,0 +1,14 @@
+{
+  "name": "protpo-functions",
+  "private": true,
+  "description": "ProTPO Cloud Functions — QXO pricing and catalog via the gorilla-integrations gateway",
+  "main": "index.js",
+  "engines": { "node": "20" },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0",
+    "firebase-functions": "^6.1.0"
+  }
+}

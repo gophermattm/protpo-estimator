@@ -592,6 +592,7 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
     ref.listen(laborLineEditsProvider, (_, __) => _scheduleAutosave());
     ref.listen(laborDeletedItemsProvider, (_, __) => _scheduleAutosave());
     ref.listen(laborManualItemsProvider, (_, __) => _scheduleAutosave());
+    ref.listen(pricedItemsProvider, (_, __) => _scheduleAutosave());
 
     final isMobile = screenWidth <= 768;
     final screenHeight = MediaQuery.sizeOf(context).height;

@@ -269,13 +269,13 @@ void _f10() {
       expect(t.value, closeTo(400 + 100 / 0.7 + 40 / 0.7, 0.001));
     });
 
-    test('includeFasteners=false drops the fastener category from totals', () {
+    test('fastener lines always count toward the total', () {
       final t = computeBomTotals(
         items: items, pricedItems: priced, globalMargin: 0.0,
         itemMarginOverrides: const {}, edits: const {}, deleted: const {},
-        manualItems: const [], includeFasteners: false,
+        manualItems: const [],
       );
-      expect(t.cost, closeTo(240, 0.001));
+      expect(t.cost, closeTo(290, 0.001)); // 240 + 50 screw line
     });
 
     test('unpriced lines are counted, not silently skipped', () {

@@ -149,8 +149,9 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
   // -1 = project total, 0..n = building index
   int _sel = -1;
 
-  // QXO pricing state — maps BOM item name → resolved QXO item with pricing
-  Map<String, QxoPricedItem> _pricedItems = {};
+  // QXO prices live in pricedItemsProvider (saved with the estimate), not
+  // in widget state, so prices restored on load show up here.
+  Map<String, QxoPricedItem> get _pricedItems => ref.watch(pricedItemsProvider) ?? const {};
   bool _loadingPrices = false;
 
   Future<void> _fetchPrices(BomResult bom) async {
@@ -190,7 +191,6 @@ class _MaterialsTakeoffTabState extends ConsumerState<_MaterialsTakeoffTab> {
       );
       debugPrint('[QXO] Got pricing for ${result.length} items');
       setState(() {
-        _pricedItems = result;
         _loadingPrices = false;
       });
       // Store in provider so export service can access pricing data

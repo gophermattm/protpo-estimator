@@ -13,6 +13,7 @@ import 'package:protpo_app/models/estimate.dart';
 import 'package:protpo_app/providers/estimator_providers.dart';
 import 'package:protpo_app/providers/job_providers.dart';
 import 'package:protpo_app/services/serialization.dart';
+import 'package:protpo_app/services/qxo_pricing_service.dart';
 
 RoofShape _rect(double l, double w) => RoofShape(
     shapeIndex: 1,
@@ -253,5 +254,27 @@ void main() {
     expect(b.read(bomDeletedItemsProvider), {'Consumables:y'});
     expect(b.read(bomManualItemsProvider).single.description, 'Crane');
     expect(b.read(itemMarginOverridesProvider)['Membrane:x'], 0.25);
+  });
+
+  test('QXO prices are saved with the estimate and restored', () {
+    final a = ProviderContainer();
+    addTearDown(a.dispose);
+    a.read(estimatorProvider.notifier).updateShape(0, _rect(50, 40));
+    a.read(pricedItemsProvider.notifier).state = {
+      'Roll': const QxoPricedItem(
+          bomName: 'Roll', qxoItemNumber: '262671',
+          qxoProductName: 'TPO 60 mil', qxoBrand: 'Versico',
+          unitPrice: 1032.56, uom: 'RL', packQty: null, orderQty: 3,
+          confidence: 0.9, bomUnit: 'rolls'),
+    };
+    final saved = buildEstimateDraft(a, 'e1', 'E')!;
+    final b = ProviderContainer();
+    addTearDown(b.dispose);
+    loadEstimateIntoEditor(b, saved, 'job-1');
+    final p = b.read(pricedItemsProvider)!['Roll']!;
+    expect(p.unitPrice, 1032.56);
+    expect(p.uom, 'RL');
+    expect(p.qxoItemNumber, '262671');
+    expect(p.bomUnit, 'rolls');
   });
 }
