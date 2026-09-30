@@ -7,7 +7,6 @@
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../models/estimator_state.dart';
-import '../models/roof_geometry.dart';
 import '../models/section_models.dart';
 import 'bom_calculator.dart';
 import 'r_value_calculator.dart';
@@ -44,15 +43,6 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
   final isRB = membrane.fieldAttachment == 'Rhinobond (Induction Welded)';
   final isFA = membrane.fieldAttachment == 'Fully Adhered';
   final area = geo.totalArea;
-  final hasZones = geo.windZones.perimeterZoneWidth > 0;
-  // Re-derive zone areas from the current geometry (stored areas can be stale).
-  final zones = hasZones
-      ? WindZones.fromDimensions(
-          totalArea: geo.totalArea,
-          totalPerimeter: geo.totalPerimeter,
-          outsideCorners: geo.outsideCorners > 0 ? geo.outsideCorners : 4,
-          zoneWidth: geo.windZones.perimeterZoneWidth)
-      : geo.windZones;
 
   final widgets = <pw.Widget>[];
 
@@ -114,7 +104,7 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
     final l1Len = BomCalculator.selectFastenerLenPublic(specs.deckType,
         BomCalculator.stackThicknessPublic(insul, 1));
     widgets.add(_bullet('Fastener: ${BomCalculator.fastenerNamePublic(specs.deckType)} $l1Len with 3" insulation plate'));
-    widgets.add(_bullet('Pattern: 4 per board (one in each quadrant, min 3" from edges)'));
+    widgets.add(_bullet('Pattern: ${BomCalculator.insulationFastenersPerBoard(info.warrantyYears, specs.deckType)} per 4\'x8\' board (evenly spaced, min 3" from edges)'));
   }
 
   if (insul.numberOfLayers == 2 && insul.layer2 != null) {
@@ -147,24 +137,25 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
       '${membrane.rollWidth}x100\' field rolls. Fasten in seam with plates at specified density.'
     ));
 
-    if (hasZones) {
-      final windMph = _parseWind(info.designWindSpeed);
-      final effW = _windAdj(info.warrantyYears, windMph);
+    if (area > 0) {
       final sched = BomCalculator.maFastenerSchedule(
-        fieldArea: zones.fieldZoneArea,
-        perimArea: zones.perimeterZoneArea,
-        cornerArea: zones.cornerZoneArea,
+        totalArea: area,
+        totalPerimeter: geo.totalPerimeter,
+        outsideCorners: geo.outsideCorners,
         membrane: membrane,
-        warrantyYears: effW,
+        systemSpecs: b.systemSpecs,
+        projectInfo: info,
+        buildingHeightFt: geo.buildingHeight,
       );
       String zoneBullet(String label, MaZoneFastening z) =>
           '$label (${z.area.toStringAsFixed(0)} SF): ${z.spacingIn.toInt()}" o.c. in seams, '
           '${(z.netSheetWidthFt + BomCalculator.maSeamLapFt).toStringAsFixed(0)}\' sheets — ~${z.fasteners.ceil()} fasteners';
-      widgets.add(_subsection('Seam Fastening Schedule (${effW}-year${effW != info.warrantyYears ? ", wind-adjusted from ${info.warrantyYears}-year" : ""}):'));
-      widgets.add(_bullet(zoneBullet('Field Zone', sched.field)));
-      widgets.add(_bullet(zoneBullet('Perimeter Zone', sched.perimeter)));
-      widgets.add(_bullet(zoneBullet('Corner Zone', sched.corner)));
-      widgets.add(_bullet('Zone width: ${zones.perimeterZoneWidth.toStringAsFixed(1)}\''));
+      widgets.add(_subsection('Seam Fastening Schedule (Versico MA table):'));
+      widgets.add(_bullet(sched.lookup.basis));
+      widgets.add(_bullet('${sched.lookup.perimeterSheets} perimeter sheet(s) at all roof edges — '
+          '${sched.perimeterBandFt.toStringAsFixed(1)}\' band; 5-1/2" seam lap'));
+      widgets.add(_bullet(zoneBullet('Field Sheets', sched.field)));
+      widgets.add(_bullet(zoneBullet('Perimeter Sheets', sched.perimeter)));
     }
 
     final stackIn = BomCalculator.stackThicknessPublic(insul, 3);
@@ -452,19 +443,4 @@ String _termFastenerDesc(ParapetWalls p) {
     case 'Metal Stud': return 'TEK screws (self-drilling) 1"';
     default: return 'Masonry anchors 1-1/4"';
   }
-}
-
-double _parseWind(String? ws) {
-  if (ws == null) return 0;
-  final m = RegExp(r'(\d+)').firstMatch(ws);
-  return m != null ? double.tryParse(m.group(1)!) ?? 0 : 0;
-}
-
-int _windAdj(int wy, double mph) {
-  const t = [10, 15, 20, 25, 30];
-  var i = t.indexOf(wy);
-  if (i < 0) i = 2;
-  if (mph >= 130) i = (i + 2).clamp(0, t.length - 1);
-  else if (mph >= 90) i = (i + 1).clamp(0, t.length - 1);
-  return t[i];
 }

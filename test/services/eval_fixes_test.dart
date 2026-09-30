@@ -64,8 +64,9 @@ void main() {
       final plates = bom.items.where((i) => i.skuKey == 'plate_3in_insulation').toList();
       expect(fast, hasLength(1));
       expect(fast.first.orderQty, greaterThan(0));
-      // 5000 sf × 0.188/sf (20-yr Metal) = 940 → ×1.05 = 987 → 2 boxes of 500
-      expect(fast.first.orderQty, 2);
+      // 5000 sf × 0.188/sf (20-yr Metal) = 940 → ×1.05 = 987 → 1 carton of 1,000
+      // (QXO pack for short HPVX lengths)
+      expect(fast.first.orderQty, 1);
       expect(plates, hasLength(1));
       expect(plates.first.orderQty, 1);
     });
@@ -415,7 +416,9 @@ void _f13f15f16() {
 
   group('F16 — one seam-length estimate', () {
     test('membrane cleaner and cut-edge sealant quote the same seam LF', () {
-      final bom = _bom(insulation: const InsulationSystem(), membrane: const MembraneSystem());
+      // Fully adhered: no MA perimeter-sheet band, so all 5,000 sf is field sheets.
+      final bom = _bom(insulation: const InsulationSystem(),
+          membrane: const MembraneSystem(fieldAttachment: 'Fully Adhered'));
       final cleaner = bom.items.firstWhere((i) => i.skuKey == 'cleaner_weathered_membrane');
       final cutEdge = bom.items.firstWhere((i) => i.skuKey == 'sealant_cut_edge');
       // 5000 sf ÷ 1000 sf/roll = 5 rolls → (5 − 1) × 100' = 400 LF field seams

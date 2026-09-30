@@ -30,6 +30,13 @@ class ProjectInfo {
   // VOC compliance region — affects product selection labels
   final String vocRegion;         // 'Standard', 'OTC (<250 gpl)', 'SCAQMD'
 
+  /// Versico Peak Gust Wind Speed Warranty (55 / 72 / 80 / 90 mph) — drives
+  /// MA perimeter sheets and seam fastening (lib/data/versico_ma_fastening.dart).
+  final int windWarrantyMph;
+
+  /// Building distance from coastline (kCoastlineDistances).
+  final String coastlineDistance;
+
   const ProjectInfo({
     this.projectName = '',
     this.projectAddress = '',
@@ -46,6 +53,8 @@ class ProjectInfo {
     this.wasteMetal = 0.05,
     this.wasteAccessory = 0.05,
     this.vocRegion = 'Standard',
+    this.windWarrantyMph = 55,
+    this.coastlineDistance = 'Greater than 7 miles',
   });
 
   factory ProjectInfo.initial() => ProjectInfo(
@@ -75,6 +84,8 @@ class ProjectInfo {
     double? wasteMetal,
     double? wasteAccessory,
     String? vocRegion,
+    int? windWarrantyMph,
+    String? coastlineDistance,
   }) {
     return ProjectInfo(
       projectName: projectName ?? this.projectName,
@@ -92,6 +103,8 @@ class ProjectInfo {
       wasteMetal: wasteMetal ?? this.wasteMetal,
       wasteAccessory: wasteAccessory ?? this.wasteAccessory,
       vocRegion: vocRegion ?? this.vocRegion,
+      windWarrantyMph: windWarrantyMph ?? this.windWarrantyMph,
+      coastlineDistance: coastlineDistance ?? this.coastlineDistance,
     );
   }
 
@@ -111,6 +124,8 @@ class ProjectInfo {
         wasteMetal: wasteMetal,
         wasteAccessory: wasteAccessory,
         vocRegion: vocRegion,
+        windWarrantyMph: windWarrantyMph,
+        coastlineDistance: coastlineDistance,
       );
 
   @override
@@ -131,7 +146,9 @@ class ProjectInfo {
           wasteMaterial == other.wasteMaterial &&
           wasteMetal == other.wasteMetal &&
           wasteAccessory == other.wasteAccessory &&
-          vocRegion == other.vocRegion;
+          vocRegion == other.vocRegion &&
+          windWarrantyMph == other.windWarrantyMph &&
+          coastlineDistance == other.coastlineDistance;
 
   @override
   int get hashCode => Object.hash(
@@ -140,6 +157,6 @@ class ProjectInfo {
         warrantyYears, climateZone, designWindSpeed,
         requiredRValue, stateCounty,
         wasteMaterial, wasteMetal, wasteAccessory,
-        vocRegion,
+        vocRegion, windWarrantyMph, coastlineDistance,
       );
 }

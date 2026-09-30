@@ -69,6 +69,10 @@ class SystemSpecs {
   final bool moistureScanRequired; // defaults to true for recover/tear-off
   final double sprayFoamThickness; // inches — only relevant when existingRoofType == 'Spray Foam'
 
+  /// Wood deck grade (kWoodDeckGrades) — Versico Table III row for MA
+  /// fastening on plywood / OSB decks. Only used when deckType == 'Wood'.
+  final String woodDeckGrade;
+
   const SystemSpecs({
     this.projectType = 'Tear-off & Replace',
     this.deckType = 'Metal',
@@ -77,6 +81,7 @@ class SystemSpecs {
     this.existingLayers = 1,
     this.moistureScanRequired = true,  // true by default since default is Tear-off
     this.sprayFoamThickness = 0.0,
+    this.woodDeckGrade = '15/32" 5-Ply Plywood',
   });
 
   factory SystemSpecs.initial() => const SystemSpecs();
@@ -99,6 +104,7 @@ class SystemSpecs {
     int? existingLayers,
     bool? moistureScanRequired,
     double? sprayFoamThickness,
+    String? woodDeckGrade,
   }) {
     return SystemSpecs(
       projectType: projectType ?? this.projectType,
@@ -108,6 +114,7 @@ class SystemSpecs {
       existingLayers: existingLayers ?? this.existingLayers,
       moistureScanRequired: moistureScanRequired ?? this.moistureScanRequired,
       sprayFoamThickness: sprayFoamThickness ?? this.sprayFoamThickness,
+      woodDeckGrade: woodDeckGrade ?? this.woodDeckGrade,
     );
   }
 
@@ -131,7 +138,8 @@ class SystemSpecs {
           existingRoofType == other.existingRoofType &&
           existingLayers == other.existingLayers &&
           moistureScanRequired == other.moistureScanRequired &&
-          sprayFoamThickness == other.sprayFoamThickness;
+          sprayFoamThickness == other.sprayFoamThickness &&
+          woodDeckGrade == other.woodDeckGrade;
 
   @override
   int get hashCode => Object.hash(
@@ -142,5 +150,6 @@ class SystemSpecs {
         existingLayers,
         moistureScanRequired,
         sprayFoamThickness,
+        woodDeckGrade,
       );
 }

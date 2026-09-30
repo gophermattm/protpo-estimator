@@ -21,6 +21,8 @@ import '../models/insulation_system.dart';
 import '../models/section_models.dart';
 import '../models/system_specs.dart';
 import 'board_schedule_calculator.dart';
+import '../data/qxo_pack_sizes.dart';
+import '../data/versico_ma_fastening.dart';
 
 // ─── BOM LINE ITEM ────────────────────────────────────────────────────────────
 
@@ -191,7 +193,9 @@ class BomCalculator {
     final bool hasDeckType = systemSpecs.deckType.isNotEmpty;
 
     if (!hasArea)     warnings.add('BLOCKER: Enter roof dimensions to calculate BOM.');
-    if (!hasZones)    warnings.add('WARNING: Wind zone widths missing — fastener quantities estimated from total area.');
+    if (!hasZones && membrane.fieldAttachment == 'Rhinobond (Induction Welded)') {
+      warnings.add('WARNING: Wind zone widths missing — Rhinobond plate quantities estimated from total area.');
+    }
     if (!hasDeckType) warnings.add('BLOCKER: Deck type required to select fasteners.');
     if (projectInfo.warrantyYears == 0) {
       warnings.add('WARNING: Warranty years not set — fastening density defaulting to 20-year pattern.');
@@ -201,10 +205,11 @@ class BomCalculator {
     final windSpeedMph = _parseWindSpeed(projectInfo.designWindSpeed);
     final bool isHighWind = windSpeedMph >= 130;
     final bool isElevatedWind = windSpeedMph >= 90;
-    if (isHighWind) {
-      warnings.add('NOTE: Design wind speed ${windSpeedMph.toInt()} mph — hurricane-zone fastening densities applied.');
-    } else if (isElevatedWind) {
-      warnings.add('NOTE: Design wind speed ${windSpeedMph.toInt()} mph — elevated wind fastening densities applied.');
+    final isRbSystem = membrane.fieldAttachment == 'Rhinobond (Induction Welded)';
+    if (isRbSystem && isHighWind) {
+      warnings.add('NOTE: Design wind speed ${windSpeedMph.toInt()} mph — hurricane-zone Rhinobond plate densities applied.');
+    } else if (isRbSystem && isElevatedWind) {
+      warnings.add('NOTE: Design wind speed ${windSpeedMph.toInt()} mph — elevated wind Rhinobond plate densities applied.');
     }
 
     // R-value validation
@@ -217,10 +222,25 @@ class BomCalculator {
     }
 
     // ── EFFECTIVE AREAS ──────────────────────────────────────────────────────
-    // When zone areas aren't set, fall back to total area for membrane rolls.
-    final effectiveFieldArea  = hasZones ? fieldArea  : totalArea;
-    final effectivePerimArea  = hasZones ? perimArea  : 0.0;
-    final effectiveCornerArea = hasZones ? cornerArea : 0.0;
+    // MA systems: Versico's fastening tables set the perimeter sheets (count ×
+    // width) around the building edge — that band, not the ASCE zone width,
+    // decides which area gets perimeter rolls and perimeter fastening.
+    // Other systems: ASCE zones; when zone widths aren't set, all field.
+    final isMASystem = membrane.fieldAttachment == 'Mechanically Attached';
+    final maSched = isMASystem && totalArea > 0
+        ? maFastenerSchedule(
+            totalArea: totalArea,
+            totalPerimeter: geometry.totalPerimeter,
+            outsideCorners: geometry.outsideCorners,
+            membrane: membrane,
+            systemSpecs: systemSpecs,
+            projectInfo: projectInfo,
+            buildingHeightFt: geometry.buildingHeight,
+          )
+        : null;
+    final effectiveFieldArea  = maSched?.field.area ?? (hasZones ? fieldArea : totalArea);
+    final effectivePerimArea  = maSched?.perimeter.area ?? (hasZones ? perimArea : 0.0);
+    final effectiveCornerArea = maSched != null ? 0.0 : (hasZones ? cornerArea : 0.0);
     // Perimeter/corner zones go on the narrower perimeter rolls. With the
     // perimeter roll set to "None" those zones (and parapet flashing) are
     // covered by field rolls —
@@ -522,21 +542,30 @@ class BomCalculator {
     }
 
     // ── MECHANICALLY ATTACHED (MA) ───────────────────────────────────────────
-    // Through-membrane fasteners + seam stress plates, one row per seam:
-    //   fasteners = zone area ÷ (net sheet width × spacing along the seam)
-    // Field zone uses the field roll; perimeter + corner zones use the
-    // perimeter (half) roll. Spacing comes from the warranty tier (see
-    // maSeamSpacingIn). The old flat per-sf densities (0.5–1.0/sf) implied a
-    // 1–2" seam spacing and over-ordered fasteners and plates ~6×.
-    if (isMA && totalArea > 0) {
-      final effectiveWarranty = _windAdjustedWarranty(projectInfo.warrantyYears, windSpeedMph);
-      final sched = maFastenerSchedule(
-        fieldArea:  hasZones ? effectiveFieldArea : totalArea,
-        perimArea:  effectivePerimArea,
-        cornerArea: effectiveCornerArea,
-        membrane:   membrane,
-        warrantyYears: effectiveWarranty,
-      );
+    // Through-membrane fasteners + seam plates, one row per seam:
+    //   fasteners = area ÷ (net sheet width × table spacing)
+    // Perimeter sheet count and spacing come from the Versico MA fastening
+    // tables (maFastenerSchedule). The old flat per-sf densities (0.5–1.0/sf)
+    // implied a 1–2" seam spacing and over-ordered fasteners and plates ~6×.
+    if (isMA && maSched != null) {
+      final sched = maSched;
+      final lk = sched.lookup;
+      if (!lk.isListed) {
+        warnings.add('WARNING: MA fastening — ${lk.basis}.'
+            '${lk.listedSheets.isEmpty ? '' : ' Versico lists: ${lk.listedSheets.join(', ')} sheets.'}'
+            '${lk.status == VersicoMaStatus.contactVersico ? ' Contact Versico for approval.' : ''}');
+      }
+      if (projectInfo.warrantyYears > 20) {
+        warnings.add('WARNING: Versico MA fastening tables cover warranties up to 20 years — '
+            '${projectInfo.warrantyYears}-yr requires Versico approval; quantities use the 20-yr table.');
+      }
+      if (systemSpecs.deckType == 'Wood' && systemSpecs.woodDeckGrade.contains('OSB') &&
+          projectInfo.warrantyYears > 20) {
+        warnings.add('WARNING: Versico limits OSB decks to 20-year warranties.');
+      }
+      if (geometry.buildingHeight <= 0) {
+        warnings.add('NOTE: Building height not set — MA fastening assumes ≤60\' building.');
+      }
       final fieldFast  = sched.field.fasteners;
       final perimFast  = sched.perimeter.fasteners;
       final cornerFast = sched.corner.fasteners;
@@ -544,13 +573,12 @@ class BomCalculator {
       String zoneLine(String label, MaZoneFastening z) =>
           '$label${_sf(z.area)} ÷ (${z.netSheetWidthFt.toStringAsFixed(1)}\' net sheet × ${z.spacingIn.toInt()}" o.c.) = ${z.fasteners.toStringAsFixed(0)}';
 
-      const boxSize = 500.0;
-      final withW    = totalFast * (1 + wAcc);
-      final orderQty = (withW / boxSize).ceil().toDouble();
-
       final fastenerName = _fastenerName(systemSpecs.deckType);
       final memStackIn   = _stackThicknessIn(insulation, 3, taperMaxThickness: taperMaxIn);
       final memFastLen   = _selectFastenerLen(systemSpecs.deckType, memStackIn);
+      final boxSize  = _fastenerPack(systemSpecs.deckType, memStackIn).toDouble();
+      final withW    = totalFast * (1 + wAcc);
+      final orderQty = (withW / boxSize).ceil().toDouble();
 
       items.add(BomLineItem(
         category: 'Fasteners & Plates',
@@ -562,10 +590,10 @@ class BomCalculator {
           'deckType':     systemSpecs.deckType,
         },
         orderQty: orderQty,
-        unit: 'boxes',
-        notes: '500/box — field, perimeter & corner zones',
+        unit: 'cartons',
+        notes: '${boxSize.toInt()}/carton (QXO) — field & perimeter sheets',
         trace: BomTrace(
-          baseDescription: '${totalFast.toStringAsFixed(0)} fasteners ÷ 500/box',
+          baseDescription: '${totalFast.toStringAsFixed(0)} fasteners ÷ ${boxSize.toInt()}/carton',
           baseQty: totalFast,
           wastePercent: wAcc,
           withWaste: withW,
@@ -573,23 +601,19 @@ class BomCalculator {
           orderQty: orderQty,
           breakdown: [
             _fastenerBreakdown(systemSpecs.deckType, memStackIn, 'MA membrane fastener'),
-            if (effectiveWarranty != projectInfo.warrantyYears)
-              'Wind ${windSpeedMph.toInt()} mph: ${effectiveWarranty}-yr spacing (base ${projectInfo.warrantyYears}-yr)',
-            if (hasZones) ...[
-              zoneLine('Field zone:     ', sched.field),
-              zoneLine('Perimeter zone: ', sched.perimeter),
-              zoneLine('Corner zone:    ', sched.corner),
-            ] else
-              zoneLine('Total area (no zones): ', sched.field),
+            lk.basis,
+            'Perimeter band: ${lk.perimeterSheets} × ${sched.perimeter.netSheetWidthFt.toStringAsFixed(2)}\' = ${sched.perimeterBandFt.toStringAsFixed(1)}\' around ${_lf(geometry.totalPerimeter)}',
+            zoneLine('Field sheets:     ', sched.field),
+            zoneLine('Perimeter sheets: ', sched.perimeter),
             'Total fasteners: ${totalFast.toStringAsFixed(0)}',
             'Waste: ${_pct(wAcc)}%  →  With waste: ${withW.toStringAsFixed(0)}',
-            'ORDER QTY: ${orderQty.toInt()} boxes (500/box)',
+            'ORDER QTY: ${orderQty.toInt()} cartons (${boxSize.toInt()}/carton)',
           ],
         ),
       ));
 
       // Seam stress plates — one per MA fastener
-      const plateBoxSize = 1000.0;
+      final plateBoxSize = kQxoSeamPlate2inPack.toDouble();
       final plateWithW   = totalFast * (1 + wAcc);
       final plateOrder   = (plateWithW / plateBoxSize).ceil().toDouble();
       items.add(BomLineItem(
@@ -598,10 +622,10 @@ class BomCalculator {
         skuKey: 'plate_seam_stress_3in',
         attributes: const {},
         orderQty: plateOrder,
-        unit: 'boxes',
-        notes: '1,000/box — one plate per MA fastener',
+        unit: 'cartons',
+        notes: '${plateBoxSize.toInt()}/carton (QXO) — one plate per MA fastener',
         trace: BomTrace(
-          baseDescription: '${totalFast.toStringAsFixed(0)} plates ÷ 1,000/box',
+          baseDescription: '${totalFast.toStringAsFixed(0)} plates ÷ ${plateBoxSize.toInt()}/carton',
           baseQty: totalFast,
           wastePercent: wAcc,
           withWaste: plateWithW,
@@ -610,7 +634,7 @@ class BomCalculator {
           breakdown: [
             'One seam plate per fastener: ${totalFast.toStringAsFixed(0)}',
             'Waste: ${_pct(wAcc)}%',
-            'ORDER QTY: ${plateOrder.toInt()} boxes (1,000/box)',
+            'ORDER QTY: ${plateOrder.toInt()} cartons (${plateBoxSize.toInt()}/carton)',
           ],
         ),
       ));
@@ -621,7 +645,7 @@ class BomCalculator {
     // then membrane inductively welded to plate tops — no through-membrane fasteners.
     //
     // BOM has THREE separate line items:
-    //   1. Rhinobond induction weld plates (250/carton)
+    //   1. Rhinobond induction weld plates (500/carton per QXO)
     //   2. Fasteners for plates — same sizing logic as MA, one per plate
     //   3. Insulation fasteners (handled below in insulation section, same as MA)
     //
@@ -640,7 +664,7 @@ class BomCalculator {
       final rbTotalPlates  = rbFieldPlates + rbPerimPlates + rbCornerPlates;
 
       // ── Rhinobond induction weld plates ──────────────────────────────────
-      const rbCartonSize = 250.0; // Versico Rhinobond plates: 250/carton
+      final rbCartonSize = kQxoRhinobondPlatePack.toDouble(); // QXO: 3" RhinoBond TPO Plates
       final rbPlateWithW = rbTotalPlates * (1 + wAcc);
       final rbPlateOrder = (rbPlateWithW / rbCartonSize).ceil().toDouble();
 
@@ -651,9 +675,9 @@ class BomCalculator {
         attributes: const {},
         orderQty: rbPlateOrder,
         unit: 'cartons',
-        notes: '250/carton — Versico Rhinobond TPO system',
+        notes: '${rbCartonSize.toInt()}/carton (QXO) — Versico Rhinobond TPO system',
         trace: BomTrace(
-          baseDescription: '${rbTotalPlates.toStringAsFixed(0)} plates ÷ 250/carton',
+          baseDescription: '${rbTotalPlates.toStringAsFixed(0)} plates ÷ ${rbCartonSize.toInt()}/carton',
           baseQty: rbTotalPlates,
           wastePercent: wAcc,
           withWaste: rbPlateWithW,
@@ -672,7 +696,7 @@ class BomCalculator {
               'Total area (no zones): ${_sf(rbTotalPlates)} plates',
             'Total plates: ${rbTotalPlates.toStringAsFixed(0)}',
             'Waste: ${_pct(wAcc)}%  →  With waste: ${rbPlateWithW.toStringAsFixed(0)}',
-            'ORDER QTY: ${rbPlateOrder.toInt()} cartons (250/carton)',
+            'ORDER QTY: ${rbPlateOrder.toInt()} cartons (${rbCartonSize.toInt()}/carton)',
           ],
         ),
       ));
@@ -681,7 +705,7 @@ class BomCalculator {
       final memStackIn   = _stackThicknessIn(insulation, 3, taperMaxThickness: taperMaxIn);
       final rbFastName   = _fastenerName(systemSpecs.deckType);
       final rbFastLen    = _selectFastenerLen(systemSpecs.deckType, memStackIn);
-      const rbFastBox    = 500.0;
+      final rbFastBox    = _fastenerPack(systemSpecs.deckType, memStackIn).toDouble();
       final rbFastWithW  = rbTotalPlates * (1 + wAcc);
       final rbFastOrder  = (rbFastWithW / rbFastBox).ceil().toDouble();
 
@@ -695,10 +719,10 @@ class BomCalculator {
           'deckType':     systemSpecs.deckType,
         },
         orderQty: rbFastOrder,
-        unit: 'boxes',
-        notes: '500/box — one fastener per Rhinobond plate',
+        unit: 'cartons',
+        notes: '${rbFastBox.toInt()}/carton (QXO) — one fastener per Rhinobond plate',
         trace: BomTrace(
-          baseDescription: '${rbTotalPlates.toStringAsFixed(0)} fasteners ÷ 500/box',
+          baseDescription: '${rbTotalPlates.toStringAsFixed(0)} fasteners ÷ ${rbFastBox.toInt()}/carton',
           baseQty: rbTotalPlates,
           wastePercent: wAcc,
           withWaste: rbFastWithW,
@@ -708,7 +732,7 @@ class BomCalculator {
             _fastenerBreakdown(systemSpecs.deckType, memStackIn, 'Rhinobond plate fastener'),
             'One fastener per plate: ${rbTotalPlates.toStringAsFixed(0)}',
             'Waste: ${_pct(wAcc)}%',
-            'ORDER QTY: ${rbFastOrder.toInt()} boxes (500/box)',
+            'ORDER QTY: ${rbFastOrder.toInt()} cartons (${rbFastBox.toInt()}/carton)',
           ],
         ),
       ));
@@ -750,12 +774,13 @@ class BomCalculator {
       }
 
       final insDensity = _insulationDensity(projectInfo.warrantyYears, systemSpecs.deckType);
-      const insBoxSize = 500.0;
+      final perBoard = (insDensity * 32).round(); // fasteners per 4'×8' board
 
       // Layer 1 MA: fastener only passes through layer 1 stack
       if (effectiveL1MA) {
         final l1StackIn = _stackThicknessIn(insulation, 1);
         final l1Len     = _selectFastenerLen(systemSpecs.deckType, l1StackIn);
+        final insBoxSize = _fastenerPack(systemSpecs.deckType, l1StackIn).toDouble();
         final base      = totalArea * insDensity;
         final withW     = base * (1 + wAcc);
         final orderQty  = (withW / insBoxSize).ceil().toDouble();
@@ -769,10 +794,10 @@ class BomCalculator {
             'deckType':     systemSpecs.deckType,
           },
           orderQty: orderQty,
-          unit: 'boxes',
-          notes: '500/box — 4 per 4\'×8\' board (${insulation.layer1.type})',
+          unit: 'cartons',
+          notes: '${insBoxSize.toInt()}/carton (QXO) — $perBoard per 4\'×8\' board (${insulation.layer1.type})',
           trace: BomTrace(
-            baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ 500/box',
+            baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ ${insBoxSize.toInt()}/carton',
             baseQty: base,
             wastePercent: wAcc,
             withWaste: withW,
@@ -782,7 +807,7 @@ class BomCalculator {
               _fastenerBreakdown(systemSpecs.deckType, l1StackIn, 'Layer 1 fastener'),
               '${_sf(totalArea)} × $insDensity/sf = ${base.toStringAsFixed(0)} fasteners',
               'Waste: ${_pct(wAcc)}%',
-              'ORDER QTY: ${orderQty.toInt()} boxes (500/box)',
+              'ORDER QTY: ${orderQty.toInt()} cartons (${insBoxSize.toInt()}/carton)',
             ],
           ),
         ));
@@ -798,10 +823,10 @@ class BomCalculator {
           attributes: const {},
           consolidatedName: '3" Insulation Plates',
           orderQty: l1PlateOrder,
-          unit: 'boxes',
-          notes: '1,000/box — one plate per insulation fastener',
+          unit: 'cartons',
+          notes: '1,000/carton (QXO) — one plate per insulation fastener',
           trace: BomTrace(
-            baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/box',
+            baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/carton',
             baseQty: base,
             wastePercent: wAcc,
             withWaste: withW,
@@ -811,7 +836,7 @@ class BomCalculator {
               'One 3" galv plate per insulation fastener',
               '${_sf(totalArea)} × $insDensity/sf = ${base.toStringAsFixed(0)} plates',
               'Waste: ${_pct(wAcc)}%',
-              'ORDER QTY: ${l1PlateOrder.toInt()} boxes (1,000/box)',
+              'ORDER QTY: ${l1PlateOrder.toInt()} cartons (1,000/carton)',
             ],
           ),
         ));
@@ -821,6 +846,7 @@ class BomCalculator {
       if (effectiveL2MA) {
         final l2StackIn = _stackThicknessIn(insulation, 2); // L1 + L2 thickness
         final l2Len     = _selectFastenerLen(systemSpecs.deckType, l2StackIn);
+        final insBoxSize = _fastenerPack(systemSpecs.deckType, l2StackIn).toDouble();
         final base      = totalArea * insDensity;
         final withW     = base * (1 + wAcc);
         final orderQty  = (withW / insBoxSize).ceil().toDouble();
@@ -835,10 +861,10 @@ class BomCalculator {
             'deckType':     systemSpecs.deckType,
           },
           orderQty: orderQty,
-          unit: 'boxes',
-          notes: '500/box — 4 per board, through L1+L2 ($l2type)',
+          unit: 'cartons',
+          notes: '${insBoxSize.toInt()}/carton (QXO) — $perBoard per 4\'×8\' board, through L1+L2 ($l2type)',
           trace: BomTrace(
-            baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ 500/box',
+            baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ ${insBoxSize.toInt()}/carton',
             baseQty: base,
             wastePercent: wAcc,
             withWaste: withW,
@@ -849,7 +875,7 @@ class BomCalculator {
               'Note: L2 fastener must pass through L1 to reach deck',
               '${_sf(totalArea)} × $insDensity/sf = ${base.toStringAsFixed(0)} fasteners',
               'Waste: ${_pct(wAcc)}%',
-              'ORDER QTY: ${orderQty.toInt()} boxes (500/box)',
+              'ORDER QTY: ${orderQty.toInt()} cartons (${insBoxSize.toInt()}/carton)',
             ],
           ),
         ));
@@ -865,10 +891,10 @@ class BomCalculator {
           attributes: const {},
           consolidatedName: '3" Insulation Plates',
           orderQty: l2PlateOrder,
-          unit: 'boxes',
-          notes: '1,000/box — one plate per insulation fastener',
+          unit: 'cartons',
+          notes: '1,000/carton (QXO) — one plate per insulation fastener',
           trace: BomTrace(
-            baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/box',
+            baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/carton',
             baseQty: base,
             wastePercent: wAcc,
             withWaste: withW,
@@ -878,7 +904,7 @@ class BomCalculator {
               'One 3" galv plate per insulation fastener',
               '${_sf(totalArea)} × $insDensity/sf = ${base.toStringAsFixed(0)} plates',
               'Waste: ${_pct(wAcc)}%',
-              'ORDER QTY: ${l2PlateOrder.toInt()} boxes (1,000/box)',
+              'ORDER QTY: ${l2PlateOrder.toInt()} cartons (1,000/carton)',
             ],
           ),
         ));
@@ -905,6 +931,7 @@ class BomCalculator {
         taperStackIn += taperThickForLen;
         final taperLen  = _selectFastenerLen(systemSpecs.deckType, taperStackIn) +
             (taperEstimated ? ' (est.)' : '');
+        final insBoxSize = _fastenerPack(systemSpecs.deckType, taperStackIn).toDouble();
         // An empty schedule (rate 0, no drain distance) reports 0 tapered SF;
         // treat it like "no schedule" or the roof gets no insulation fasteners.
         final schedSF   = boardSchedule?.totalTaperedSF ?? 0.0;
@@ -922,12 +949,12 @@ class BomCalculator {
             'deckType':     systemSpecs.deckType,
           },
           orderQty: orderQty,
-          unit: 'boxes',
+          unit: 'cartons',
           notes: taperEstimated
-              ? '500/box — length estimated (no drains placed)'
-              : '500/box — sized for max thickness ${_ins(taperMaxIn)} at ridge',
+              ? '${insBoxSize.toInt()}/carton (QXO) — length estimated (no drains placed)'
+              : '${insBoxSize.toInt()}/carton (QXO) — sized for max thickness ${_ins(taperMaxIn)} at ridge',
           trace: BomTrace(
-            baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ 500/box',
+            baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ ${insBoxSize.toInt()}/carton',
             baseQty: base,
             wastePercent: wAcc,
             withWaste: withW,
@@ -940,7 +967,7 @@ class BomCalculator {
                   : 'Note: Fastener length based on max taper thickness ${_ins(taperMaxIn)} at ridge',
               '${_sf(taperSF)} tapered area × $insDensity/sf = ${base.toStringAsFixed(0)} fasteners',
               'Waste: ${_pct(wAcc)}%',
-              'ORDER QTY: ${orderQty.toInt()} boxes (500/box)',
+              'ORDER QTY: ${orderQty.toInt()} cartons (${insBoxSize.toInt()}/carton)',
             ],
           ),
         ));
@@ -956,10 +983,10 @@ class BomCalculator {
           attributes: const {},
           consolidatedName: '3" Insulation Plates',
           orderQty: taperPlateOrder,
-          unit: 'boxes',
-          notes: '1,000/box — one plate per insulation fastener',
+          unit: 'cartons',
+          notes: '1,000/carton (QXO) — one plate per insulation fastener',
           trace: BomTrace(
-            baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/box',
+            baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/carton',
             baseQty: base,
             wastePercent: wAcc,
             withWaste: withW,
@@ -969,7 +996,7 @@ class BomCalculator {
               'One 3" galv plate per tapered insulation fastener',
               '${_sf(taperSF)} tapered area × $insDensity/sf = ${base.toStringAsFixed(0)} plates',
               'Waste: ${_pct(wAcc)}%',
-              'ORDER QTY: ${taperPlateOrder.toInt()} boxes (1,000/box)',
+              'ORDER QTY: ${taperPlateOrder.toInt()} cartons (1,000/carton)',
             ],
           ),
         ));
@@ -979,6 +1006,7 @@ class BomCalculator {
       if (effectiveCbMA) {
         final cbStackIn = _stackThicknessIn(insulation, 3, taperMaxThickness: taperMaxIn); // full stack
         final cbLen     = _selectFastenerLen(systemSpecs.deckType, cbStackIn);
+        final insBoxSize = _fastenerPack(systemSpecs.deckType, cbStackIn).toDouble();
         final base      = totalArea * insDensity;
         final withW     = base * (1 + wAcc);
         final orderQty  = (withW / insBoxSize).ceil().toDouble();
@@ -993,10 +1021,10 @@ class BomCalculator {
             'deckType':     systemSpecs.deckType,
           },
           orderQty: orderQty,
-          unit: 'boxes',
-          notes: '500/box — 4 per board ($cbtype)',
+          unit: 'cartons',
+          notes: '${insBoxSize.toInt()}/carton (QXO) — $perBoard per 4\'×8\' board ($cbtype)',
           trace: BomTrace(
-            baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ 500/box',
+            baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ ${insBoxSize.toInt()}/carton',
             baseQty: base,
             wastePercent: wAcc,
             withWaste: withW,
@@ -1007,7 +1035,7 @@ class BomCalculator {
               'Note: Cover board fastener penetrates full insulation stack',
               '${_sf(totalArea)} × $insDensity/sf = ${base.toStringAsFixed(0)} fasteners',
               'Waste: ${_pct(wAcc)}%',
-              'ORDER QTY: ${orderQty.toInt()} boxes (500/box)',
+              'ORDER QTY: ${orderQty.toInt()} cartons (${insBoxSize.toInt()}/carton)',
             ],
           ),
         ));
@@ -1023,10 +1051,10 @@ class BomCalculator {
           attributes: const {},
           consolidatedName: '3" Insulation Plates',
           orderQty: cbPlateOrder,
-          unit: 'boxes',
-          notes: '1,000/box — one plate per insulation fastener',
+          unit: 'cartons',
+          notes: '1,000/carton (QXO) — one plate per insulation fastener',
           trace: BomTrace(
-            baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/box',
+            baseDescription: '${base.toStringAsFixed(0)} plates ÷ 1,000/carton',
             baseQty: base,
             wastePercent: wAcc,
             withWaste: withW,
@@ -1036,7 +1064,7 @@ class BomCalculator {
               'One 3" galv plate per cover board fastener',
               '${_sf(totalArea)} × $insDensity/sf = ${base.toStringAsFixed(0)} plates',
               'Waste: ${_pct(wAcc)}%',
-              'ORDER QTY: ${cbPlateOrder.toInt()} boxes (1,000/box)',
+              'ORDER QTY: ${cbPlateOrder.toInt()} cartons (1,000/carton)',
             ],
           ),
         ));
@@ -1684,7 +1712,7 @@ class BomCalculator {
       final edgeFastName  = _fastenerName(systemSpecs.deckType);
       final base          = edgeMetalLF * 12.0 / edgeSpacingIn;
       final withW         = base * (1 + wAcc);
-      const edgeBucketSize = 500.0;
+      final edgeBucketSize = _fastenerPack(systemSpecs.deckType, 0).toDouble();
       final orderQty      = (withW / edgeBucketSize).ceil().toDouble();
       items.add(BomLineItem(
         category: 'Parapet & Termination',
@@ -1696,10 +1724,10 @@ class BomCalculator {
           'deckType':     systemSpecs.deckType,
         },
         orderQty: orderQty,
-        unit: 'buckets',
-        notes: '${edgeBucketSize.toInt()}/bucket — ${edgeSpacingIn.toInt()}" o.c. eave/rake edge attachment',
+        unit: 'cartons',
+        notes: '${edgeBucketSize.toInt()}/carton — ${edgeSpacingIn.toInt()}" o.c. eave/rake edge attachment',
         trace: BomTrace(
-          baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ ${edgeBucketSize.toInt()}/bucket',
+          baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ ${edgeBucketSize.toInt()}/carton',
           baseQty: base,
           wastePercent: wAcc,
           withWaste: withW,
@@ -1712,8 +1740,8 @@ class BomCalculator {
             'Spacing:    ${edgeSpacingIn.toInt()}" o.c.',
             '${_lf(edgeMetalLF)} × 12"/ft ÷ ${edgeSpacingIn.toInt()}" = ${base.toStringAsFixed(0)} fasteners',
             'Waste: ${_pct(wAcc)}%',
-            'Bucket size: ${edgeBucketSize.toInt()}/bucket',
-            'ORDER QTY: ${orderQty.toInt()} buckets',
+            'Bucket size: ${edgeBucketSize.toInt()}/carton',
+            'ORDER QTY: ${orderQty.toInt()} cartons',
           ],
         ),
       ));
@@ -2326,15 +2354,15 @@ class BomCalculator {
       // RUSS fasteners — 12" O.C. through RUSS into deck; 6" O.C. for >20-yr
       // warranty or ≥90 mph design wind (Versico spec, eval F12).
       final russSpacing = russSpacingIn(projectInfo.warrantyYears, windSpeedMph);
-      const russBucketSize = 500.0;
-      final russFastBase = parapet.parapetTotalLF * 12.0 / russSpacing;
-      final russFastWithW = russFastBase * (1 + wAcc);
-      final russFastOrder = (russFastWithW / russBucketSize).ceil().toDouble();
       final russFastName = _fastenerName(systemSpecs.deckType);
       // RUSS sits on top of the insulation at the wall line — the fastener
       // passes through the full stack into the deck, same as the membrane fastener.
       final russStackIn  = _stackThicknessIn(insulation, 3, taperMaxThickness: taperMaxIn);
       final russFastLen  = _selectFastenerLen(systemSpecs.deckType, russStackIn);
+      final russBucketSize = _fastenerPack(systemSpecs.deckType, russStackIn).toDouble();
+      final russFastBase = parapet.parapetTotalLF * 12.0 / russSpacing;
+      final russFastWithW = russFastBase * (1 + wAcc);
+      final russFastOrder = (russFastWithW / russBucketSize).ceil().toDouble();
       items.add(BomLineItem(
         category: 'Parapet & Termination',
         name: '$russFastName $russFastLen — RUSS Strip (${russSpacing.toInt()}" o.c.)',
@@ -2345,10 +2373,10 @@ class BomCalculator {
           'deckType':     systemSpecs.deckType,
         },
         orderQty: russFastOrder,
-        unit: 'buckets',
-        notes: '${russBucketSize.toInt()}/bucket — ${russSpacing.toInt()}" o.c. through RUSS into deck',
+        unit: 'cartons',
+        notes: '${russBucketSize.toInt()}/carton — ${russSpacing.toInt()}" o.c. through RUSS into deck',
         trace: BomTrace(
-          baseDescription: '${russFastBase.toStringAsFixed(0)} fasteners ÷ ${russBucketSize.toInt()}/bucket',
+          baseDescription: '${russFastBase.toStringAsFixed(0)} fasteners ÷ ${russBucketSize.toInt()}/carton',
           baseQty: russFastBase,
           wastePercent: wAcc,
           withWaste: russFastWithW,
@@ -2360,13 +2388,13 @@ class BomCalculator {
             'Spacing: ${russSpacing.toInt()}" o.c.${russSpacing < 12 ? " (>20-yr warranty or ≥90 mph)" : ""}',
             '${parapet.parapetTotalLF.toStringAsFixed(0)} LF × ${(12 / russSpacing).toStringAsFixed(0)}/ft = ${russFastBase.toStringAsFixed(0)} fasteners',
             'Waste: ${_pct(wAcc)}%',
-            'Bucket size: ${russBucketSize.toInt()}/bucket',
-            'ORDER QTY: ${russFastOrder.toInt()} buckets',
+            'Bucket size: ${russBucketSize.toInt()}/carton',
+            'ORDER QTY: ${russFastOrder.toInt()} cartons',
           ],
         ),
       ));
 
-      // RUSS seam fastening plates — one per RUSS fastener, 1000/box
+      // RUSS seam fastening plates — one per RUSS fastener, 1,000/carton
       const russPlateBoxSize = 1000.0;
       final russPlateOrder = (russFastWithW / russPlateBoxSize).ceil().toDouble();
       items.add(BomLineItem(
@@ -2375,10 +2403,10 @@ class BomCalculator {
         skuKey: 'plate_russ_seam_fastening',
         attributes: const {},
         orderQty: russPlateOrder,
-        unit: 'boxes',
-        notes: '${russPlateBoxSize.toInt()}/box — one plate per RUSS fastener',
+        unit: 'cartons',
+        notes: '${russPlateBoxSize.toInt()}/carton — one plate per RUSS fastener',
         trace: BomTrace(
-          baseDescription: '${russFastBase.toStringAsFixed(0)} plates ÷ ${russPlateBoxSize.toInt()}/box',
+          baseDescription: '${russFastBase.toStringAsFixed(0)} plates ÷ ${russPlateBoxSize.toInt()}/carton',
           baseQty: russFastBase,
           wastePercent: wAcc,
           withWaste: russFastWithW,
@@ -2386,8 +2414,8 @@ class BomCalculator {
           orderQty: russPlateOrder,
           breakdown: [
             'One plate per fastener: ${russFastBase.toStringAsFixed(0)} plates',
-            'Box size: ${russPlateBoxSize.toInt()}/box',
-            'ORDER QTY: ${russPlateOrder.toInt()} boxes',
+            'Carton size: ${russPlateBoxSize.toInt()}/carton',
+            'ORDER QTY: ${russPlateOrder.toInt()} cartons',
           ],
         ),
       ));
@@ -2546,56 +2574,62 @@ class BomCalculator {
 
   // ─── MA SEAM FASTENING ───────────────────────────────────────────────────────
 
-  /// Seam lap for mechanically attached sheets (feet). Net sheet width =
-  /// roll width − lap. [Unverified] 6" lap assumed; confirm against the
-  /// Versico MA detail for the specific sheet width.
-  static const double maSeamLapFt = 0.5;
-
-  /// Fastener spacing along the seam (inches o.c.) for (field, perimeter,
-  /// corner) by warranty tier.
-  ///
-  /// All tiers are 12" o.c. until the Versico spacing-by-warranty table is
-  /// supplied — the tier hook is here so only these numbers need to change.
-  static (double, double, double) maSeamSpacingIn(int warrantyYears) {
-    switch (warrantyYears) {
-      case 10:
-      case 15:
-      case 20:
-      case 25:
-      case 30:
-      default:
-        return (12.0, 12.0, 12.0);
-    }
-  }
+  /// Seam lap for mechanically attached sheets (5-1/2", Versico MA spec).
+  static const double maSeamLapFt = kVersicoMaSeamLapFt;
 
   static double _rollWidthFt(String rollWidth) =>
       double.tryParse(rollWidth.replaceAll("'", '').trim()) ?? 10.0;
 
-  /// Per-zone MA membrane fastener counts (no waste). Shared by the BOM and
-  /// the Fastening Schedule tab so the two never disagree.
+  /// MA membrane fastening from the Versico fastening tables
+  /// (lib/data/versico_ma_fastening.dart). Shared by the BOM, the Fastening
+  /// Schedule tab and the sub instructions so they never disagree.
+  ///
+  /// Perimeter sheets run around the whole building edge: the perimeter band
+  /// is (number of perimeter sheets × net perimeter sheet width), its area
+  /// P × band − corners × band². Everything inside is field sheets. Fasteners
+  /// sit in each seam at the table spacing:
+  ///   fasteners = area ÷ (net sheet width × spacing).
   static MaFastenerSchedule maFastenerSchedule({
-    required double fieldArea,
-    required double perimArea,
-    required double cornerArea,
+    required double totalArea,
+    required double totalPerimeter,
+    required int outsideCorners,
     required MembraneSystem membrane,
-    required int warrantyYears,
+    required SystemSpecs systemSpecs,
+    required ProjectInfo projectInfo,
+    required double buildingHeightFt,
   }) {
-    final spacing = maSeamSpacingIn(warrantyYears);
+    final lookup = versicoMaLookup(
+      deckType: systemSpecs.deckType,
+      woodDeckGrade: systemSpecs.woodDeckGrade,
+      windWarrantyMph: projectInfo.windWarrantyMph,
+      buildingHeightFt: buildingHeightFt,
+      coastlineDistance: projectInfo.coastlineDistance,
+      fieldRollWidth: membrane.rollWidth,
+      perimeterRollWidth: membrane.perimeterRollWidth,
+    );
     final fieldNet = _rollWidthFt(membrane.rollWidth) - maSeamLapFt;
     final perimNet = membrane.perimeterRollWidth == 'None'
         ? fieldNet
         : _rollWidthFt(membrane.perimeterRollWidth) - maSeamLapFt;
-    MaZoneFastening zone(double area, double netFt, double spacingIn) =>
-        MaZoneFastening(
+    final corners = outsideCorners > 0 ? outsideCorners : 4;
+    final band = lookup.perimeterSheets * perimNet;
+    final perimArea = totalArea <= 0
+        ? 0.0
+        : (totalPerimeter * band - corners * band * band).clamp(0.0, totalArea);
+    final fieldArea = (totalArea - perimArea).clamp(0.0, totalArea);
+    MaZoneFastening zone(double area, double netFt) => MaZoneFastening(
           area: area,
           netSheetWidthFt: netFt,
-          spacingIn: spacingIn,
-          fasteners: area <= 0 ? 0 : area / (netFt * spacingIn / 12.0),
+          spacingIn: lookup.spacingIn,
+          fasteners: area <= 0 ? 0 : area / (netFt * lookup.spacingIn / 12.0),
         );
     return MaFastenerSchedule(
-      field:     zone(fieldArea,  fieldNet, spacing.$1),
-      perimeter: zone(perimArea,  perimNet, spacing.$2),
-      corner:    zone(cornerArea, perimNet, spacing.$3),
+      field: zone(fieldArea, fieldNet),
+      perimeter: zone(perimArea, perimNet),
+      corner: MaZoneFastening(area: 0, netSheetWidthFt: perimNet,
+          spacingIn: lookup.spacingIn, fasteners: 0),
+      lookup: lookup,
+      perimeterBandFt: band,
     );
   }
 
@@ -2682,20 +2716,20 @@ class BomCalculator {
   }
 
   /// Available fastener lengths (real inches) for a given deck type.
-  /// Metal #14 HP: 3", 4.5", 6", 7.5", 9", 10.5", 12" (Versico catalog).
-  /// Wood screws:  2.5", 3.5", 4.5", 6", 8", 10", 12" (IBC-compliant roofing screws).
-  /// Concrete / LW: limited anchor lengths per manufacturer.
   static List<double> _fastenerLengthsIn(String deckType) {
-    switch (deckType) {
-      case 'Metal':       return [3.0, 4.5, 6.0, 7.5, 9.0, 10.5, 12.0];
-      case 'Wood':        return [2.5, 3.5, 4.5, 6.0, 8.0, 10.0, 12.0];
-      case 'Concrete':    return [2.25, 3.25, 4.25];
-      case 'LW Concrete': return [3.25, 4.25, 5.25];
-      case 'Gypsum':
-      case 'Tectum':      return [3.0, 4.0, 5.0, 6.0, 8.0, 10.0];
-      default:            return [3.0, 4.5, 6.0, 7.5, 9.0, 10.5, 12.0];
-    }
+    // Lengths QXO stocks for the deck's fastener family (lib/data/qxo_pack_sizes.dart),
+    // so every selected length maps to a real SKU. CD-10 (LW concrete) isn't
+    // carried by QXO — its catalog lengths are kept.
+    final fam = qxoFastenerFamily(_fastenerName(deckType));
+    final stocked = kQxoFastenerPacks[fam]?.keys.toList();
+    if (stocked != null) return stocked..sort();
+    return [3.25, 4.25, 5.25];
   }
+
+  /// Units per carton (QXO) for the fastener selected for [stackThicknessIn].
+  static int _fastenerPack(String deckType, double stackThicknessIn) =>
+      qxoFastenerPack(_fastenerName(deckType),
+          _selectFastener(deckType, stackThicknessIn).lengthIn);
 
   /// Selects the shortest available fastener length that satisfies:
   ///   insulation stack + deck thickness + deck penetration
@@ -2785,6 +2819,13 @@ class BomCalculator {
   static const List<String> kFastenerDeckTypes = [
     'Metal', 'Wood', 'Concrete', 'LW Concrete', 'Gypsum', 'Tectum',
   ];
+
+  /// Public: stocked fastener lengths (inches) per deck — single source for UI.
+  static List<double> fastenerLengthsPublic(String deckType) => _fastenerLengthsIn(deckType);
+
+  /// Public: insulation fasteners per 4'×8' board for the warranty/deck.
+  static int insulationFastenersPerBoard(int warrantyYears, String deckType) =>
+      (_insulationDensity(warrantyYears, deckType) * 32).round();
 
   /// Public: fastener lengths (formatted like "4.5\"") available per deck.
   static List<String> fastenerLengthLabels(String deckType) =>
@@ -2932,11 +2973,17 @@ class MaZoneFastening {
 }
 
 class MaFastenerSchedule {
+  /// Corner is kept for display; Versico's MA tables fold corners into the
+  /// perimeter sheets, so its area and count are 0.
   final MaZoneFastening field, perimeter, corner;
+  final VersicoMaResult lookup;
+  final double perimeterBandFt; // perimeter sheets × net sheet width
   const MaFastenerSchedule({
     required this.field,
     required this.perimeter,
     required this.corner,
+    required this.lookup,
+    required this.perimeterBandFt,
   });
   double get total => field.fasteners + perimeter.fasteners + corner.fasteners;
 }

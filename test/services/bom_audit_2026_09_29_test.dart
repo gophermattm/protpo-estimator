@@ -9,6 +9,8 @@ import 'package:protpo_app/models/insulation_system.dart';
 import 'package:protpo_app/models/section_models.dart';
 import 'package:protpo_app/models/system_specs.dart';
 import 'package:protpo_app/models/drainage_zone.dart';
+import 'package:protpo_app/data/versico_ma_fastening.dart';
+import 'package:protpo_app/data/qxo_pack_sizes.dart';
 import 'package:protpo_app/models/estimate.dart';
 import 'package:protpo_app/providers/estimator_providers.dart';
 import 'package:protpo_app/providers/job_providers.dart';
@@ -59,18 +61,95 @@ BomLineItem _item(BomResult r, String skuKey) =>
     r.items.firstWhere((i) => i.skuKey == skuKey);
 
 void main() {
-  group('MA membrane fasteners — seam-row math', () {
-    test('10,000 sf roof, 10\' field / 6\' perimeter sheets, 12" o.c.', () {
+  group('MA membrane fasteners — Versico table + seam-row math', () {
+    test('10,000 sf wood (15/32 5-ply), 55 mph, 10\'/6\' sheets', () {
       final r = _calc();
       final f = _item(r, 'fastener_membrane');
-      // field 8,100 sf ÷ (9.5' × 1') = 852.6
-      // perim+corner 1,900 sf ÷ (5.5' × 1') = 345.5
-      expect(f.trace.baseQty, closeTo(852.6 + 345.5, 1.0));
-      expect(f.orderQty, 3); // 1,258 with 5% waste ÷ 500/box
+      // Table III: 1 perimeter sheet, 12" o.c. Net widths: 10' − 5.5" and 6' − 5.5".
+      const fieldNet = 10 - 5.5 / 12, perimNet = 6 - 5.5 / 12;
+      const perimArea = 400 * perimNet - 4 * perimNet * perimNet;
+      const expected = (10000 - perimArea) / fieldNet + perimArea / perimNet;
+      expect(f.trace.baseQty, closeTo(expected, 0.5));
+      expect(f.unit, 'cartons');
+      // 2.5" stack + 0.75" deck + 1" = 4.25" → 5" HPV, 1,000/carton (QXO)
+      expect(f.attributes!['length'], '5"');
+      expect(f.trace.packageSize, 1000);
+      expect(f.orderQty, 2);
       final p = _item(r, 'plate_seam_stress_3in');
       expect(p.trace.baseQty, closeTo(f.trace.baseQty, 0.01));
-      expect(p.orderQty, 2); // ÷ 1,000/box
+      expect(p.orderQty, 2);
     });
+
+    test('8" HPV uses the QXO 500/carton pack', () {
+      final r = _calc(insulation: const InsulationSystem(
+          numberOfLayers: 2,
+          layer2: InsulationLayer(thickness: 2.5)));
+      final f = _item(r, 'fastener_membrane');
+      // 5" stack + 0.75 + 1 = 6.75" → 8" HPV
+      expect(f.attributes!['length'], '8"');
+      expect(f.trace.packageSize, 500);
+    });
+
+    test('warranty over 20 years warns that Versico approval is needed', () {
+      final r = _calc(info: ProjectInfo.initial().copyWith(warrantyYears: 25));
+      expect(r.warnings.any((w) => w.contains('up to 20 years')), isTrue);
+    });
+  });
+
+  group('Versico MA table lookup', () {
+    VersicoMaResult look(String deck, int wind, {double h = 30,
+        String coast = 'Greater than 7 miles', String field = "10'",
+        String perim = "6'", String wood = '15/32" 5-Ply Plywood'}) =>
+        versicoMaLookup(deckType: deck, woodDeckGrade: wood,
+            windWarrantyMph: wind, buildingHeightFt: h,
+            coastlineDistance: coast, fieldRollWidth: field,
+            perimeterRollWidth: perim);
+
+    test('steel 72 mph ≤60\' → 2 perimeter sheets, 12" o.c.', () {
+      final r = look('Metal', 72);
+      expect(r.status, VersicoMaStatus.ok);
+      expect(r.perimeterSheets, 2);
+      expect(r.spacingIn, 12);
+    });
+    test('steel 80 mph 10\' sheets → 6" o.c. (HPVX); concrete → 12"', () {
+      expect(look('Metal', 80).spacingIn, 6);
+      expect(look('Concrete', 80).spacingIn, 12);
+      expect(look('Metal', 80, coast: 'Less than 3 miles').perimeterSheets, 4);
+    });
+    test('steel 55 mph 61–100\' building → 2 sheets, 6" o.c.', () {
+      final r = look('Metal', 55, h: 70);
+      expect(r.perimeterSheets, 2);
+      expect(r.spacingIn, 6);
+    });
+    test('wood 7/16 OSB 55 mph 10\' → 9" o.c.', () {
+      expect(look('Wood', 55, wood: '7/16" OSB').spacingIn, 9);
+    });
+    test('wood at 80 mph is outside the tables', () {
+      expect(look('Wood', 80).status, VersicoMaStatus.contactVersico);
+    });
+    test('LW concrete 12\' sheets < 3 mi is N/A', () {
+      expect(look('LW Concrete', 55, field: "12'", coast: 'Less than 3 miles').status,
+          VersicoMaStatus.notAcceptable);
+    });
+    test('gypsum 8\'/4\' < 3 mi → 4 sheets, 9" o.c.', () {
+      final r = look('Gypsum', 55, field: "8'", perim: "4'", coast: 'Less than 3 miles');
+      expect(r.perimeterSheets, 4);
+      expect(r.spacingIn, 9);
+    });
+    test('12\' sheets at 80 mph not listed → warning fallback 6"', () {
+      final r = look('Metal', 80, field: "12'");
+      expect(r.status, VersicoMaStatus.sheetWidthNotListed);
+      expect(r.spacingIn, 6);
+    });
+  });
+
+  test('QXO pack sizes by length', () {
+    expect(qxoFastenerPack('Versico HPV', 8), 500);
+    expect(qxoFastenerPack('Versico HPV', 6), 1000);
+    expect(qxoFastenerPack('Versico HPVX', 4), 1000);
+    expect(qxoFastenerPack('Versico HPVX', 5), 500);
+    expect(qxoFastenerPack('Versico MP 14-10', 14), 250);
+    expect(qxoFastenerPack('Versico CD-10', 4.25), kDefaultFastenerPack);
   });
 
   group('membrane rolls', () {
@@ -88,7 +167,8 @@ void main() {
         outsideCorners: 4,
         windZones: const WindZones(perimeterZoneWidth: 5, cornerZoneWidth: 5),
       );
-      final r = _calc(geometry: stale);
+      final r = _calc(geometry: stale,
+          membrane: const MembraneSystem(fieldAttachment: 'Fully Adhered'));
       final field = _item(r, 'tpo_membrane_field');
       expect(field.trace.baseQty, closeTo(8.1, 0.01));
     });
@@ -141,7 +221,7 @@ void main() {
       final one = _item(single, 'fastener_membrane');
       final both = agg.items.firstWhere((i) => i.name == one.name);
       expect(both.skuKey, 'fastener_membrane');
-      expect(both.unit, 'boxes');
+      expect(both.unit, 'cartons');
       expect(both.orderQty,
           (2 * one.trace.withWaste / one.trace.packageSize).ceil());
     });
@@ -225,8 +305,12 @@ void main() {
     test('seam LF includes perimeter half-sheet seams', () {
       final r = _calc(membrane: const MembraneSystem(seamType: 'Tape'));
       final tape = _item(r, 'tape_tpo_seam_3in');
-      // field: ceil(8,100/1,000)=9 rolls → 800 LF; perimeter: 1,900 sf ÷ 6' ≈ 316.7 LF
-      expect(tape.trace.baseQty * 100, closeTo(800 + 1900 / 6, 0.5));
+      // MA: 1 perimeter sheet band (6' − 5.5") around 400 LF
+      const perimNet = 6 - 5.5 / 12;
+      const perimArea = 400 * perimNet - 4 * perimNet * perimNet;
+      final fieldRolls = ((10000 - perimArea) / 1000).ceil();
+      expect(tape.trace.baseQty * 100,
+          closeTo((fieldRolls - 1) * 100 + perimArea / 6, 0.5));
     });
   });
 

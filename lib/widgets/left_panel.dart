@@ -23,6 +23,7 @@ import '../models/roof_geometry.dart';
 import '../models/drainage_zone.dart';
 import '../models/insulation_system.dart';
 import '../models/section_models.dart';
+import '../data/versico_ma_fastening.dart';
 import '../providers/estimator_providers.dart';
 import '../services/zip_lookup.dart';
 import '../services/firestore_service.dart';
@@ -913,6 +914,21 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       }),
       _sp8,
       _info('Warranty level affects fastening density and assembly requirements.'),
+      _sp12,
+      _dd('Wind Speed Warranty (Versico)', '${ref.watch(projectInfoProvider).windWarrantyMph} mph',
+          kVersicoWindWarrantyMph.map((m) => '$m mph').toList(), (v) {
+        if (v == null) return;
+        n.updateProjectInfo(ref.read(projectInfoProvider)
+            .copyWith(windWarrantyMph: int.parse(v.split(' ').first)));
+      }),
+      _sp12,
+      _dd('Distance from Coastline', ref.watch(projectInfoProvider).coastlineDistance,
+          kCoastlineDistances, (v) {
+        if (v == null) return;
+        n.updateProjectInfo(ref.read(projectInfoProvider).copyWith(coastlineDistance: v));
+      }),
+      _sp8,
+      _info('Versico MA tables: wind warranty, coastline distance, building height and deck set the perimeter sheets and seam fastener spacing.'),
     ]));
   }
 
@@ -1315,6 +1331,13 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         setState(() => _deckType = v!);
         n.updateDeckType(v!);
       }),
+      if (_deckType == 'Wood') ...[
+        _sp12,
+        _dd('Wood Deck Grade', ref.watch(systemSpecsProvider).woodDeckGrade, kWoodDeckGrades, (v) {
+          if (v == null) return;
+          n.updateSystemSpecs(ref.read(systemSpecsProvider).copyWith(woodDeckGrade: v));
+        }),
+      ],
       _sp12,
       _dd('VOC Compliance Region', _vocRegion, ['Standard', 'OTC (<250 gpl)', 'SCAQMD'], (v) {
         setState(() => _vocRegion = v!);

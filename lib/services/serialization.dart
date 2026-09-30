@@ -83,6 +83,8 @@ Map<String, dynamic> _projectInfoToJson(ProjectInfo p) => {
   'wasteMetal':     p.wasteMetal,
   'wasteAccessory': p.wasteAccessory,
   'vocRegion':      p.vocRegion,
+  'windWarrantyMph': p.windWarrantyMph,
+  'coastlineDistance': p.coastlineDistance,
 };
 
 ProjectInfo _projectInfoFromJson(Map j) => ProjectInfo(
@@ -101,6 +103,8 @@ ProjectInfo _projectInfoFromJson(Map j) => ProjectInfo(
   wasteMetal:     _d(j['wasteMetal'], 0.05),
   wasteAccessory: _d(j['wasteAccessory'], 0.05),
   vocRegion:      _s(j['vocRegion'], 'Standard'),
+  windWarrantyMph: _i(j['windWarrantyMph'], 55),
+  coastlineDistance: _s(j['coastlineDistance'], 'Greater than 7 miles'),
 );
 
 // ─── BUILDING STATE ───────────────────────────────────────────────────────────
@@ -265,6 +269,7 @@ Map<String, dynamic> _systemSpecsToJson(SystemSpecs s) => {
   'existingLayers':   s.existingLayers,
   'moistureScanRequired': s.moistureScanRequired,
   'sprayFoamThickness': s.sprayFoamThickness,
+  'woodDeckGrade':    s.woodDeckGrade,
 };
 
 SystemSpecs _systemSpecsFromJson(Map j) => SystemSpecs(
@@ -275,6 +280,7 @@ SystemSpecs _systemSpecsFromJson(Map j) => SystemSpecs(
   existingLayers:   _i(j['existingLayers'], 0),
   moistureScanRequired: j['moistureScanRequired'] as bool? ?? false,
   sprayFoamThickness: _d(j['sprayFoamThickness'], 0.0),
+  woodDeckGrade:    _s(j['woodDeckGrade'], '15/32" 5-Ply Plywood'),
 );
 
 // ─── INSULATION SYSTEM ────────────────────────────────────────────────────────

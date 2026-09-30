@@ -21,6 +21,7 @@ import '../models/building_state.dart';
 import '../models/roof_geometry.dart';
 import '../models/section_models.dart';
 import '../models/project_info.dart';
+import '../models/system_specs.dart';
 import '../providers/estimator_providers.dart';
 import '../services/bom_totals.dart';
 import '../providers/pricing_providers.dart';
@@ -1575,7 +1576,7 @@ class _FasteningScheduleTab extends ConsumerWidget {
                 Icons.grid_on, showWarning: !hasZones,
                 warning: hasZones ? null : 'Wind zone widths not set — enter building height to auto-calculate.'),
             const SizedBox(height: 4),
-            _fasteningTable(geo, membrane, isRhinobond, wAcc, info.warrantyYears, info.designWindSpeed),
+            _fasteningTable(geo, membrane, specs, info, isRhinobond, wAcc),
           ])),
           const SizedBox(height: 16),
         ],
@@ -1598,7 +1599,7 @@ class _FasteningScheduleTab extends ConsumerWidget {
         _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           _cardHeader('Insulation Attachment', Icons.view_in_ar),
           const SizedBox(height: 4),
-          _insAttachTable(insul, specs),
+          _insAttachTable(insul, specs, info.warrantyYears),
         ])),
         const SizedBox(height: 16),
 
@@ -1641,8 +1642,8 @@ class _FasteningScheduleTab extends ConsumerWidget {
     );
   }
 
-  Widget _fasteningTable(RoofGeometry geo, MembraneSystem membrane, bool rhinobond,
-      double wAcc, int warrantyYears, String? designWindSpeed) {
+  Widget _fasteningTable(RoofGeometry geo, MembraneSystem membrane,
+      SystemSpecs specs, ProjectInfo info, bool rhinobond, double wAcc) {
     // Re-derive zone areas from the current geometry (stored areas can be stale).
     final w = geo.windZones.perimeterZoneWidth;
     final zones = w > 0
@@ -1652,40 +1653,75 @@ class _FasteningScheduleTab extends ConsumerWidget {
             outsideCorners: geo.outsideCorners > 0 ? geo.outsideCorners : 4,
             zoneWidth: w)
         : geo.windZones;
+
+    // MA: Versico fastening table, shared with the BOM.
+    if (!rhinobond) {
+      final ma = BomCalculator.maFastenerSchedule(
+        totalArea: geo.totalArea,
+        totalPerimeter: geo.totalPerimeter,
+        outsideCorners: geo.outsideCorners,
+        membrane: membrane,
+        systemSpecs: specs,
+        projectInfo: info,
+        buildingHeightFt: geo.buildingHeight,
+      );
+      final hasData = geo.totalArea > 0;
+      final lk = ma.lookup;
+      int? qty(MaZoneFastening z) => hasData ? (z.fasteners * (1 + wAcc)).ceil() : null;
+      String dens(MaZoneFastening z) =>
+          z.area > 0 ? '${(z.fasteners / z.area).toStringAsFixed(3)}/sf' : '—';
+      String pat(MaZoneFastening z) =>
+          '${z.spacingIn.toInt()}" o.c. @ ${z.netSheetWidthFt.toStringAsFixed(1)}\'';
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(lk.isListed ? Icons.verified_outlined : Icons.warning_amber_rounded,
+                size: 14, color: lk.isListed ? AppTheme.textMuted : Colors.orange.shade700),
+            const SizedBox(width: 4),
+            Expanded(child: Text(lk.basis,
+                style: TextStyle(fontSize: 11,
+                    color: lk.isListed ? AppTheme.textSecondary : Colors.orange.shade700,
+                    fontWeight: FontWeight.w500))),
+          ]),
+        ),
+        Table(
+          border: TableBorder.all(color: AppTheme.border, borderRadius: BorderRadius.circular(7)),
+          columnWidths: const {0: FlexColumnWidth(2), 1: FlexColumnWidth(1.2),
+              2: FlexColumnWidth(1.2), 3: FlexColumnWidth(1.2), 4: FlexColumnWidth(1.2)},
+          children: [
+            TableRow(
+              decoration: BoxDecoration(color: AppTheme.surfaceAlt),
+              children: ['Zone', 'Area (sf)', 'Density', 'Pattern', 'Fasteners'].map(_th).toList(),
+            ),
+            _fRow('Field sheets', _nf(ma.field.area), dens(ma.field), pat(ma.field),
+                qty(ma.field), AppTheme.primary.withValues(alpha:0.05)),
+            _fRow('Perimeter sheets (${lk.perimeterSheets})', _nf(ma.perimeter.area),
+                dens(ma.perimeter), pat(ma.perimeter), qty(ma.perimeter),
+                AppTheme.primary.withValues(alpha:0.10)),
+          ],
+        ),
+      ]);
+    }
+
     final hasData = zones.fieldZoneArea + zones.perimeterZoneArea + zones.cornerZoneArea > 0;
 
-    // Apply wind speed adjustment — same logic as BOM calculator.
+    // Rhinobond: plate grid densities with wind adjustment, same as the BOM.
     // ≥90 mph: bump one warranty tier; ≥130 mph: bump two tiers.
-    final windMph = _parseWindMph(designWindSpeed);
+    final warrantyYears = info.warrantyYears;
+    final windMph = _parseWindMph(info.designWindSpeed);
     final effectiveWarranty = _windAdjustedWarranty(warrantyYears, windMph);
-
-    // MA: seam-row math shared with the BOM. Rhinobond: plate grid densities.
-    final ma = rhinobond ? null : BomCalculator.maFastenerSchedule(
-      fieldArea: zones.fieldZoneArea,
-      perimArea: zones.perimeterZoneArea,
-      cornerArea: zones.cornerZoneArea,
-      membrane: membrane,
-      warrantyYears: effectiveWarranty,
-    );
     final rb = _rbDensities(effectiveWarranty);
-    double density(MaZoneFastening? z, double rbDensity) =>
-        z == null ? rbDensity : (z.area > 0 ? z.fasteners / z.area : 0);
-    String pattern(MaZoneFastening? z, String rbPattern) => z == null
-        ? rbPattern
-        : '${z.spacingIn.toInt()}" o.c. @ ${z.netSheetWidthFt.toStringAsFixed(1)}\'';
-    int? qty(MaZoneFastening? z, double area, double rbDensity) => !hasData
-        ? null
-        : ((z?.fasteners ?? area * rbDensity) * (1 + wAcc)).ceil();
-
-    final fieldDensity  = density(ma?.field, rb.$1);
-    final perimDensity  = density(ma?.perimeter, rb.$2);
-    final cornerDensity = density(ma?.corner, rb.$3);
-    final fieldQty  = qty(ma?.field, zones.fieldZoneArea, rb.$1);
-    final perimQty  = qty(ma?.perimeter, zones.perimeterZoneArea, rb.$2);
-    final cornerQty = qty(ma?.corner, zones.cornerZoneArea, rb.$3);
+    final fieldDensity  = rb.$1;
+    final perimDensity  = rb.$2;
+    final cornerDensity = rb.$3;
+    int? qty(double area, double d) => hasData ? (area * d * (1 + wAcc)).ceil() : null;
+    final fieldQty  = qty(zones.fieldZoneArea, fieldDensity);
+    final perimQty  = qty(zones.perimeterZoneArea, perimDensity);
+    final cornerQty = qty(zones.cornerZoneArea, cornerDensity);
 
     final windNote = windMph >= 90
-        ? '  Wind ${windMph.toInt()} mph: using ${effectiveWarranty}-year ${rhinobond ? "densities" : "spacing"} (base ${warrantyYears}-year)'
+        ? '  Wind ${windMph.toInt()} mph: using ${effectiveWarranty}-year densities (base ${warrantyYears}-year)'
         : null;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1705,12 +1741,12 @@ class _FasteningScheduleTab extends ConsumerWidget {
         children: [
           TableRow(
             decoration: BoxDecoration(color: AppTheme.surfaceAlt),
-            children: ['Zone', 'Area (sf)', 'Density', 'Pattern', rhinobond ? 'Plates' : 'Fasteners']
+            children: ['Zone', 'Area (sf)', 'Density', 'Pattern', 'Plates']
                 .map(_th).toList(),
           ),
-          _fRow('Field',     _nf(zones.fieldZoneArea),     '${fieldDensity.toStringAsFixed(3)}/sf',  pattern(ma?.field, '24"x24"'), fieldQty,  AppTheme.primary.withValues(alpha:0.05)),
-          _fRow('Perimeter', _nf(zones.perimeterZoneArea), '${perimDensity.toStringAsFixed(3)}/sf',  pattern(ma?.perimeter, '12"x12"'), perimQty,  AppTheme.primary.withValues(alpha:0.10)),
-          _fRow('Corner',    _nf(zones.cornerZoneArea),    '${cornerDensity.toStringAsFixed(3)}/sf', pattern(ma?.corner, '8"x12"'),  cornerQty, AppTheme.primary.withValues(alpha:0.16)),
+          _fRow('Field',     _nf(zones.fieldZoneArea),     '${fieldDensity.toStringAsFixed(3)}/sf',  '24"x24"', fieldQty,  AppTheme.primary.withValues(alpha:0.05)),
+          _fRow('Perimeter', _nf(zones.perimeterZoneArea), '${perimDensity.toStringAsFixed(3)}/sf',  '12"x12"', perimQty,  AppTheme.primary.withValues(alpha:0.10)),
+          _fRow('Corner',    _nf(zones.cornerZoneArea),    '${cornerDensity.toStringAsFixed(3)}/sf', '8"x12"',  cornerQty, AppTheme.primary.withValues(alpha:0.16)),
         ],
       ),
     ]);
@@ -1775,7 +1811,8 @@ class _FasteningScheduleTab extends ConsumerWidget {
     );
   }
 
-  Widget _insAttachTable(insul, specs) {
+  Widget _insAttachTable(insul, specs, int warrantyYears) {
+    final perBoard = BomCalculator.insulationFastenersPerBoard(warrantyYears, specs.deckType);
     final rows = <Widget>[];
     void addRow(String layer, String method, String rate) {
       rows.add(Padding(
@@ -1822,13 +1859,13 @@ class _FasteningScheduleTab extends ConsumerWidget {
     addRow(
       'Layer 1 (${insul.layer1.type} ${l1t == l1t.truncateToDouble() ? l1t.toInt() : l1t}")',
       insul.layer1.attachmentMethod,
-      l1MA ? '4/board — ${fastLen(l1t)} ${_fastenerName(specs.deckType)}' : 'Full coverage',
+      l1MA ? '$perBoard/board — ${fastLen(l1t)} ${_fastenerName(specs.deckType)}' : 'Full coverage',
     );
     if (insul.numberOfLayers == 2 && insul.layer2 != null) {
       addRow(
         'Layer 2 (${insul.layer2!.type} ${l2t == l2t.truncateToDouble() ? l2t.toInt() : l2t}")',
         insul.layer2!.attachmentMethod,
-        l2MA ? '4/board — ${fastLen(l1t + l2t)} ${_fastenerName(specs.deckType)} (thru L1+L2)' : 'Full coverage',
+        l2MA ? '$perBoard/board — ${fastLen(l1t + l2t)} ${_fastenerName(specs.deckType)} (thru L1+L2)' : 'Full coverage',
       );
     }
     if (insul.hasCoverBoard && insul.coverBoard != null) {
@@ -1836,7 +1873,7 @@ class _FasteningScheduleTab extends ConsumerWidget {
       addRow(
         'Cover Board (${insul.coverBoard!.type} ${cbt2 == cbt2.truncateToDouble() ? cbt2.toInt() : cbt2}")',
         insul.coverBoard!.attachmentMethod,
-        cbMA ? '4/board — ${fastLen(l1t + l2t + cbt2)} ${_fastenerName(specs.deckType)} (full stack)' : 'Full coverage',
+        cbMA ? '$perBoard/board — ${fastLen(l1t + l2t + cbt2)} ${_fastenerName(specs.deckType)} (full stack)' : 'Full coverage',
       );
     }
     if (rows.isEmpty) {
@@ -1930,17 +1967,9 @@ class _FasteningScheduleTab extends ConsumerWidget {
     }
   }
 
-  static List<double> _fastenerLengthsIn(String deckType) {
-    switch (deckType) {
-      case 'Metal':       return [3.0, 4.5, 6.0, 7.5, 9.0, 10.5, 12.0];
-      case 'Wood':        return [2.5, 3.5, 4.5, 6.0, 8.0, 10.0, 12.0];
-      case 'Concrete':    return [2.25, 3.25, 4.25];
-      case 'LW Concrete': return [3.25, 4.25, 5.25];
-      case 'Gypsum':
-      case 'Tectum':      return [3.0, 4.0, 5.0, 6.0, 8.0, 10.0];
-      default:            return [3.0, 4.5, 6.0, 7.5, 9.0, 10.5, 12.0];
-    }
-  }
+  // Same QXO-stocked lengths the BOM selects from.
+  static List<double> _fastenerLengthsIn(String deckType) =>
+      BomCalculator.fastenerLengthsPublic(deckType);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3304,7 +3333,7 @@ class _SubInstructionsTabState extends ConsumerState<_SubInstructionsTab> {
     if (l1.attachmentMethod == 'Mechanically Attached') {
       final l1Len = BomCalculator.selectFastenerLenPublic(specs.deckType,
           BomCalculator.stackThicknessPublic(insul, 1));
-      insulText += 'Fastener: ${BomCalculator.fastenerNamePublic(specs.deckType)} $l1Len with 3" insulation plate, 4 per 4\'x8\' board. ';
+      insulText += 'Fastener: ${BomCalculator.fastenerNamePublic(specs.deckType)} $l1Len with 3" insulation plate, ${BomCalculator.insulationFastenersPerBoard(info.warrantyYears, specs.deckType)} per 4\'x8\' board. ';
     }
     if (insul.numberOfLayers == 2 && insul.layer2 != null) {
       final l2 = insul.layer2!;
@@ -3326,14 +3355,20 @@ class _SubInstructionsTabState extends ConsumerState<_SubInstructionsTab> {
     var memText = '';
     if (isMA) {
       memText = 'MECHANICALLY ATTACHED: Install ${membrane.thickness} ${membrane.membraneType} ${membrane.rollWidth}x100\' field rolls. ';
-      if (hasZones) {
-        final windMph = _parseWindMph(info.designWindSpeed);
-        final effW = _windAdjustedWarranty(info.warrantyYears, windMph);
-        final sp = BomCalculator.maSeamSpacingIn(effW);
+      if (geo.totalArea > 0) {
+        final ma = BomCalculator.maFastenerSchedule(
+          totalArea: geo.totalArea,
+          totalPerimeter: geo.totalPerimeter,
+          outsideCorners: geo.outsideCorners,
+          membrane: membrane,
+          systemSpecs: specs,
+          projectInfo: info,
+          buildingHeightFt: geo.buildingHeight,
+        );
         final perimRoll = membrane.perimeterRollWidth == 'None' ? membrane.rollWidth : membrane.perimeterRollWidth;
-        memText += 'Seam fastening (${effW}-year${effW != info.warrantyYears ? ", wind-adjusted" : ""}): '
-            'Field ${membrane.rollWidth} sheets ${sp.$1.toInt()}" o.c.; perimeter $perimRoll sheets ${sp.$2.toInt()}" o.c.; corners $perimRoll sheets ${sp.$3.toInt()}" o.c. '
-            'Zone width: ${zones.perimeterZoneWidth.toStringAsFixed(1)}\'. ';
+        memText += 'Install ${ma.lookup.perimeterSheets} perimeter sheet${ma.lookup.perimeterSheets == 1 ? '' : 's'} ($perimRoll) at all roof edges. '
+            'Fasten in the seam at ${ma.lookup.spacingIn.toInt()}" o.c. (field and perimeter sheets), 5-1/2" lap. '
+            '${ma.lookup.basis}. ';
       }
       final stackIn = BomCalculator.stackThicknessPublic(insul, 3);
       final memLen = BomCalculator.selectFastenerLenPublic(specs.deckType, stackIn);
