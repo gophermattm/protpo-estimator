@@ -560,6 +560,19 @@ class RoofGeometry {
   int get numberOfScuppers => scupperLocations.length;
   int get numberOfGutters => gutterLocations.length;
 
+  /// Total LF of gutter runs drawn on the roof plan (primary shape edges),
+  /// rounded to 0.1 ft.
+  double get drawnGutterLF {
+    if (shapes.isEmpty || gutterLocations.isEmpty) return 0.0;
+    final edges = shapes.first.edgeLengths;
+    double lf = 0.0;
+    for (final g in gutterLocations) {
+      if (g.edgeIndex >= edges.length) continue;
+      lf += edges[g.edgeIndex] * (g.end - g.start).abs();
+    }
+    return (lf * 10).round() / 10;
+  }
+
   /// True when any drain, scupper, or gutter is placed — the taper needs at
   /// least one low point to build a board schedule.
   bool get hasLowPoints =>

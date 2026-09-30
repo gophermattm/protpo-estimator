@@ -628,6 +628,15 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         });
       }
     });
+    // Gutter LF can change from the roof plan (drawn gutters) → refresh field
+    ref.listen<double>(
+      estimatorProvider.select((s) => s.activeBuilding.metalScope.gutterLF),
+      (prev, next) {
+        if ((double.tryParse(_cGutterLF.text) ?? 0) != next) {
+          _set(_cGutterLF, _nz(next));
+        }
+      },
+    );
     // Detect project load (new building id even at same index) → resync
     ref.listen<String>(
       estimatorProvider.select((s) => s.activeBuilding.id),

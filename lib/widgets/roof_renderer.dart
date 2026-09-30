@@ -100,6 +100,8 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
   /// What a tap near a roof edge places: a scupper (point) or a gutter (run
   /// along the whole edge).
   bool _gutterMode = false;
+  /// Gutter end handle being dragged: (gutter index, true = start handle).
+  (int, bool)? _gutterDrag;
   final TransformationController _xfCtrl = TransformationController();
   double _zoom = 1.0;
 
@@ -214,6 +216,8 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
               child: Stack(children: [
                 InteractiveViewer(
                   transformationController: _xfCtrl,
+                  // Freeze pan while a gutter end handle is being dragged
+                  panEnabled: _gutterDrag == null,
                   minScale: 0.5,
                   maxScale: 4.0,
                   onInteractionEnd: (d) =>
@@ -232,6 +236,7 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
                       lowFeatures: drainageLowFeatures(
                           geo, polygons.first.points),
                       showWatershed: showWatershed,
+                      showGutterHandles: _gutterMode,
                       panelSequence: panelSequence,
                       taperMinThickness: minThickness,
                       copingWidthFt: widget.copingWidthFt,
@@ -243,7 +248,32 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
                 Positioned.fill(
                   child: Listener(
                     behavior: HitTestBehavior.translucent,
+                    onPointerDown: (event) {
+                      if (!_gutterMode) return;
+                      final inv = Matrix4.inverted(_xfCtrl.value);
+                      final canvasPos =
+                          MatrixUtils.transformPoint(inv, event.localPosition);
+                      final hit = _gutterHandleAt(
+                          canvasPos, bounds, scale, labelPad, geo);
+                      if (hit != null) setState(() => _gutterDrag = hit);
+                    },
+                    onPointerMove: (event) {
+                      if (_gutterDrag == null) return;
+                      final inv = Matrix4.inverted(_xfCtrl.value);
+                      final canvasPos =
+                          MatrixUtils.transformPoint(inv, event.localPosition);
+                      _dragGutterHandle(
+                          canvasPos, bounds, scale, labelPad, geo);
+                    },
+                    onPointerCancel: (_) {
+                      if (_gutterDrag != null) setState(() => _gutterDrag = null);
+                    },
                     onPointerUp: (event) {
+                      if (_gutterDrag != null) {
+                        // End of a handle drag — not a tap
+                        setState(() => _gutterDrag = null);
+                        return;
+                      }
                       // Use pointer position directly in container coordinates,
                       // then apply inverse zoom/pan to get canvas coordinates.
                       final Matrix4 inv = Matrix4.inverted(_xfCtrl.value);
@@ -271,7 +301,7 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
               const SizedBox(width: 5),
               Expanded(child: Text(
                 'Tap inside the roof for internal drains. Tap near an edge to place a '
-                '${_gutterMode ? 'gutter along that edge' : 'scupper'} (switch with Edge tap above).',
+                '${_gutterMode ? 'gutter along that edge — drag its end dots to shorten the run' : 'scupper'} (switch with Edge tap above).',
                 style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
               )),
             ]),
@@ -384,6 +414,128 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
     if (!_computeBounds(primaryPoly).contains(Offset(roofX, roofY))) return;
     notifier.addDrain(DrainLocation(x: roofX, y: roofY));
     setState(() => _showDrainHint = false);
+  }
+
+  /// Gutter end handle under [canvasPos], if any: (gutter index, isStart).
+  (int, bool)? _gutterHandleAt(Offset canvasPos, Rect bounds, double scale,
+      double labelPad, RoofGeometry geo) {
+    final poly = _buildPolygon(geo.shapes.first);
+    if (poly == null) return null;
+    final roof = Offset((canvasPos.dx - labelPad) / scale + bounds.left,
+        (canvasPos.dy - labelPad) / scale + bounds.top);
+    // ~14 screen px grab radius, independent of zoom level
+    final grab = 14.0 / (scale * _zoom);
+    (int, bool)? best;
+    double bestDist = grab;
+    for (int i = 0; i < geo.gutterLocations.length; i++) {
+      final g = geo.gutterLocations[i];
+      if (g.edgeIndex >= poly.length) continue;
+      final a = poly[g.edgeIndex];
+      final b = poly[(g.edgeIndex + 1) % poly.length];
+      for (final (t, isStart) in [(g.start, true), (g.end, false)]) {
+        final p = Offset(a.dx + (b.dx - a.dx) * t, a.dy + (b.dy - a.dy) * t);
+        final d = (p - roof).distance;
+        if (d < bestDist) {
+          bestDist = d;
+          best = (i, isStart);
+        }
+      }
+    }
+    return best;
+  }
+
+  /// Moves the dragged gutter end along its edge, snapped to whole feet and
+  /// kept at least 1 ft from the other end.
+  void _dragGutterHandle(Offset canvasPos, Rect bounds, double scale,
+      double labelPad, RoofGeometry geo) {
+    final (idx, isStart) = _gutterDrag!;
+    if (idx >= geo.gutterLocations.length) return;
+    final poly = _buildPolygon(geo.shapes.first);
+    if (poly == null) return;
+    final g = geo.gutterLocations[idx];
+    if (g.edgeIndex >= poly.length) return;
+    final a = poly[g.edgeIndex];
+    final b = poly[(g.edgeIndex + 1) % poly.length];
+    final edgeLen = (b - a).distance;
+    if (edgeLen < 1) return;
+    final roof = Offset((canvasPos.dx - labelPad) / scale + bounds.left,
+        (canvasPos.dy - labelPad) / scale + bounds.top);
+    final (_, rawT) = _pointToSegment(roof, a, b);
+    final minGap = 1.0 / edgeLen;
+    var t = (rawT * edgeLen).roundToDouble() / edgeLen;
+    t = isStart
+        ? t.clamp(0.0, g.end - minGap)
+        : t.clamp(g.start + minGap, 1.0);
+    final next = isStart ? g.copyWith(start: t) : g.copyWith(end: t);
+    if (next != g) {
+      ref.read(estimatorProvider.notifier).updateGutter(idx, next);
+    }
+  }
+
+  /// Dialog to set a gutter's run precisely, in feet from the edge start.
+  Future<void> _editGutterRun(int index, RoofGeometry geo) async {
+    final g = geo.gutterLocations[index];
+    final edges = geo.shapes.first.edgeLengths;
+    if (g.edgeIndex >= edges.length) return;
+    final edgeLen = edges[g.edgeIndex];
+    String fmt(double v) =>
+        v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+    final fromCtl = TextEditingController(text: fmt(g.start * edgeLen));
+    final toCtl = TextEditingController(text: fmt(g.end * edgeLen));
+    final result = await showDialog<GutterLocation>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Gutter ${index + 1} — edge ${g.edgeIndex + 1}'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('Edge length ${fmt(edgeLen)} ft. Measure from the edge start '
+              '(0) toward its end.',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(child: TextField(
+              controller: fromCtl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'From (ft)'),
+            )),
+            const SizedBox(width: 12),
+            Expanded(child: TextField(
+              controller: toCtl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'To (ft)'),
+            )),
+          ]),
+        ]),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx,
+                g.copyWith(start: 0.0, end: 1.0)),
+            child: const Text('Full edge'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final from = (double.tryParse(fromCtl.text) ?? 0)
+                  .clamp(0.0, edgeLen);
+              final to = (double.tryParse(toCtl.text) ?? edgeLen)
+                  .clamp(0.0, edgeLen);
+              if ((to - from).abs() < 1) return; // need at least 1 ft
+              final lo = min(from, to), hi = max(from, to);
+              Navigator.pop(ctx,
+                  g.copyWith(start: lo / edgeLen, end: hi / edgeLen));
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    fromCtl.dispose();
+    toCtl.dispose();
+    if (result != null && result != g) {
+      ref.read(estimatorProvider.notifier).updateGutter(index, result);
+    }
   }
 
   /// Returns (distance from point to segment, parameter t where 0=a, 1=b).
@@ -539,9 +691,16 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(Icons.horizontal_rule, size: 12, color: _kGutterColor),
             const SizedBox(width: 4),
-            Text('Gutter ${i + 1} (edge ${geo.gutterLocations[i].edgeIndex + 1})',
-                style: TextStyle(fontSize: 11, color: _kGutterColor,
-                    fontWeight: FontWeight.w600)),
+            GestureDetector(
+              onTap: () => _editGutterRun(i, geo),
+              child: Text(
+                  'Gutter ${i + 1} (edge ${geo.gutterLocations[i].edgeIndex + 1}'
+                  '${_gutterRunLF(geo, i)})',
+                  style: TextStyle(fontSize: 11, color: _kGutterColor,
+                      fontWeight: FontWeight.w600,
+                      decoration: TextDecoration.underline,
+                      decorationColor: _kGutterColor.withValues(alpha: 0.5))),
+            ),
             const SizedBox(width: 6),
             GestureDetector(
               onTap: () => ref.read(estimatorProvider.notifier).removeGutter(i),
@@ -551,6 +710,14 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
         ),
     ],
   );
+
+  String _gutterRunLF(RoofGeometry geo, int i) {
+    final g = geo.gutterLocations[i];
+    final edges = geo.shapes.first.edgeLengths;
+    if (g.edgeIndex >= edges.length) return '';
+    final lf = edges[g.edgeIndex] * (g.end - g.start).abs();
+    return ', ${lf.toStringAsFixed(0)} LF';
+  }
 
   Widget _zoneSummary(RoofGeometry geo) {
     final z = geo.windZones;
@@ -604,6 +771,7 @@ class _RoofPainter extends CustomPainter {
   /// Drains, scuppers, then gutters — same order as the watershed zones.
   final List<LowFeature>    lowFeatures;
   final bool                showWatershed;
+  final bool                showGutterHandles;
   final PanelSequence?      panelSequence;
   final double              taperMinThickness;
   final double              copingWidthFt;
@@ -620,6 +788,7 @@ class _RoofPainter extends CustomPainter {
     this.gutters = const [],
     this.lowFeatures = const [],
     this.showWatershed = false,
+    this.showGutterHandles = false,
     this.panelSequence,
     this.taperMinThickness = 1.0,
     this.copingWidthFt = 0.0,
@@ -1165,6 +1334,20 @@ class _RoofPainter extends CustomPainter {
       final mid = Offset((so.dx + eo.dx) / 2 + nx * 14, (so.dy + eo.dy) / 2 + ny * 14);
       _drawText(canvas, 'G${i + 1}', mid,
           color: _kGutterColor, fontSize: 9, bold: true);
+
+      // Drag handles on the edge itself (gutter placement mode only)
+      if (showGutterHandles) {
+        for (final p in [s, e]) {
+          canvas.drawCircle(p, 6, Paint()..color = Colors.white);
+          canvas.drawCircle(
+              p,
+              6,
+              Paint()
+                ..color = _kGutterColor
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = 2.5);
+        }
+      }
     }
   }
 
@@ -1304,6 +1487,7 @@ class _RoofPainter extends CustomPainter {
       drains            != old.drains    ||
       scuppers          != old.scuppers  ||
       gutters           != old.gutters   ||
+      showGutterHandles != old.showGutterHandles ||
       showWatershed     != old.showWatershed ||
       lowFeatures.length != old.lowFeatures.length ||
       panelSequence     != old.panelSequence ||

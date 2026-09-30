@@ -319,7 +319,23 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
   // ── Internal helper: update active building ────────────────────────────────
 
   void _updateActive(BuildingState Function(BuildingState) updater) {
-    state = state.withActiveBuilding(updater(state.activeBuilding));
+    final before = state.activeBuilding;
+    var after = updater(before);
+    after = _syncGutterLF(before, after);
+    state = state.withActiveBuilding(after);
+  }
+
+  /// Keeps Metal Scope gutter LF in step with gutters drawn on the roof plan.
+  /// Only fills the field while it is empty or still equals the previous drawn
+  /// total — a number the user typed in is never overwritten.
+  static BuildingState _syncGutterLF(BuildingState before, BuildingState after) {
+    final oldDrawn = before.roofGeometry.drawnGutterLF;
+    final newDrawn = after.roofGeometry.drawnGutterLF;
+    if (oldDrawn == newDrawn) return after;
+    final current = after.metalScope.gutterLF;
+    if (current != 0 && (current - oldDrawn).abs() > 0.05) return after;
+    return after.copyWith(
+        metalScope: after.metalScope.copyWith(gutterLF: newDrawn));
   }
 
   // ── Project Info (project-level, not per-building) ─────────────────────────
@@ -471,6 +487,18 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
         state.activeBuilding.roofGeometry.gutterLocations);
     if (gutters.any((g) => g.edgeIndex == location.edgeIndex)) return;
     gutters.add(location);
+    _updateActive(
+      (b) => b.copyWith(
+          roofGeometry: b.roofGeometry.copyWith(gutterLocations: gutters)),
+    );
+  }
+
+  /// Replaces gutter [index] — used to trim a run to part of its edge.
+  void updateGutter(int index, GutterLocation location) {
+    final gutters = List<GutterLocation>.from(
+        state.activeBuilding.roofGeometry.gutterLocations);
+    if (index < 0 || index >= gutters.length) return;
+    gutters[index] = location;
     _updateActive(
       (b) => b.copyWith(
           roofGeometry: b.roofGeometry.copyWith(gutterLocations: gutters)),

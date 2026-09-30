@@ -162,6 +162,65 @@ void main() {
     });
   });
 
+  group('Metal Scope gutter LF follows drawn gutters', () {
+    ProviderContainer setup() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      c.read(estimatorProvider.notifier).updateRoofGeometry(rectGeo());
+      return c;
+    }
+
+    double gutterLF(ProviderContainer c) =>
+        c.read(estimatorProvider).activeBuilding.metalScope.gutterLF;
+
+    test('empty field fills from drawn runs and tracks edits', () {
+      final c = setup();
+      final n = c.read(estimatorProvider.notifier);
+      n.addGutter(const GutterLocation(edgeIndex: 0)); // 100 ft
+      expect(gutterLF(c), 100);
+      n.addGutter(const GutterLocation(edgeIndex: 1)); // + 50 ft
+      expect(gutterLF(c), 150);
+      n.updateGutter(0, const GutterLocation(edgeIndex: 0, start: 0.25, end: 0.75));
+      expect(gutterLF(c), 100); // 50 + 50
+      n.removeGutter(1);
+      n.removeGutter(0);
+      expect(gutterLF(c), 0);
+    });
+
+    test('a typed-in gutter LF is never overwritten', () {
+      final c = setup();
+      final n = c.read(estimatorProvider.notifier);
+      n.updateGutterLF(240);
+      n.addGutter(const GutterLocation(edgeIndex: 0));
+      expect(gutterLF(c), 240);
+      n.removeGutter(0);
+      expect(gutterLF(c), 240);
+    });
+
+    test('user edit after auto-fill stops syncing', () {
+      final c = setup();
+      final n = c.read(estimatorProvider.notifier);
+      n.addGutter(const GutterLocation(edgeIndex: 0));
+      n.updateGutterLF(120);
+      n.addGutter(const GutterLocation(edgeIndex: 2));
+      expect(gutterLF(c), 120);
+    });
+  });
+
+  test('partial gutter run shortens the drainage feature', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final n = c.read(estimatorProvider.notifier);
+    n.updateRoofGeometry(rectGeo(gutters: const [GutterLocation(edgeIndex: 0)]));
+    n.setTaperedEnabled(true);
+    final full = c.read(watershedZonesProvider).single.maxDistance;
+    n.updateGutter(0, const GutterLocation(edgeIndex: 0, start: 0.4, end: 0.6));
+    final partial = c.read(watershedZonesProvider).single.maxDistance;
+    expect(full, closeTo(50, 0.01));
+    // Far corner (0,-50) to run end (40,0): sqrt(40² + 50²) ≈ 64.0
+    expect(partial, closeTo(64.03, 0.1));
+  });
+
   test('RoofGeometry gutter round-trip; old JSON loads with none', () {
     final geo = rectGeo(
         gutters: const [GutterLocation(edgeIndex: 2, start: 0.1, end: 0.9)]);
