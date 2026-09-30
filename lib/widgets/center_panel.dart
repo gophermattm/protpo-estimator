@@ -18,6 +18,7 @@ import 'dart:convert';
 import '../theme/app_theme.dart';
 import 'ui_polish.dart';
 import '../models/building_state.dart';
+import '../models/roof_geometry.dart';
 import '../models/section_models.dart';
 import '../models/project_info.dart';
 import '../providers/estimator_providers.dart';
@@ -1574,7 +1575,7 @@ class _FasteningScheduleTab extends ConsumerWidget {
                 Icons.grid_on, showWarning: !hasZones,
                 warning: hasZones ? null : 'Wind zone widths not set — enter building height to auto-calculate.'),
             const SizedBox(height: 4),
-            _fasteningTable(geo, isRhinobond, wAcc, info.warrantyYears, info.designWindSpeed),
+            _fasteningTable(geo, membrane, isRhinobond, wAcc, info.warrantyYears, info.designWindSpeed),
           ])),
           const SizedBox(height: 16),
         ],
@@ -1640,29 +1641,51 @@ class _FasteningScheduleTab extends ConsumerWidget {
     );
   }
 
-  Widget _fasteningTable(geo, bool rhinobond, double wAcc, int warrantyYears, String? designWindSpeed) {
-    final zones = geo.windZones;
-    final hasData = zones.fieldZoneArea > 0;
+  Widget _fasteningTable(RoofGeometry geo, MembraneSystem membrane, bool rhinobond,
+      double wAcc, int warrantyYears, String? designWindSpeed) {
+    // Re-derive zone areas from the current geometry (stored areas can be stale).
+    final w = geo.windZones.perimeterZoneWidth;
+    final zones = w > 0
+        ? WindZones.fromDimensions(
+            totalArea: geo.totalArea,
+            totalPerimeter: geo.totalPerimeter,
+            outsideCorners: geo.outsideCorners > 0 ? geo.outsideCorners : 4,
+            zoneWidth: w)
+        : geo.windZones;
+    final hasData = zones.fieldZoneArea + zones.perimeterZoneArea + zones.cornerZoneArea > 0;
 
     // Apply wind speed adjustment — same logic as BOM calculator.
     // ≥90 mph: bump one warranty tier; ≥130 mph: bump two tiers.
     final windMph = _parseWindMph(designWindSpeed);
     final effectiveWarranty = _windAdjustedWarranty(warrantyYears, windMph);
 
-    // Fastening densities driven by effective warranty tier (wind-adjusted).
-    final densities     = rhinobond
-        ? _rbDensities(effectiveWarranty)
-        : _maDensities(effectiveWarranty);
-    final fieldDensity  = densities.$1;
-    final perimDensity  = densities.$2;
-    final cornerDensity = densities.$3;
+    // MA: seam-row math shared with the BOM. Rhinobond: plate grid densities.
+    final ma = rhinobond ? null : BomCalculator.maFastenerSchedule(
+      fieldArea: zones.fieldZoneArea,
+      perimArea: zones.perimeterZoneArea,
+      cornerArea: zones.cornerZoneArea,
+      membrane: membrane,
+      warrantyYears: effectiveWarranty,
+    );
+    final rb = _rbDensities(effectiveWarranty);
+    double density(MaZoneFastening? z, double rbDensity) =>
+        z == null ? rbDensity : (z.area > 0 ? z.fasteners / z.area : 0);
+    String pattern(MaZoneFastening? z, String rbPattern) => z == null
+        ? rbPattern
+        : '${z.spacingIn.toInt()}" o.c. @ ${z.netSheetWidthFt.toStringAsFixed(1)}\'';
+    int? qty(MaZoneFastening? z, double area, double rbDensity) => !hasData
+        ? null
+        : ((z?.fasteners ?? area * rbDensity) * (1 + wAcc)).ceil();
 
-    final fieldQty  = hasData ? (zones.fieldZoneArea  * fieldDensity  * (1 + wAcc)).ceil() : null;
-    final perimQty  = hasData ? (zones.perimeterZoneArea * perimDensity  * (1 + wAcc)).ceil() : null;
-    final cornerQty = hasData ? (zones.cornerZoneArea * cornerDensity * (1 + wAcc)).ceil() : null;
+    final fieldDensity  = density(ma?.field, rb.$1);
+    final perimDensity  = density(ma?.perimeter, rb.$2);
+    final cornerDensity = density(ma?.corner, rb.$3);
+    final fieldQty  = qty(ma?.field, zones.fieldZoneArea, rb.$1);
+    final perimQty  = qty(ma?.perimeter, zones.perimeterZoneArea, rb.$2);
+    final cornerQty = qty(ma?.corner, zones.cornerZoneArea, rb.$3);
 
     final windNote = windMph >= 90
-        ? '  Wind ${windMph.toInt()} mph: using ${effectiveWarranty}-year densities (base ${warrantyYears}-year)'
+        ? '  Wind ${windMph.toInt()} mph: using ${effectiveWarranty}-year ${rhinobond ? "densities" : "spacing"} (base ${warrantyYears}-year)'
         : null;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1685,9 +1708,9 @@ class _FasteningScheduleTab extends ConsumerWidget {
             children: ['Zone', 'Area (sf)', 'Density', 'Pattern', rhinobond ? 'Plates' : 'Fasteners']
                 .map(_th).toList(),
           ),
-          _fRow('Field',     _nf(zones.fieldZoneArea),     '${fieldDensity.toStringAsFixed(3)}/sf',  '24"x24"', fieldQty,  AppTheme.primary.withValues(alpha:0.05)),
-          _fRow('Perimeter', _nf(zones.perimeterZoneArea), '${perimDensity.toStringAsFixed(3)}/sf',  '12"x12"', perimQty,  AppTheme.primary.withValues(alpha:0.10)),
-          _fRow('Corner',    _nf(zones.cornerZoneArea),    '${cornerDensity.toStringAsFixed(3)}/sf', '8"x12"',  cornerQty, AppTheme.primary.withValues(alpha:0.16)),
+          _fRow('Field',     _nf(zones.fieldZoneArea),     '${fieldDensity.toStringAsFixed(3)}/sf',  pattern(ma?.field, '24"x24"'), fieldQty,  AppTheme.primary.withValues(alpha:0.05)),
+          _fRow('Perimeter', _nf(zones.perimeterZoneArea), '${perimDensity.toStringAsFixed(3)}/sf',  pattern(ma?.perimeter, '12"x12"'), perimQty,  AppTheme.primary.withValues(alpha:0.10)),
+          _fRow('Corner',    _nf(zones.cornerZoneArea),    '${cornerDensity.toStringAsFixed(3)}/sf', pattern(ma?.corner, '8"x12"'),  cornerQty, AppTheme.primary.withValues(alpha:0.16)),
         ],
       ),
     ]);
@@ -3306,16 +3329,17 @@ class _SubInstructionsTabState extends ConsumerState<_SubInstructionsTab> {
       if (hasZones) {
         final windMph = _parseWindMph(info.designWindSpeed);
         final effW = _windAdjustedWarranty(info.warrantyYears, windMph);
-        final d = _maDensities(effW);
-        memText += 'Fastening densities (${effW}-year${effW != info.warrantyYears ? ", wind-adjusted" : ""}): '
-            'Field ${d.$1.toStringAsFixed(2)}/SF, Perimeter ${d.$2.toStringAsFixed(2)}/SF, Corner ${d.$3.toStringAsFixed(2)}/SF. '
+        final sp = BomCalculator.maSeamSpacingIn(effW);
+        final perimRoll = membrane.perimeterRollWidth == 'None' ? membrane.rollWidth : membrane.perimeterRollWidth;
+        memText += 'Seam fastening (${effW}-year${effW != info.warrantyYears ? ", wind-adjusted" : ""}): '
+            'Field ${membrane.rollWidth} sheets ${sp.$1.toInt()}" o.c.; perimeter $perimRoll sheets ${sp.$2.toInt()}" o.c.; corners $perimRoll sheets ${sp.$3.toInt()}" o.c. '
             'Zone width: ${zones.perimeterZoneWidth.toStringAsFixed(1)}\'. ';
       }
       final stackIn = BomCalculator.stackThicknessPublic(insul, 3);
       final memLen = BomCalculator.selectFastenerLenPublic(specs.deckType, stackIn);
       memText += 'Membrane fastener: ${BomCalculator.fastenerNamePublic(specs.deckType)} $memLen (${stackIn.toStringAsFixed(1)}" stack to deck) with 3" stress plate. ';
     } else if (isFA) {
-      memText = 'FULLY ADHERED: Apply Cav-Grip III adhesive (~60 SF/gal) to substrate and membrane back. Roll into adhesive while tacky. ';
+      memText = 'FULLY ADHERED: Apply ${membrane.adhesiveType == 'CAV-GRIP 3V Spray' ? 'CAV-GRIP 3V spray (~2,000 SF/cyl)' : 'VersiWeld bonding adhesive (~60 SF/gal)'} to substrate and membrane back. Roll into adhesive while tacky. ';
     } else if (isRB) {
       memText = 'RHINOBOND: Install induction weld plates at specified density. Lay membrane and weld with induction equipment. No through-membrane fasteners. ';
     }
@@ -3328,8 +3352,7 @@ class _SubInstructionsTabState extends ConsumerState<_SubInstructionsTab> {
       map['parapet'] = '${parapet.parapetTotalLF.toStringAsFixed(0)} LF parapet walls, '
           '${parapet.parapetHeight.toStringAsFixed(0)}" height, ${parapet.wallType} construction. '
           '${isMA ? "Install RUSS strip (6\" wide) at wall/deck transition, fasten 12\" O.C. " : ""}'
-          'Adhere TPO flashing with CAV-Grip 3v spray (40lb cyl, ~400 SF/cyl). '
-          'Pair with UN-TACK cleaner (8lb cyl, 1:1). '
+          '${parapet.parapetAdhesiveType == 'CAV-GRIP 3V Spray' ? 'Adhere TPO flashing with CAV-Grip 3v spray (#40 cyl, ~2,000 SF/cyl). Pair with UN-TACK cleaner (1:1). ' : 'Adhere TPO flashing with VersiWeld bonding adhesive (5-gal pails, ~60 SF/gal, both surfaces). '}'
           'Extend from field membrane (min 4\" lap, welded) up wall to termination. '
           'Apply TPO primer at all pressure-sensitive transitions. '
           'Terminate with ${parapet.terminationType.toLowerCase()} at ${parapet.parapetHeight.toStringAsFixed(0)}" height. '
@@ -3672,17 +3695,6 @@ String _sanitizePdf(String v) => v
     .replaceAll(RegExp(r'[^\x00-\xFF]'), '');
 
 // ─── Fastening density helpers (mirrors bom_calculator — keep in sync) ────────
-
-(double, double, double) _maDensities(int warrantyYears) {
-  switch (warrantyYears) {
-    case 10: return (0.20, 0.40, 0.60);
-    case 15: return (0.25, 0.50, 0.75);
-    case 20: return (0.50, 1.00, 1.49);
-    case 25: return (0.75, 1.49, 2.00);
-    case 30: return (1.00, 2.00, 2.99);
-    default: return (0.50, 1.00, 1.49);
-  }
-}
 
 (double, double, double) _rbDensities(int warrantyYears) {
   switch (warrantyYears) {

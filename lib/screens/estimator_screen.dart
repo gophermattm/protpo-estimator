@@ -8,6 +8,8 @@
 ///   button at the end. Tapping a tab calls setActiveBuilding(index).
 ///   Double-tapping a tab name lets the user rename it inline.
 
+import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -47,7 +49,6 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
   int? _lastSavedState; // hashCode of EstimatorState at last save
   bool _isSaving = false;
   bool _saveSuccess = false;
-  bool _autoSaveDone = false; // true once first auto-draft saved
 
   @override
   void initState() {
@@ -78,28 +79,40 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
     }
   }
 
-  /// Called by ref.listen whenever state changes — triggers autosave
-  /// after first meaningful edit if a job estimate is active.
-  Future<void> _maybeAutosave(EstimatorState state) async {
-    if (!mounted || _autoSaveDone) return;
+  Timer? _autosaveTimer;
+  String? _lastAutosavedJson;
 
-    final hasActiveEst = ref.read(hasActiveEstimateProvider);
-    if (!hasActiveEst) return;
+  /// Debounced autosave: any change to the estimator inputs or the BOM/labor
+  /// overrides writes the active estimate 2 s after the last change. Replaces
+  /// the old one-shot draft save, which saved once and never again.
+  void _scheduleAutosave() {
+    _autosaveTimer?.cancel();
+    _autosaveTimer = Timer(const Duration(seconds: 2), _autosave);
+  }
 
+  Future<void> _autosave() async {
+    if (!mounted || _isSaving) return;
+    if (!ref.read(hasActiveEstimateProvider)) return;
+
+    final state = ref.read(estimatorProvider);
     final hasData = state.projectInfo.projectName.isNotEmpty ||
-        (state.buildings.isNotEmpty &&
-         state.buildings.first.roofGeometry.totalArea > 0);
+        state.buildings.any((b) => b.roofGeometry.totalArea > 0) ||
+        ref.read(bomLineEditsProvider).isNotEmpty ||
+        ref.read(bomManualItemsProvider).isNotEmpty;
     if (!hasData) return;
 
-    _autoSaveDone = true;
     try {
       final jobId = ref.read(activeJobIdProvider)!;
       final estId = ref.read(activeEstimateIdProvider)!;
       final estName = ref.read(activeEstimateNameProvider);
-      final serialized = stateToJson(state, estId);
+      final serialized = serializeEstimateState(ref, estId);
+
+      // Skip identical writes (savedAt changes every call, so compare without it).
+      final fingerprint = jsonEncode({...serialized, 'savedAt': null, '_est': '$jobId/$estId'});
+      if (fingerprint == _lastAutosavedJson) return;
+
       final totalArea = state.buildings
           .fold(0.0, (sum, b) => sum + b.roofGeometry.totalArea);
-
       final draft = Estimate(
         id: estId,
         name: estName,
@@ -109,6 +122,7 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
         buildingCount: state.buildings.length,
       );
       await FirestoreService.instance.updateEstimate(jobId, draft);
+      _lastAutosavedJson = fingerprint;
       if (mounted) {
         setState(() {
           _hasUnsavedChanges = false;
@@ -116,10 +130,15 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
         });
       }
     } catch (e) {
-      _autoSaveDone = false;
+      debugPrint('[AUTOSAVE] failed: $e');
     }
   }
 
+  @override
+  void dispose() {
+    _autosaveTimer?.cancel();
+    super.dispose();
+  }
 
   Future<void> _saveProject() async {
     if (_isSaving) return;
@@ -137,7 +156,7 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
       final estId = ref.read(activeEstimateIdProvider)!;
       final estName = ref.read(activeEstimateNameProvider);
       final state = ref.read(estimatorProvider);
-      final serialized = stateToJson(state, estId);
+      final serialized = serializeEstimateState(ref, estId);
 
       final totalArea = state.buildings
           .fold(0.0, (sum, b) => sum + b.roofGeometry.totalArea);
@@ -289,7 +308,7 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
 
     final state = ref.read(estimatorProvider);
     final estName = ref.read(activeEstimateNameProvider);
-    final serialized = stateToJson(state, estId);
+    final serialized = serializeEstimateState(ref, estId);
     final profile = ref.read(companyProfileProvider);
     final now = DateTime.now();
 
@@ -563,11 +582,16 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
       if (_lastSavedState != null && next.hashCode != _lastSavedState) {
         if (mounted && !_hasUnsavedChanges) setState(() => _hasUnsavedChanges = true);
       }
-      // Auto-save draft on first meaningful change
-      if (prev != next) {
-        _maybeAutosave(next);
-      }
+      if (prev != next) _scheduleAutosave();
     });
+    // BOM/labor overrides are saved with the estimate too.
+    ref.listen(bomLineEditsProvider, (_, __) => _scheduleAutosave());
+    ref.listen(bomDeletedItemsProvider, (_, __) => _scheduleAutosave());
+    ref.listen(bomManualItemsProvider, (_, __) => _scheduleAutosave());
+    ref.listen(itemMarginOverridesProvider, (_, __) => _scheduleAutosave());
+    ref.listen(laborLineEditsProvider, (_, __) => _scheduleAutosave());
+    ref.listen(laborDeletedItemsProvider, (_, __) => _scheduleAutosave());
+    ref.listen(laborManualItemsProvider, (_, __) => _scheduleAutosave());
 
     final isMobile = screenWidth <= 768;
     final screenHeight = MediaQuery.sizeOf(context).height;

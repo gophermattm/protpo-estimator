@@ -259,11 +259,11 @@ class _JobListSheetState extends ConsumerState<_JobListSheet> {
         },
       ));
 
-      ref.read(activeJobIdProvider.notifier).state = jobId;
-      ref.read(activeEstimateIdProvider.notifier).state = estId;
-      ref.read(activeJobNameProvider.notifier).state = jobData.jobName;
-      ref.read(activeCustomerNameProvider.notifier).state = customer.name;
-      ref.read(activeEstimateNameProvider.notifier).state = 'Initial Estimate';
+      // Start the editor blank for the new job. Only setting the IDs left the
+      // previous job's roof and BOM overrides in place under the new job.
+      loadEstimateIntoEditorRef(
+          ref, Estimate(id: estId, name: 'Initial Estimate'), jobId,
+          jobName: jobData.jobName, customerName: customer.name);
 
       await fs.saveLastSession(jobId: jobId, estimateId: estId);
 

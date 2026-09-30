@@ -7,6 +7,7 @@
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../models/estimator_state.dart';
+import '../models/roof_geometry.dart';
 import '../models/section_models.dart';
 import 'bom_calculator.dart';
 import 'r_value_calculator.dart';
@@ -43,8 +44,15 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
   final isRB = membrane.fieldAttachment == 'Rhinobond (Induction Welded)';
   final isFA = membrane.fieldAttachment == 'Fully Adhered';
   final area = geo.totalArea;
-  final zones = geo.windZones;
-  final hasZones = zones.perimeterZoneWidth > 0;
+  final hasZones = geo.windZones.perimeterZoneWidth > 0;
+  // Re-derive zone areas from the current geometry (stored areas can be stale).
+  final zones = hasZones
+      ? WindZones.fromDimensions(
+          totalArea: geo.totalArea,
+          totalPerimeter: geo.totalPerimeter,
+          outsideCorners: geo.outsideCorners > 0 ? geo.outsideCorners : 4,
+          zoneWidth: geo.windZones.perimeterZoneWidth)
+      : geo.windZones;
 
   final widgets = <pw.Widget>[];
 
@@ -142,11 +150,20 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
     if (hasZones) {
       final windMph = _parseWind(info.designWindSpeed);
       final effW = _windAdj(info.warrantyYears, windMph);
-      final d = _maDens(effW);
-      widgets.add(_subsection('Fastening Density Schedule (${effW}-year${effW != info.warrantyYears ? ", wind-adjusted from ${info.warrantyYears}-year" : ""}):'));
-      widgets.add(_bullet('Field Zone (${zones.fieldZoneArea.toStringAsFixed(0)} SF): ${d.$1.toStringAsFixed(2)}/SF'));
-      widgets.add(_bullet('Perimeter Zone (${zones.perimeterZoneArea.toStringAsFixed(0)} SF): ${d.$2.toStringAsFixed(2)}/SF'));
-      widgets.add(_bullet('Corner Zone (${zones.cornerZoneArea.toStringAsFixed(0)} SF): ${d.$3.toStringAsFixed(2)}/SF'));
+      final sched = BomCalculator.maFastenerSchedule(
+        fieldArea: zones.fieldZoneArea,
+        perimArea: zones.perimeterZoneArea,
+        cornerArea: zones.cornerZoneArea,
+        membrane: membrane,
+        warrantyYears: effW,
+      );
+      String zoneBullet(String label, MaZoneFastening z) =>
+          '$label (${z.area.toStringAsFixed(0)} SF): ${z.spacingIn.toInt()}" o.c. in seams, '
+          '${(z.netSheetWidthFt + BomCalculator.maSeamLapFt).toStringAsFixed(0)}\' sheets — ~${z.fasteners.ceil()} fasteners';
+      widgets.add(_subsection('Seam Fastening Schedule (${effW}-year${effW != info.warrantyYears ? ", wind-adjusted from ${info.warrantyYears}-year" : ""}):'));
+      widgets.add(_bullet(zoneBullet('Field Zone', sched.field)));
+      widgets.add(_bullet(zoneBullet('Perimeter Zone', sched.perimeter)));
+      widgets.add(_bullet(zoneBullet('Corner Zone', sched.corner)));
       widgets.add(_bullet('Zone width: ${zones.perimeterZoneWidth.toStringAsFixed(1)}\''));
     }
 
@@ -163,8 +180,8 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
     ));
   } else if (isFA) {
     widgets.add(_body(
-      'FULLY ADHERED: Apply bonding adhesive (Cav-Grip III) to both deck/insulation surface '
-      'and membrane back at ~60 SF/gallon per finished surface. Roll membrane into adhesive '
+      'FULLY ADHERED: Apply bonding adhesive (${membrane.adhesiveType == 'CAV-GRIP 3V Spray' ? 'CAV-GRIP 3V spray, ~2,000 SF/cylinder' : 'VersiWeld, ~60 SF/gallon'}) to both deck/insulation surface '
+      'and membrane back. Roll membrane into adhesive '
       'while tacky. All field seams hot-air welded minimum 1.5" width.'
     ));
   }
@@ -186,8 +203,12 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
     if (isMA) {
       widgets.add(_bullet('Install RUSS strip (6" wide) at wall/deck transition, fasten at 12" O.C.'));
     }
-    widgets.add(_bullet('Adhere TPO flashing to wall face using CAV-Grip 3v spray adhesive (40lb cylinder, ~400 SF/cyl)'));
-    widgets.add(_bullet('Pair with UN-TACK cleaner/remover (8lb cylinder, 1:1 with CAV-Grip)'));
+    if (parapet.parapetAdhesiveType == 'CAV-GRIP 3V Spray') {
+      widgets.add(_bullet('Adhere TPO flashing to wall face using CAV-Grip 3v spray adhesive (#40 cylinder, ~2,000 SF/cyl)'));
+      widgets.add(_bullet('Pair with UN-TACK cleaner/remover (1:1 with CAV-Grip)'));
+    } else {
+      widgets.add(_bullet('Adhere TPO flashing to wall face with VersiWeld bonding adhesive (5-gal pails, ~60 SF/gal, both surfaces)'));
+    }
     widgets.add(_bullet('Extend flashing from field membrane (min 4" base lap, welded) up wall to termination'));
     widgets.add(_bullet('Apply TPO primer before any pressure-sensitive products at base transition'));
     widgets.add(_bullet('Terminate with ${parapet.terminationType.toLowerCase()} at ${parapet.parapetHeight.toStringAsFixed(0)}" height'));
@@ -446,15 +467,4 @@ int _windAdj(int wy, double mph) {
   if (mph >= 130) i = (i + 2).clamp(0, t.length - 1);
   else if (mph >= 90) i = (i + 1).clamp(0, t.length - 1);
   return t[i];
-}
-
-(double, double, double) _maDens(int wy) {
-  switch (wy) {
-    case 10: return (0.20, 0.40, 0.60);
-    case 15: return (0.25, 0.50, 0.75);
-    case 20: return (0.50, 1.00, 1.49);
-    case 25: return (0.75, 1.49, 2.00);
-    case 30: return (1.00, 2.00, 2.99);
-    default: return (0.50, 1.00, 1.49);
-  }
 }

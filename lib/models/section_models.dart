@@ -27,8 +27,13 @@ const String kPerimeterRollWidth = "6'";
 
 const List<String> kSeamTypes = ['Hot Air Welded', 'Tape'];
 
+/// VersiWeld bonding adhesive ordered only in 5-gal pails (no 15-gal
+/// cylinders) — the pail alternative to CAV-GRIP spray.
+const String kAdhesiveVersiWeldPails = 'VersiWeld TPO Bonding Adhesive — 5 Gal Pails';
+
 const List<String> kAdhesiveTypes = [
   'VersiWeld TPO Bonding Adhesive',
+  kAdhesiveVersiWeldPails,
   'CAV-GRIP 3V Spray',
 ];
 const List<String> kPrimerTypes = [

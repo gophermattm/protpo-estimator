@@ -1648,7 +1648,8 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     final n = ref.read(estimatorProvider.notifier);
     void pushMem() => n.updateMembraneSystem(MembraneSystem(
         membraneType: _memType, thickness: _memThickness, color: _memColor,
-        fieldAttachment: _fieldAttach, rollWidth: _rollWidth, seamType: _seamType,
+        fieldAttachment: _fieldAttach, rollWidth: _rollWidth,
+        perimeterRollWidth: _perimRollWidth, seamType: _seamType,
         adhesiveType: _adhesiveType, primerType: _primerType));
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

@@ -150,9 +150,22 @@ class BomCalculator {
     final taperMaxIn = boardSchedule?.maxThicknessAtRidge ?? 0.0;
 
     final totalArea      = geometry.totalArea;
-    final fieldArea      = geometry.windZones.fieldZoneArea;
-    final perimArea      = geometry.windZones.perimeterZoneArea;
-    final cornerArea     = geometry.windZones.cornerZoneArea;
+    // Zone areas are re-derived from the current geometry. The stored areas
+    // are a snapshot taken when the zone width was last pushed; if that
+    // happened before the roof dimensions were entered (or a shape was
+    // removed / re-typed afterwards) they are stale — e.g. field area 0,
+    // which dropped the field membrane rolls entirely.
+    final zoneWidth      = geometry.windZones.perimeterZoneWidth;
+    final zones          = zoneWidth > 0
+        ? WindZones.fromDimensions(
+            totalArea: totalArea,
+            totalPerimeter: geometry.totalPerimeter,
+            outsideCorners: geometry.outsideCorners > 0 ? geometry.outsideCorners : 4,
+            zoneWidth: zoneWidth)
+        : geometry.windZones;
+    final fieldArea      = zones.fieldZoneArea;
+    final perimArea      = zones.perimeterZoneArea;
+    final cornerArea     = zones.cornerZoneArea;
     // TPO area for parapet walls — the VERTICAL WALL FACE only.
     // The deck-side overlap is already covered by the perimeter zone membrane.
     // The top is covered by coping metal. The flashing strip only needs to go
@@ -208,6 +221,14 @@ class BomCalculator {
     final effectiveFieldArea  = hasZones ? fieldArea  : totalArea;
     final effectivePerimArea  = hasZones ? perimArea  : 0.0;
     final effectiveCornerArea = hasZones ? cornerArea : 0.0;
+    // Perimeter/corner zones go on the narrower perimeter rolls. With the
+    // perimeter roll set to "None" those zones (and parapet flashing) are
+    // covered by field rolls —
+    // previously that area was dropped from the membrane count altogether.
+    final hasPerimRoll = membrane.perimeterRollWidth != 'None';
+    final fieldRollArea = hasPerimRoll
+        ? effectiveFieldArea
+        : effectiveFieldArea + effectivePerimArea + effectiveCornerArea + parapetTpoArea;
     // Flashing area = parapet + perimeter zone + corner zone (all use 6'×100' rolls)
     final flashingArea = parapetTpoArea + effectivePerimArea + effectiveCornerArea;
 
@@ -219,8 +240,8 @@ class BomCalculator {
     final flashRollCoverage = membrane.perimeterRollCoverage; // always 600 sf
 
     // 1a. Field rolls
-    if (effectiveFieldArea > 0) {
-      final base     = effectiveFieldArea / fieldRollCoverage;
+    if (fieldRollArea > 0) {
+      final base     = fieldRollArea / fieldRollCoverage;
       final withW    = base * (1 + wMat);
       final orderQty = withW.ceil().toDouble();
       items.add(BomLineItem(
@@ -237,14 +258,14 @@ class BomCalculator {
           'rollWidth':    membrane.rollWidth,
         },
         trace: BomTrace(
-          baseDescription: '${_sf(effectiveFieldArea)} ÷ ${fieldRollCoverage.toInt()} sf/roll',
+          baseDescription: '${_sf(fieldRollArea)} ÷ ${fieldRollCoverage.toInt()} sf/roll',
           baseQty: base,
           wastePercent: wMat,
           withWaste: withW,
           packageSize: 1,
           orderQty: orderQty,
           breakdown: [
-            'Field area:    ${_sf(effectiveFieldArea)}',
+            'Field area:    ${_sf(fieldRollArea)}',
             'Roll coverage: ${fieldRollCoverage.toInt()} sf/roll (${membrane.rollWidth}×100\')',
             'Base qty:      ${base.toStringAsFixed(2)} rolls',
             'Waste:         ${_pct(wMat)}%',
@@ -435,9 +456,11 @@ class BomCalculator {
             ));
           }
         } else {
-          // Fallback: placeholder when no board schedule (no drains placed)
+          // Fallback: placeholder when no board schedule (no drains placed).
+          // Tapered panels are 4'×4' (16 sf), not 4'×8'.
+          const taperPanelSf = 16.0;
           final taperArea = totalArea;
-          final base = taperArea / boardSf;
+          final base = taperArea / taperPanelSf;
           final withW = base * (1 + wMat);
           final orderQty = withW.ceil().toDouble();
           items.add(BomLineItem(
@@ -453,7 +476,7 @@ class BomCalculator {
               'profileType':  taper.profileType,
               'panelLetter':  'estimated',
             },
-            trace: _insTrace(taperArea, base, withW, orderQty, wMat, boardSf,
+            trace: _insTrace(taperArea, base, withW, orderQty, wMat, taperPanelSf,
                 'Tapered — Polyiso (estimated, no drains placed)'),
           ));
         }
@@ -499,21 +522,27 @@ class BomCalculator {
     }
 
     // ── MECHANICALLY ATTACHED (MA) ───────────────────────────────────────────
-    // Through-membrane fasteners + seam stress plates.
-    // Density driven by warranty tier per Versico MA tables.
-    // Wind speed ≥90 mph: bump to next warranty tier density.
-    // Wind speed ≥130 mph: bump two tiers (hurricane zone).
+    // Through-membrane fasteners + seam stress plates, one row per seam:
+    //   fasteners = zone area ÷ (net sheet width × spacing along the seam)
+    // Field zone uses the field roll; perimeter + corner zones use the
+    // perimeter (half) roll. Spacing comes from the warranty tier (see
+    // maSeamSpacingIn). The old flat per-sf densities (0.5–1.0/sf) implied a
+    // 1–2" seam spacing and over-ordered fasteners and plates ~6×.
     if (isMA && totalArea > 0) {
       final effectiveWarranty = _windAdjustedWarranty(projectInfo.warrantyYears, windSpeedMph);
-      final densities     = _fasteningDensities(effectiveWarranty);
-      final fieldDensity  = densities.$1;
-      final perimDensity  = densities.$2;
-      final cornerDensity = densities.$3;
-
-      final fieldFast  = (hasZones ? effectiveFieldArea  : totalArea) * fieldDensity;
-      final perimFast  = hasZones ? effectivePerimArea  * perimDensity  : 0.0;
-      final cornerFast = hasZones ? effectiveCornerArea * cornerDensity : 0.0;
+      final sched = maFastenerSchedule(
+        fieldArea:  hasZones ? effectiveFieldArea : totalArea,
+        perimArea:  effectivePerimArea,
+        cornerArea: effectiveCornerArea,
+        membrane:   membrane,
+        warrantyYears: effectiveWarranty,
+      );
+      final fieldFast  = sched.field.fasteners;
+      final perimFast  = sched.perimeter.fasteners;
+      final cornerFast = sched.corner.fasteners;
       final totalFast  = fieldFast + perimFast + cornerFast;
+      String zoneLine(String label, MaZoneFastening z) =>
+          '$label${_sf(z.area)} ÷ (${z.netSheetWidthFt.toStringAsFixed(1)}\' net sheet × ${z.spacingIn.toInt()}" o.c.) = ${z.fasteners.toStringAsFixed(0)}';
 
       const boxSize = 500.0;
       final withW    = totalFast * (1 + wAcc);
@@ -544,13 +573,14 @@ class BomCalculator {
           orderQty: orderQty,
           breakdown: [
             _fastenerBreakdown(systemSpecs.deckType, memStackIn, 'MA membrane fastener'),
+            if (effectiveWarranty != projectInfo.warrantyYears)
+              'Wind ${windSpeedMph.toInt()} mph: ${effectiveWarranty}-yr spacing (base ${projectInfo.warrantyYears}-yr)',
             if (hasZones) ...[
-              'Fastening: ${projectInfo.warrantyYears}-yr warranty → field ${fieldDensity.toStringAsFixed(2)}/sf, perim ${perimDensity.toStringAsFixed(2)}/sf, corner ${cornerDensity.toStringAsFixed(2)}/sf',
-              'Field zone:     ${_sf(effectiveFieldArea)} × ${fieldDensity.toStringAsFixed(2)}/sf = ${fieldFast.toStringAsFixed(0)}',
-              'Perimeter zone: ${_sf(effectivePerimArea)} × ${perimDensity.toStringAsFixed(2)}/sf = ${perimFast.toStringAsFixed(0)}',
-              'Corner zone:    ${_sf(effectiveCornerArea)} × ${cornerDensity.toStringAsFixed(2)}/sf = ${cornerFast.toStringAsFixed(0)}',
+              zoneLine('Field zone:     ', sched.field),
+              zoneLine('Perimeter zone: ', sched.perimeter),
+              zoneLine('Corner zone:    ', sched.corner),
             ] else
-              'Total area (no zones): ${_sf(totalArea)} × ${fieldDensity.toStringAsFixed(2)}/sf = ${fieldFast.toStringAsFixed(0)}',
+              zoneLine('Total area (no zones): ', sched.field),
             'Total fasteners: ${totalFast.toStringAsFixed(0)}',
             'Waste: ${_pct(wAcc)}%  →  With waste: ${withW.toStringAsFixed(0)}',
             'ORDER QTY: ${orderQty.toInt()} boxes (500/box)',
@@ -631,7 +661,7 @@ class BomCalculator {
           orderQty: rbPlateOrder,
           breakdown: [
             'Rhinobond plate grid (${projectInfo.warrantyYears}-yr warranty):',
-            '  Field density:   ${rbFieldDensity.toStringAsFixed(3)}/sf  (MA equiv: ${(_fasteningDensities(projectInfo.warrantyYears).$1).toStringAsFixed(2)}/sf)',
+            '  Field density:   ${rbFieldDensity.toStringAsFixed(3)}/sf',
             '  Perim density:   ${rbPerimDensity.toStringAsFixed(3)}/sf',
             '  Corner density:  ${rbCornerDensity.toStringAsFixed(3)}/sf',
             if (hasZones) ...[
@@ -689,7 +719,9 @@ class BomCalculator {
     // that layer down to the deck, capturing all layers below in the same pass.
     // Emitting fasteners for every MA layer independently double-attaches and
     // over-orders. When redundant MA flags are detected, a warning is added.
-    if (totalArea > 0) {
+    // Rhinobond: the Rhinobond plates + their fasteners are the only
+    // attachment — no separate insulation fasteners or 3" plates.
+    if (totalArea > 0 && !isRhinobond) {
       final l1MA = insulation.numberOfLayers >= 1 &&
           insulation.layer1.attachmentMethod == 'Mechanically Attached';
       final l2MA = insulation.numberOfLayers == 2 &&
@@ -873,7 +905,10 @@ class BomCalculator {
         taperStackIn += taperThickForLen;
         final taperLen  = _selectFastenerLen(systemSpecs.deckType, taperStackIn) +
             (taperEstimated ? ' (est.)' : '');
-        final taperSF   = boardSchedule?.totalTaperedSF ?? totalArea;
+        // An empty schedule (rate 0, no drain distance) reports 0 tapered SF;
+        // treat it like "no schedule" or the roof gets no insulation fasteners.
+        final schedSF   = boardSchedule?.totalTaperedSF ?? 0.0;
+        final taperSF   = schedSF > 0 ? schedSF : totalArea;
         final base      = taperSF * insDensity;
         final withW     = base * (1 + wAcc);
         final orderQty  = (withW / insBoxSize).ceil().toDouble();
@@ -1034,8 +1069,9 @@ class BomCalculator {
       final isSprayAdhesive = membrane.adhesiveType == 'CAV-GRIP 3V Spray';
 
       if (isSprayAdhesive) {
-        // CAV-GRIP 3V spray: ~400 sf per #40 cylinder
-        const coveragePerCyl = 400.0;
+        // CAV-GRIP 3V spray: ~2,000 sf per #40 cylinder. [Unverified] Midpoint
+        // of the ~1,500–2,500 sf published range; 400 sf over-ordered ~5×.
+        const coveragePerCyl = 2000.0;
         final cylBase = adheredMembraneArea / coveragePerCyl;
         final cylWithW = cylBase * (1 + wAcc);
         final cylOrder = cylWithW.ceil().toDouble();
@@ -1046,9 +1082,9 @@ class BomCalculator {
           attributes: {'voc': projectInfo.vocRegion, 'application': 'field'},
           orderQty: cylOrder,
           unit: 'cylinders',
-          notes: '#40 cylinder, ~400 sf/cyl — spray application, field membrane only',
+          notes: '#40 cylinder, ~${coveragePerCyl.toInt()} sf/cyl — spray application, field membrane only',
           trace: BomTrace(
-            baseDescription: '${_sf(adheredMembraneArea)} ÷ 400 sf/cyl',
+            baseDescription: '${_sf(adheredMembraneArea)} ÷ ${coveragePerCyl.toInt()} sf/cyl',
             baseQty: cylBase,
             wastePercent: wAcc,
             withWaste: cylWithW,
@@ -1056,7 +1092,7 @@ class BomCalculator {
             orderQty: cylOrder,
             breakdown: [
               'FA membrane area: ${_sf(adheredMembraneArea)}',
-              'Coverage rate: ~400 sf per #40 cylinder',
+              'Coverage rate: ~${coveragePerCyl.toInt()} sf per #40 cylinder',
               'Base: ${cylBase.toStringAsFixed(2)} cylinders',
               'Waste: ${_pct(wAcc)}%',
               'ORDER QTY: ${cylOrder.toInt()} cylinders',
@@ -1096,7 +1132,14 @@ class BomCalculator {
         final String unit;
         final String notes;
         final double packageGal;
-        if (adheredMembraneArea < 120) {
+        final forcePails = membrane.adhesiveType == kAdhesiveVersiWeldPails;
+        if (forcePails) {
+          // User chose 5-gal pails (brush/roller) instead of cylinders.
+          productName = 'VersiWeld TPO Bonding Adhesive$vocSuffix — 5 Gal Pail';
+          unit = 'pails';
+          notes = '5-gal pail, ~60 sf/gal — field membrane only';
+          packageGal = 5.0;
+        } else if (adheredMembraneArea < 120) {
           productName = 'VersiWeld TPO Bonding Adhesive$vocSuffix — 1 Gal';
           unit = 'cans';
           notes = '1-gal, ~60 sf/gal — small area brush/roller application';
@@ -1135,7 +1178,9 @@ class BomCalculator {
               'Base gallons:  ${base.toStringAsFixed(1)}',
               'Waste:         ${_pct(wAcc)}%',
               'With waste:    ${withW.toStringAsFixed(1)} gal',
-              'Auto-selected: ${packageGal.toInt()}-gal $unit (${_sf(adheredMembraneArea)} adhered membrane)',
+              forcePails
+                  ? 'Package: 5-gal pails (selected)'
+                  : 'Auto-selected: ${packageGal.toInt()}-gal $unit (${_sf(adheredMembraneArea)} adhered membrane)',
               'ORDER QTY:     ${orderQty.toInt()} $unit',
             ],
           ),
@@ -1193,8 +1238,9 @@ class BomCalculator {
       if (skipParapetAdhesive) {
         warnings.add('Parapet adhesive omitted — wall height ${parapetHeightIn.toInt()}" per Versico spec (no adhesive required for short walls with ${parapet.terminationType.toLowerCase()}).');
       } else if (parapet.parapetAdhesiveType == 'CAV-GRIP 3V Spray') {
-        // CAV-GRIP 3V Low-VOC: ~400 sf per #40 cylinder (double-sided vertical spray)
-        const cavGripCoverage = 400.0;
+        // CAV-GRIP 3V Low-VOC: ~2,000 sf per #40 cylinder [Unverified] — same
+        // coverage basis as the field spray line.
+        const cavGripCoverage = 2000.0;
         final cavBase      = parapetTpoArea / cavGripCoverage;
         final cavWithW     = cavBase * (1 + wAcc);
         final cavOrder     = cavWithW.ceil().toDouble();
@@ -1205,9 +1251,9 @@ class BomCalculator {
           attributes: {'voc': projectInfo.vocRegion, 'application': 'parapet'},
           orderQty: cavOrder,
           unit: 'cylinders',
-          notes: '#40 cylinder, ~400 sf/cyl — parapet walls',
+          notes: '#40 cylinder, ~${cavGripCoverage.toInt()} sf/cyl — parapet walls',
           trace: BomTrace(
-            baseDescription: '${_sf(parapetTpoArea)} ÷ 400 sf/cylinder',
+            baseDescription: '${_sf(parapetTpoArea)} ÷ ${cavGripCoverage.toInt()} sf/cylinder',
             baseQty: cavBase,
             wastePercent: wAcc,
             withWaste: cavWithW,
@@ -1216,7 +1262,7 @@ class BomCalculator {
             breakdown: [
               'Parapet TPO area: ${_sf(parapetTpoArea)}',
               '  Wall: ${parapetHeightFt.toStringAsFixed(1)}\' + 4" base lap = ${parapetStripWidthFt.toStringAsFixed(2)}\' x ${_lf(parapet.parapetTotalLF)}',
-              'Coverage rate: 400 sf per #40 cylinder (double-sided spray)',
+              'Coverage rate: ${cavGripCoverage.toInt()} sf per #40 cylinder (double-sided spray)',
               'Base: ${cavBase.toStringAsFixed(2)} cylinders',
               'Waste: ${_pct(wAcc)}%',
               'ORDER QTY: ${cavOrder.toInt()} cylinders',
@@ -1283,10 +1329,24 @@ class BomCalculator {
       }
     }
 
-    // Field seam length — ONE estimate shared by cut-edge sealant, seam tape
-    // and membrane cleaner (eval F16): (fieldRolls − 1) shared seams × 100'.
-    final fieldRollsForSeam = (effectiveFieldArea / fieldRollCoverage).ceil();
-    final fieldSeamLF = _fieldSeamLF(effectiveFieldArea, fieldRollCoverage);
+    // Seam length — ONE estimate shared by cut-edge sealant, seam tape and
+    // membrane cleaner (eval F16):
+    //   field sheets:     (fieldRolls − 1) shared seams × 100'
+    //   perimeter sheets: one lap seam per sheet run = zone area ÷ sheet width
+    // Perimeter/corner half-sheets used to be left out, halving seam LF on
+    // jobs with wide perimeter zones.
+    final fieldRollsForSeam = (fieldRollArea / fieldRollCoverage).ceil();
+    final fieldOnlySeamLF = _fieldSeamLF(fieldRollArea, fieldRollCoverage);
+    final perimSheetArea = hasPerimRoll ? effectivePerimArea + effectiveCornerArea : 0.0;
+    final perimSheetWidthFt = _rollWidthFt(membrane.perimeterRollWidth);
+    final perimSeamLF = perimSheetArea > 0 ? perimSheetArea / perimSheetWidthFt : 0.0;
+    final fieldSeamLF = fieldOnlySeamLF + perimSeamLF;
+    final seamBreakdown = <String>[
+      'Field seams: max(0, $fieldRollsForSeam − 1) × 100\' = ${fieldOnlySeamLF.toStringAsFixed(0)} LF',
+      if (perimSeamLF > 0)
+        'Perimeter sheet seams: ${_sf(perimSheetArea)} ÷ ${perimSheetWidthFt.toStringAsFixed(0)}\' = ${perimSeamLF.toStringAsFixed(0)} LF',
+      if (perimSeamLF > 0) 'Total seams: ${fieldSeamLF.toStringAsFixed(0)} LF',
+    ];
 
     // Cut-edge sealant — applied to membrane reinforcement at cut edges along field seams.
     // Plus a small detail allowance for penetration cuts.
@@ -1314,7 +1374,7 @@ class BomCalculator {
           packageSize: 1,
           orderQty: orderQty,
           breakdown: [
-            'Field seams: max(0, $fieldRollsForSeam − 1) × 100\' = ${fieldSeamLF.toStringAsFixed(0)} LF',
+            ...seamBreakdown,
             'Detail cuts: $drainCount drains × 4 LF = ${detailCutLF.toStringAsFixed(0)} LF',
             'Total cut edge LF: ${seamLF.toStringAsFixed(0)}',
             'Coverage: 250 LF/bottle',
@@ -1375,7 +1435,6 @@ class BomCalculator {
     // Versico seam tape: 3" wide pressure-sensitive, 100' rolls.
     // Corrected seam LF: (fieldRolls − 1) shared seams × 100' roll length.
     if (membrane.seamType == 'Tape' && totalArea > 0) {
-      final fieldRollsForTape = fieldRollsForSeam;
       final seamLFTape = fieldSeamLF;
       const tapeRollLF = 100.0;
       final tapeBase = seamLFTape / tapeRollLF;
@@ -1397,7 +1456,7 @@ class BomCalculator {
           packageSize: 1,
           orderQty: tapeOrder,
           breakdown: [
-            'Field seams: max(0, $fieldRollsForTape − 1) × 100\' = ${seamLFTape.toStringAsFixed(0)} LF',
+            ...seamBreakdown,
             'Roll length: 100\' per roll',
             'Waste: ${_pct(wAcc)}%',
             'ORDER QTY: ${tapeOrder.toInt()} rolls',
@@ -1614,10 +1673,12 @@ class BomCalculator {
     // ── Edge metal fasteners (eave / rake termination into deck) ─────────────
     // Edge metal (gravel stop, drip edge, ES-1) is fastened to the deck nailer
     // or directly into the deck at the roof edge — no insulation in the flange.
-    // Spacing: 12" o.c. per SMACNA standards.
-    final edgeMetalLF = metalScope.edgeMetalLF;
+    // Spacing: 4" o.c. (roof-edge flanges are fastened 3–4" o.c.; 12" was
+    // far too sparse). Roof edges only — wall flashing/counterflashing is
+    // fastened into the wall, not the roof-edge nailer.
+    final edgeMetalLF = metalScope.dripEdgeLF + metalScope.otherEdgeMetalLF;
     if (edgeMetalLF > 0 && hasDeckType) {
-      const edgeSpacingIn = 12.0; // 12" o.c. for edge metal
+      const edgeSpacingIn = 4.0;
       // Edge metal fastener goes through metal flange only (~0" insulation at edge)
       final edgeFastLen   = _selectFastenerLen(systemSpecs.deckType, 0);
       final edgeFastName  = _fastenerName(systemSpecs.deckType);
@@ -1636,7 +1697,7 @@ class BomCalculator {
         },
         orderQty: orderQty,
         unit: 'buckets',
-        notes: '${edgeBucketSize.toInt()}/bucket — 12" o.c. eave/rake edge attachment',
+        notes: '${edgeBucketSize.toInt()}/bucket — ${edgeSpacingIn.toInt()}" o.c. eave/rake edge attachment',
         trace: BomTrace(
           baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ ${edgeBucketSize.toInt()}/bucket',
           baseQty: base,
@@ -1647,8 +1708,9 @@ class BomCalculator {
           breakdown: [
             'Deck type:  ${systemSpecs.deckType} → $edgeFastName $edgeFastLen',
             'Location:   eave/rake (no insulation in flange)',
-            'Spacing:    12" o.c. per SMACNA standards',
-            '${_lf(edgeMetalLF)} × 12"/ft ÷ 12" = ${base.toStringAsFixed(0)} fasteners',
+            'Roof-edge LF: drip edge ${_lf(metalScope.dripEdgeLF)} + other ${_lf(metalScope.otherEdgeMetalLF)}',
+            'Spacing:    ${edgeSpacingIn.toInt()}" o.c.',
+            '${_lf(edgeMetalLF)} × 12"/ft ÷ ${edgeSpacingIn.toInt()}" = ${base.toStringAsFixed(0)} fasteners',
             'Waste: ${_pct(wAcc)}%',
             'Bucket size: ${edgeBucketSize.toInt()}/bucket',
             'ORDER QTY: ${orderQty.toInt()} buckets',
@@ -1665,7 +1727,7 @@ class BomCalculator {
     final insideCorners = geometry.insideCorners;
     if (insideCorners > 0) {
       items.add(_eachItem('Details & Accessories', 'TPO Inside Corners (Prefab)',
-          insideCorners.toDouble(), wAcc, 'each', '',
+          insideCorners.toDouble(), 'each', '',
           skuKey: 'accessory_corner_inside_prefab'));
     }
 
@@ -1673,7 +1735,7 @@ class BomCalculator {
     final outsideCorners = geometry.outsideCorners > 0 ? geometry.outsideCorners : 4;
     if (outsideCorners > 0) {
       items.add(_eachItem('Details & Accessories', 'TPO Outside Corners (Prefab)',
-          outsideCorners.toDouble(), wAcc, 'each', '',
+          outsideCorners.toDouble(), 'each', '',
           skuKey: 'accessory_corner_outside_prefab'));
     }
 
@@ -1708,7 +1770,7 @@ class BomCalculator {
     // Drains
     if (drainCount > 0) {
       items.add(_eachItem('Details & Accessories', 'Roof Drain Assembly (${penetrations.drainType})',
-          drainCount.toDouble(), wAcc, 'each', penetrations.drainType,
+          drainCount.toDouble(), 'each', penetrations.drainType,
           skuKey: 'accessory_drain_assembly',
           attributes: {'drainType': penetrations.drainType}));
     }
@@ -1716,28 +1778,28 @@ class BomCalculator {
     // Pipe boots — small
     if (penetrations.smallPipeCount > 0) {
       items.add(_eachItem('Details & Accessories', 'Pipe Boot — Small (1–4")',
-          penetrations.smallPipeCount.toDouble(), wAcc, 'each', '',
+          penetrations.smallPipeCount.toDouble(), 'each', '',
           skuKey: 'accessory_pipeboot_small'));
     }
 
     // Pipe boots — large
     if (penetrations.largePipeCount > 0) {
       items.add(_eachItem('Details & Accessories', 'Pipe Boot — Large (4–12")',
-          penetrations.largePipeCount.toDouble(), wAcc, 'each', '',
+          penetrations.largePipeCount.toDouble(), 'each', '',
           skuKey: 'accessory_pipeboot_large'));
     }
 
     // Skylights
     if (penetrations.skylightCount > 0) {
       items.add(_eachItem('Details & Accessories', 'Skylight Flashing Kit',
-          penetrations.skylightCount.toDouble(), wAcc, 'each', '',
+          penetrations.skylightCount.toDouble(), 'each', '',
           skuKey: 'accessory_skylight_kit'));
     }
 
     // Scuppers
     if (penetrations.scupperCount > 0) {
       items.add(_eachItem('Details & Accessories', 'Scupper Assembly',
-          penetrations.scupperCount.toDouble(), wAcc, 'each', '',
+          penetrations.scupperCount.toDouble(), 'each', '',
           skuKey: 'accessory_scupper'));
     }
 
@@ -1774,7 +1836,7 @@ class BomCalculator {
     // Pitch pans
     if (penetrations.pitchPanCount > 0) {
       items.add(_eachItem('Details & Accessories', 'TPO Molded Sealant Pocket',
-          penetrations.pitchPanCount.toDouble(), wAcc, 'each', '',
+          penetrations.pitchPanCount.toDouble(), 'each', '',
           skuKey: 'accessory_pitch_pan'));
     }
 
@@ -1892,7 +1954,7 @@ class BomCalculator {
 
     if (metalScope.downspoutCount > 0) {
       items.add(_eachItem('Metal Scope', 'Downspout',
-          metalScope.downspoutCount.toDouble(), wMet, 'each', '',
+          metalScope.downspoutCount.toDouble(), 'each', '',
           skuKey: 'metal_downspout'));
     }
 
@@ -2164,7 +2226,7 @@ class BomCalculator {
           packageSize: 1,
           orderQty: cleanOrder,
           breakdown: [
-            'Field seams: max(0, $fieldRollsForSeam − 1) × 100\' = ${seamLFClean.toStringAsFixed(0)} LF',
+            ...seamBreakdown,
             'Clean area (~6" each side): ${cleanArea.toStringAsFixed(0)} sf',
             'Coverage: 400 sf/gal',
             'ORDER QTY: ${cleanOrder.toInt()} gallons (min 1)',
@@ -2269,7 +2331,10 @@ class BomCalculator {
       final russFastWithW = russFastBase * (1 + wAcc);
       final russFastOrder = (russFastWithW / russBucketSize).ceil().toDouble();
       final russFastName = _fastenerName(systemSpecs.deckType);
-      final russFastLen  = _selectFastenerLen(systemSpecs.deckType, 0); // through RUSS only, no insulation
+      // RUSS sits on top of the insulation at the wall line — the fastener
+      // passes through the full stack into the deck, same as the membrane fastener.
+      final russStackIn  = _stackThicknessIn(insulation, 3, taperMaxThickness: taperMaxIn);
+      final russFastLen  = _selectFastenerLen(systemSpecs.deckType, russStackIn);
       items.add(BomLineItem(
         category: 'Parapet & Termination',
         name: '$russFastName $russFastLen — RUSS Strip (${russSpacing.toInt()}" o.c.)',
@@ -2290,6 +2355,7 @@ class BomCalculator {
           packageSize: russBucketSize,
           orderQty: russFastOrder,
           breakdown: [
+            _fastenerBreakdown(systemSpecs.deckType, russStackIn, 'RUSS fastener'),
             'Parapet LF: ${_lf(parapet.parapetTotalLF)}',
             'Spacing: ${russSpacing.toInt()}" o.c.${russSpacing < 12 ? " (>20-yr warranty or ≥90 mph)" : ""}',
             '${parapet.parapetTotalLF.toStringAsFixed(0)} LF × ${(12 / russSpacing).toStringAsFixed(0)}/ft = ${russFastBase.toStringAsFixed(0)} fasteners',
@@ -2478,30 +2544,59 @@ class BomCalculator {
     return result;
   }
 
-  // ─── WARRANTY-DRIVEN FASTENING DENSITIES ─────────────────────────────────────
+  // ─── MA SEAM FASTENING ───────────────────────────────────────────────────────
 
-  /// Returns (fieldDensity, perimDensity, cornerDensity) in fasteners/sf
-  /// based on the Versico MA warranty tier minimums.
+  /// Seam lap for mechanically attached sheets (feet). Net sheet width =
+  /// roll width − lap. [Unverified] 6" lap assumed; confirm against the
+  /// Versico MA detail for the specific sheet width.
+  static const double maSeamLapFt = 0.5;
+
+  /// Fastener spacing along the seam (inches o.c.) for (field, perimeter,
+  /// corner) by warranty tier.
   ///
-  /// Source: Versico TPO Mechanically Attached Fastening Tables.
-  /// Higher warranty levels require tighter fastening patterns.
-  ///
-  ///  Warranty │ Field  │ Perim  │ Corner │ Field spacing
-  /// ──────────┼────────┼────────┼────────┼──────────────
-  ///  10-year  │ 0.20/sf│ 0.40/sf│ 0.60/sf│ 1 per 5 sf
-  ///  15-year  │ 0.25/sf│ 0.50/sf│ 0.75/sf│ 1 per 4 sf
-  ///  20-year  │ 0.50/sf│ 1.00/sf│ 1.49/sf│ 1 per 2 sf
-  ///  25-year  │ 0.75/sf│ 1.49/sf│ 2.00/sf│ 1 per 1.3 sf
-  ///  30-year  │ 1.00/sf│ 2.00/sf│ 2.99/sf│ 1 per 1 sf
-  static (double, double, double) _fasteningDensities(int warrantyYears) {
+  /// All tiers are 12" o.c. until the Versico spacing-by-warranty table is
+  /// supplied — the tier hook is here so only these numbers need to change.
+  static (double, double, double) maSeamSpacingIn(int warrantyYears) {
     switch (warrantyYears) {
-      case 10: return (0.20, 0.40, 0.60);
-      case 15: return (0.25, 0.50, 0.75);
-      case 20: return (0.50, 1.00, 1.49);
-      case 25: return (0.75, 1.49, 2.00);
-      case 30: return (1.00, 2.00, 2.99);
-      default: return (0.50, 1.00, 1.49); // default to 20-year if unset
+      case 10:
+      case 15:
+      case 20:
+      case 25:
+      case 30:
+      default:
+        return (12.0, 12.0, 12.0);
     }
+  }
+
+  static double _rollWidthFt(String rollWidth) =>
+      double.tryParse(rollWidth.replaceAll("'", '').trim()) ?? 10.0;
+
+  /// Per-zone MA membrane fastener counts (no waste). Shared by the BOM and
+  /// the Fastening Schedule tab so the two never disagree.
+  static MaFastenerSchedule maFastenerSchedule({
+    required double fieldArea,
+    required double perimArea,
+    required double cornerArea,
+    required MembraneSystem membrane,
+    required int warrantyYears,
+  }) {
+    final spacing = maSeamSpacingIn(warrantyYears);
+    final fieldNet = _rollWidthFt(membrane.rollWidth) - maSeamLapFt;
+    final perimNet = membrane.perimeterRollWidth == 'None'
+        ? fieldNet
+        : _rollWidthFt(membrane.perimeterRollWidth) - maSeamLapFt;
+    MaZoneFastening zone(double area, double netFt, double spacingIn) =>
+        MaZoneFastening(
+          area: area,
+          netSheetWidthFt: netFt,
+          spacingIn: spacingIn,
+          fasteners: area <= 0 ? 0 : area / (netFt * spacingIn / 12.0),
+        );
+    return MaFastenerSchedule(
+      field:     zone(fieldArea,  fieldNet, spacing.$1),
+      perimeter: zone(perimArea,  perimNet, spacing.$2),
+      corner:    zone(cornerArea, perimNet, spacing.$3),
+    );
   }
 
     // ─── RHINOBOND PLATE DENSITIES ───────────────────────────────────────────────
@@ -2712,7 +2807,7 @@ class BomCalculator {
       breakdown: [
         '$label',
         'Area:       ${_sf(area)}',
-        'Board size: ${boardSf.toInt()} sf (4\'×8\')',
+        'Board size: ${boardSf.toInt()} sf (${boardSf == 16 ? "4\'×4\'" : "4\'×8\'"})',
         'Base:       ${base.toStringAsFixed(1)} boards',
         'Waste:      ${_pct(waste)}%',
         'With waste: ${withW.toStringAsFixed(1)} boards',
@@ -2722,10 +2817,13 @@ class BomCalculator {
   }
 
   /// Helper for simple "each" items (penetrations, accessories).
+  /// Counted items (drains, boots, kits, corners, downspouts) are ordered
+  /// exactly — no waste, so 1 drain is 1 drain assembly, not 2.
   static BomLineItem _eachItem(String cat, String name, double qty,
-      double waste, String unit, String notes,
+      String unit, String notes,
       {String? skuKey, Map<String, dynamic>? attributes}) {
-    final withW    = qty * (1 + waste);
+    const waste    = 0.0;
+    final withW    = qty;
     final orderQty = withW.ceil().toDouble();
     return BomLineItem(
       category: cat,
@@ -2744,7 +2842,6 @@ class BomCalculator {
         orderQty: orderQty,
         breakdown: [
           'Quantity: ${qty.toInt()}',
-          if (waste > 0) 'Waste: ${_pct(waste)}% → ${withW.ceil()} $unit',
           'ORDER QTY: ${orderQty.toInt()} $unit',
         ],
       ),
@@ -2818,4 +2915,28 @@ class BomCalculator {
     }
     return tiers[idx];
   }
+}
+
+/// One wind zone's MA membrane fastening.
+class MaZoneFastening {
+  final double area;            // sf
+  final double netSheetWidthFt; // roll width − seam lap = seam row spacing
+  final double spacingIn;       // fastener spacing along the seam
+  final double fasteners;       // raw count, no waste
+  const MaZoneFastening({
+    required this.area,
+    required this.netSheetWidthFt,
+    required this.spacingIn,
+    required this.fasteners,
+  });
+}
+
+class MaFastenerSchedule {
+  final MaZoneFastening field, perimeter, corner;
+  const MaFastenerSchedule({
+    required this.field,
+    required this.perimeter,
+    required this.corner,
+  });
+  double get total => field.fasteners + perimeter.fasteners + corner.fasteners;
 }

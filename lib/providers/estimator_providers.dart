@@ -876,15 +876,20 @@ final aggregateBomProvider = Provider<BomResult>((ref) {
         notes:        item.notes,
         packageSize:  item.trace.packageSize,
         wastePercent: item.trace.wastePercent,
+        skuKey:       item.skuKey,
+        attributes:   item.attributes,
       )).addBuilding(bName, item.trace.withWaste);
     }
   }
 
   final merged = agg.values.map((e) {
     final combined = e.buildingContribs.fold(0.0, (s, c) => s + c.withWaste);
+    // trace.withWaste is in raw units (fasteners, gallons, rolls…) and
+    // orderQty is in packages, so divide once and round up. Multiplying back
+    // by the package size reported e.g. 9,000 fasteners as 9,000 "boxes".
     final pkg      = e.packageSize;
     final order    = pkg > 0
-        ? (combined / pkg).ceil() * pkg
+        ? (combined / pkg).ceil().toDouble()
         : combined.ceil().toDouble();
 
     final parts    = e.buildingContribs
@@ -898,6 +903,8 @@ final aggregateBomProvider = Provider<BomResult>((ref) {
       orderQty: order,
       unit:     e.unit,
       notes:    e.notes,
+      skuKey:   e.skuKey,
+      attributes: e.attributes,
       trace: BomTrace(
         baseDescription: desc,
         baseQty:         combined / (1 + e.wastePercent),
@@ -941,11 +948,14 @@ final isMultiBuildingProvider = Provider<bool>(
 class _AggEntry {
   final String category, name, unit, notes;
   final double packageSize, wastePercent;
+  final String? skuKey;
+  final Map<String, dynamic>? attributes;
   final List<_Contrib> buildingContribs = [];
   _AggEntry({
     required this.category, required this.name,
     required this.unit,     required this.notes,
     required this.packageSize, required this.wastePercent,
+    this.skuKey, this.attributes,
   });
   void addBuilding(String b, double w) => buildingContribs.add(_Contrib(b, w));
 }

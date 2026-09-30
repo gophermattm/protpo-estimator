@@ -14,6 +14,7 @@
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/estimate.dart';
+import '../models/estimator_state.dart';
 import '../providers/estimator_providers.dart';
 import '../services/serialization.dart';
 import '../services/firestore_service.dart';
@@ -59,6 +60,162 @@ final hasActiveEstimateProvider = Provider<bool>((ref) {
 // HELPER FUNCTIONS — bridging between job/estimate and estimatorProvider
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/// Estimator state for [estimate]: a never-saved (empty) estimate starts
+/// blank; a non-empty but unparseable one returns null.
+///
+/// An empty estimate used to be rejected, which left the previous job's roof
+/// in the editor under the new job — and saving wrote it into the new job.
+EstimatorState? _stateForEstimate(Estimate estimate) {
+  if (estimate.estimatorState.isEmpty) return EstimatorState.initial();
+  return stateFromJson(estimate.estimatorState);
+}
+
+/// BOM/labor edits, deletions, manual lines, QXO prices and per-item margins
+/// are keyed by line name, not by job. Clear them on every job switch so one
+/// job's overrides (e.g. a membrane qty edited to 0) don't apply to the next.
+void _clearJobScopedOverrides(dynamic ref) {
+  ref.read(bomLineEditsProvider.notifier).state = <String, BomLineEdit>{};
+  ref.read(bomDeletedItemsProvider.notifier).state = <String>{};
+  ref.read(bomManualItemsProvider.notifier).state = <ManualBomItem>[];
+  ref.read(pricedItemsProvider.notifier).state = null;
+  ref.read(itemMarginOverridesProvider.notifier).state = <String, double>{};
+  ref.read(laborLineEditsProvider.notifier).state = <String, LaborLineEdit>{};
+  ref.read(laborDeletedItemsProvider.notifier).state = <String>{};
+  ref.read(laborManualItemsProvider.notifier).state = <ManualLaborItem>[];
+}
+
+/// Key under Estimate.estimatorState holding the user's BOM/labor overrides.
+const kOverridesKey = 'overrides';
+
+double? _numOrNull(dynamic v) => (v as num?)?.toDouble();
+
+/// Serializes BOM/labor edits, deletions, manual lines and per-item margins
+/// so they are saved with the estimate (they used to be lost on reload).
+/// QXO prices are not stored — they are re-fetched.
+Map<String, dynamic> estimateOverridesToJson(dynamic ref) {
+  final Map<String, BomLineEdit> bomEdits = ref.read(bomLineEditsProvider);
+  final Set<String> bomDeleted = ref.read(bomDeletedItemsProvider);
+  final List<ManualBomItem> bomManual = ref.read(bomManualItemsProvider);
+  final Map<String, double> margins = ref.read(itemMarginOverridesProvider);
+  final Map<String, LaborLineEdit> laborEdits = ref.read(laborLineEditsProvider);
+  final Set<String> laborDeleted = ref.read(laborDeletedItemsProvider);
+  final List<ManualLaborItem> laborManual = ref.read(laborManualItemsProvider);
+  return {
+    'bomEdits': {
+      for (final e in bomEdits.entries)
+        e.key: {
+          'description': e.value.description,
+          'partNumber': e.value.partNumber,
+          'qty': e.value.qty,
+          'unitPrice': e.value.unitPrice,
+          'unit': e.value.unit,
+        },
+    },
+    'bomDeleted': bomDeleted.toList(),
+    'bomManual': [
+      for (final m in bomManual)
+        {
+          'id': m.id,
+          'category': m.category,
+          'description': m.description,
+          'partNumber': m.partNumber,
+          'qty': m.qty,
+          'unit': m.unit,
+          'unitPrice': m.unitPrice,
+        },
+    ],
+    'itemMargins': margins,
+    'laborEdits': {
+      for (final e in laborEdits.entries)
+        e.key: {
+          'description': e.value.description,
+          'rate': e.value.rate,
+          'qty': e.value.qty,
+        },
+    },
+    'laborDeleted': laborDeleted.toList(),
+    'laborManual': [
+      for (final m in laborManual)
+        {
+          'id': m.id,
+          'name': m.name,
+          'unit': m.unit,
+          'rate': m.rate,
+          'quantity': m.quantity,
+        },
+    ],
+  };
+}
+
+/// Restores overrides saved by [estimateOverridesToJson]. Missing or
+/// malformed data leaves the (already cleared) providers empty.
+void applyEstimateOverrides(dynamic ref, dynamic json) {
+  if (json is! Map) return;
+  try {
+    final bomEdits = (json['bomEdits'] as Map? ?? {});
+    ref.read(bomLineEditsProvider.notifier).state = <String, BomLineEdit>{
+      for (final e in bomEdits.entries)
+        e.key as String: BomLineEdit(
+          description: (e.value as Map)['description'] as String?,
+          partNumber: (e.value as Map)['partNumber'] as String?,
+          qty: _numOrNull((e.value as Map)['qty']),
+          unitPrice: _numOrNull((e.value as Map)['unitPrice']),
+          unit: (e.value as Map)['unit'] as String?,
+        ),
+    };
+    ref.read(bomDeletedItemsProvider.notifier).state = <String>{
+      for (final k in (json['bomDeleted'] as List? ?? [])) k as String,
+    };
+    ref.read(bomManualItemsProvider.notifier).state = <ManualBomItem>[
+      for (final m in (json['bomManual'] as List? ?? []))
+        ManualBomItem(
+          id: (m as Map)['id'] as String,
+          category: m['category'] as String? ?? '',
+          description: m['description'] as String? ?? '',
+          partNumber: m['partNumber'] as String? ?? '',
+          qty: _numOrNull(m['qty']) ?? 1.0,
+          unit: m['unit'] as String? ?? 'each',
+          unitPrice: _numOrNull(m['unitPrice']),
+        ),
+    ];
+    ref.read(itemMarginOverridesProvider.notifier).state = <String, double>{
+      for (final e in (json['itemMargins'] as Map? ?? {}).entries)
+        e.key as String: (e.value as num).toDouble(),
+    };
+    ref.read(laborLineEditsProvider.notifier).state = <String, LaborLineEdit>{
+      for (final e in (json['laborEdits'] as Map? ?? {}).entries)
+        e.key as String: LaborLineEdit(
+          description: (e.value as Map)['description'] as String?,
+          rate: _numOrNull((e.value as Map)['rate']),
+          qty: _numOrNull((e.value as Map)['qty']),
+        ),
+    };
+    ref.read(laborDeletedItemsProvider.notifier).state = <String>{
+      for (final k in (json['laborDeleted'] as List? ?? [])) k as String,
+    };
+    ref.read(laborManualItemsProvider.notifier).state = <ManualLaborItem>[
+      for (final m in (json['laborManual'] as List? ?? []))
+        ManualLaborItem(
+          id: (m as Map)['id'] as String,
+          name: m['name'] as String? ?? '',
+          unit: m['unit'] as String? ?? 'each',
+          rate: _numOrNull(m['rate']) ?? 0.0,
+          quantity: _numOrNull(m['quantity']) ?? 1.0,
+        ),
+    ];
+  } catch (_) {
+    _clearJobScopedOverrides(ref);
+  }
+}
+
+/// Serialized estimator state plus overrides — what gets written to
+/// Estimate.estimatorState on every save/autosave.
+Map<String, dynamic> serializeEstimateState(dynamic ref, String estimateId) {
+  final json = stateToJson(ref.read(estimatorProvider), estimateId);
+  json[kOverridesKey] = estimateOverridesToJson(ref);
+  return json;
+}
+
 /// Loads an estimate's serialized state into the estimator for editing.
 ///
 /// Deserializes [estimate.estimatorState] via [stateFromJson], hydrates
@@ -76,12 +233,12 @@ bool loadEstimateIntoEditor(
   String jobName = '',
   String customerName = '',
 }) {
-  if (estimate.estimatorState.isEmpty) return false;
-
-  final loaded = stateFromJson(estimate.estimatorState);
+  final loaded = _stateForEstimate(estimate);
   if (loaded == null) return false;
 
   container.read(estimatorProvider.notifier).loadState(loaded);
+  _clearJobScopedOverrides(container);
+  applyEstimateOverrides(container, estimate.estimatorState[kOverridesKey]);
   container.read(activeJobIdProvider.notifier).state = jobId;
   container.read(activeEstimateIdProvider.notifier).state = estimate.id;
   container.read(activeJobNameProvider.notifier).state = jobName;
@@ -98,12 +255,12 @@ bool loadEstimateIntoEditorRef(
   String jobName = '',
   String customerName = '',
 }) {
-  if (estimate.estimatorState.isEmpty) return false;
-
-  final loaded = stateFromJson(estimate.estimatorState);
+  final loaded = _stateForEstimate(estimate);
   if (loaded == null) return false;
 
   ref.read(estimatorProvider.notifier).loadState(loaded);
+  _clearJobScopedOverrides(ref);
+  applyEstimateOverrides(ref, estimate.estimatorState[kOverridesKey]);
   ref.read(activeJobIdProvider.notifier).state = jobId;
   ref.read(activeEstimateIdProvider.notifier).state = estimate.id;
   ref.read(activeJobNameProvider.notifier).state = jobName;
@@ -127,7 +284,7 @@ Estimate? buildEstimateDraft(
   if (estimateId.isEmpty) return null;
 
   final state = container.read(estimatorProvider);
-  final serialized = stateToJson(state, estimateId);
+  final serialized = serializeEstimateState(container, estimateId);
 
   final totalArea = state.buildings
       .fold(0.0, (sum, b) => sum + b.roofGeometry.totalArea);

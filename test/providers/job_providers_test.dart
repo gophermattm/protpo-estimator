@@ -103,14 +103,14 @@ void main() {
       );
     });
 
-    test('returns false when estimatorState is empty/invalid', () {
+    test('returns false when estimatorState is invalid', () {
       final container = ProviderContainer();
       addTearDown(container.dispose);
 
       final estimate = Estimate(
         id: 'est-bad',
         name: 'Bad Estimate',
-        estimatorState: const {},
+        estimatorState: const {'buildings': 'not-a-list'},
       );
 
       final result = loadEstimateIntoEditor(container, estimate, 'job-1');
