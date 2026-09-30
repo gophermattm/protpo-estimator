@@ -38,6 +38,49 @@ class ScupperLocation {
   int get hashCode => Object.hash(edgeIndex, position);
 }
 
+// ─── GutterLocation ───────────────────────────────────────────────────────────
+
+/// A gutter (line drain) along a roof polygon edge. Unlike a scupper, the low
+/// point is the whole run from [start] to [end], so taper slopes perpendicular
+/// to the edge instead of radially toward one spot.
+class GutterLocation {
+  /// 0-based index of the roof polygon edge this gutter runs along.
+  final int edgeIndex;
+
+  /// Run start/end along that edge, 0.0 (start vertex) to 1.0 (end vertex).
+  final double start;
+  final double end;
+
+  const GutterLocation({
+    required this.edgeIndex,
+    this.start = 0.0,
+    this.end = 1.0,
+  });
+
+  GutterLocation copyWith({
+    int? edgeIndex,
+    double? start,
+    double? end,
+  }) {
+    return GutterLocation(
+      edgeIndex: edgeIndex ?? this.edgeIndex,
+      start: start ?? this.start,
+      end: end ?? this.end,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GutterLocation &&
+          edgeIndex == other.edgeIndex &&
+          start == other.start &&
+          end == other.end;
+
+  @override
+  int get hashCode => Object.hash(edgeIndex, start, end);
+}
+
 // ─── TaperDefaults ────────────────────────────────────────────────────────────
 
 class TaperDefaults {
@@ -107,7 +150,7 @@ class TaperDefaults {
 class DrainageZone {
   final String id;
 
-  /// 'internal_drain' or 'scupper'.
+  /// 'internal_drain', 'scupper', or 'gutter'.
   final String type;
 
   /// 0-based index of the roof polygon vertex that is the low point for this zone.

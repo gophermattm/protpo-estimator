@@ -2049,7 +2049,9 @@ class _ThermalCodeTab extends ConsumerWidget {
             Consumer(builder: (context, ref, _) {
               final zones = ref.watch(watershedZonesProvider);
               if (zones.length < 2) return const SizedBox.shrink();
-              final drainCount = ref.watch(roofGeometryProvider).drainLocations.length;
+              final geo = ref.watch(roofGeometryProvider);
+              final drainCount = geo.drainLocations.length;
+              final scupperCount = geo.scupperLocations.length;
               return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('Drainage Zones (${zones.length})',
                     style: TextStyle(fontSize: 12,
@@ -2059,10 +2061,13 @@ class _ThermalCodeTab extends ConsumerWidget {
                 ...zones.asMap().entries.map((e) {
                   final idx = e.key;
                   final zone = e.value;
-                  final isDrain = idx < drainCount;
-                  final label = isDrain
+                  // Zone order matches drainageLowFeatures(): drains,
+                  // scuppers, gutters.
+                  final label = idx < drainCount
                       ? '  Drain ${idx + 1}'
-                      : '  Scupper ${idx - drainCount + 1}';
+                      : idx < drainCount + scupperCount
+                          ? '  Scupper ${idx - drainCount + 1}'
+                          : '  Gutter ${idx - drainCount - scupperCount + 1}';
                   return _scheduleRow(
                     label,
                     '${zone.maxDistance.toStringAsFixed(1)} ft run • '

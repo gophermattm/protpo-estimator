@@ -1505,33 +1505,22 @@ pw.Widget? _roofDiagramPage(BuildingState building, EstimatorState state,
   final insulation = building.insulationSystem;
   final hasTaper = insulation.hasTaper &&
       insulation.taperDefaults != null &&
-      (geo.drainLocations.isNotEmpty || geo.scupperLocations.isNotEmpty) &&
+      geo.hasLowPoints &&
       allPolygons.isNotEmpty;
 
   final List<List<double>> primaryPts =
       allPolygons.isNotEmpty ? allPolygons.first : const <List<double>>[];
-  final lowPoints = <Offset>[];
-  if (hasTaper) {
-    for (final d in geo.drainLocations) {
-      lowPoints.add(Offset(d.x, d.y));
-    }
-    for (final s in geo.scupperLocations) {
-      if (s.edgeIndex >= primaryPts.length) continue;
-      final a = primaryPts[s.edgeIndex];
-      final b = primaryPts[(s.edgeIndex + 1) % primaryPts.length];
-      lowPoints.add(Offset(
-        a[0] + (b[0] - a[0]) * s.position,
-        a[1] + (b[1] - a[1]) * s.position,
-      ));
-    }
-  }
+  final lowPoints = hasTaper
+      ? drainageLowFeatures(
+          geo, primaryPts.map((p) => Offset(p[0], p[1])).toList())
+      : const <LowFeature>[];
 
   List<ZoneWatershed> zones = const [];
   PanelSequence? panelSeq;
   if (hasTaper && lowPoints.isNotEmpty) {
     zones = WatershedCalculator.computeZones(
       polygonVertices: primaryPts.map((p) => Offset(p[0], p[1])).toList(),
-      lowPoints: lowPoints,
+      lowFeatures: lowPoints,
       totalPolygonArea: geo.totalArea,
     );
     final d = insulation.taperDefaults!;
@@ -1605,6 +1594,7 @@ pw.Widget? _roofDiagramPage(BuildingState building, EstimatorState state,
                   '${lowPoints.length} low point${lowPoints.length == 1 ? "" : "s"}'
                   '${geo.drainLocations.isNotEmpty ? " (${geo.drainLocations.length} drain${geo.drainLocations.length == 1 ? "" : "s"})" : ""}'
                   '${geo.scupperLocations.isNotEmpty ? " (${geo.scupperLocations.length} scupper${geo.scupperLocations.length == 1 ? "" : "s"})" : ""}'
+                  '${geo.gutterLocations.isNotEmpty ? " (${geo.gutterLocations.length} gutter${geo.gutterLocations.length == 1 ? "" : "s"})" : ""}'
                   ' | ${zones.length} drainage zone${zones.length == 1 ? "" : "s"}',
                   style: pw.TextStyle(fontSize: 8, color: _kSlate500),
                 ),
@@ -1686,7 +1676,11 @@ pw.Widget? _roofDiagramPage(BuildingState building, EstimatorState state,
                   }
                 }
 
-                // Scuppers — drawn once for the primary polygon
+                // Gutters and scuppers — drawn once for the primary polygon
+                if (hasTaper && geo.gutterLocations.isNotEmpty) {
+                  _pdfDrawGutters(canvas, primaryPts, geo.gutterLocations,
+                      tx, ty, maxH);
+                }
                 if (hasTaper && geo.scupperLocations.isNotEmpty) {
                   _pdfDrawScuppers(canvas, primaryPts, geo.scupperLocations,
                       tx, ty, maxH);
@@ -1750,7 +1744,7 @@ pw.Widget? _roofDiagramPage(BuildingState building, EstimatorState state,
 void _pdfDrawWatershed(
   PdfGraphics canvas,
   List<List<double>> primaryPts,
-  List<Offset> lowPoints,
+  List<LowFeature> lowPoints,
   List<ZoneWatershed> zones,
   PanelSequence? panelSeq,
   double Function(double) tx,
@@ -1811,15 +1805,7 @@ void _pdfDrawWatershed(
     for (int iy = 0; iy < gridN; iy++) {
       final cx = minX + (ix + 0.5) * stepX;
       final cy = minY + (iy + 0.5) * stepY;
-      int nearestIdx = 0;
-      double nearestDist = _pdfDist(cx, cy, lowPoints[0].dx, lowPoints[0].dy);
-      for (int i = 1; i < lowPoints.length; i++) {
-        final d = _pdfDist(cx, cy, lowPoints[i].dx, lowPoints[i].dy);
-        if (d < nearestDist) {
-          nearestDist = d;
-          nearestIdx = i;
-        }
-      }
+      final (nearestIdx, nearestDist) = LowFeature.nearest(lowPoints, cx, cy);
       final row = (nearestDist / panelWidthFt).floor();
       cellNearest[ix][iy] = nearestIdx;
       cellRow[ix][iy] = row;
@@ -1858,17 +1844,10 @@ void _pdfDrawWatershed(
   canvas.setStrokeColor(const PdfColor(0.12, 0.25, 0.67)); // dark blue
   canvas.setLineWidth(1.0);
   for (final v in primaryPts) {
-    int nearestIdx = 0;
-    double nearestDist = _pdfDist(v[0], v[1], lowPoints[0].dx, lowPoints[0].dy);
-    for (int i = 1; i < lowPoints.length; i++) {
-      final d = _pdfDist(v[0], v[1], lowPoints[i].dx, lowPoints[i].dy);
-      if (d < nearestDist) {
-        nearestDist = d;
-        nearestIdx = i;
-      }
-    }
+    final (nearestIdx, _) = LowFeature.nearest(lowPoints, v[0], v[1]);
 
-    final target = lowPoints[nearestIdx];
+    // Nearest point on the feature: gutters get arrows perpendicular to the edge
+    final target = lowPoints[nearestIdx].closestPoint(v[0], v[1]);
     final dx = target.dx - v[0];
     final dy = target.dy - v[1];
     final len = math.sqrt(dx * dx + dy * dy);
@@ -1899,12 +1878,6 @@ void _pdfDrawWatershed(
   }
 }
 
-double _pdfDist(double x1, double y1, double x2, double y2) {
-  final dx = x1 - x2;
-  final dy = y1 - y2;
-  return math.sqrt(dx * dx + dy * dy);
-}
-
 /// Draws only the polygon edges (no fill, no labels) — used to re-draw
 /// edges on top of the watershed fill so they remain visible.
 void _pdfDrawEdgesOnly(
@@ -1931,6 +1904,53 @@ void _pdfDrawEdgesOnly(
 
 /// Draws scupper markers as purple rectangles on polygon edges with arrows
 /// pointing outward (showing water flow direction).
+void _pdfDrawGutters(
+  PdfGraphics canvas,
+  List<List<double>> primaryPts,
+  List<GutterLocation> gutters,
+  double Function(double) tx,
+  double Function(double) ty,
+  double maxH,
+) {
+  if (primaryPts.length < 3) return;
+  const gutterColor = PdfColor(0.05, 0.58, 0.53); // teal
+
+  final cx = primaryPts.fold(0.0, (s, p) => s + p[0]) / primaryPts.length;
+  final cy = primaryPts.fold(0.0, (s, p) => s + p[1]) / primaryPts.length;
+
+  for (final g in gutters) {
+    if (g.edgeIndex >= primaryPts.length) continue;
+    final a = primaryPts[g.edgeIndex];
+    final b = primaryPts[(g.edgeIndex + 1) % primaryPts.length];
+    final dx = b[0] - a[0];
+    final dy = b[1] - a[1];
+    final len = math.sqrt(dx * dx + dy * dy);
+    if (len < 1e-6) continue;
+    double nx = -dy / len;
+    double ny = dx / len;
+    final mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+    if (nx * (cx - mx) + ny * (cy - my) > 0) { nx = -nx; ny = -ny; }
+    // In PDF canvas Y is up, flip ny
+    ny = -ny;
+
+    const off = 3.5;
+    final sx = tx(a[0] + dx * g.start) + nx * off;
+    final sy = maxH - ty(a[1] + dy * g.start) + ny * off;
+    final ex = tx(a[0] + dx * g.end) + nx * off;
+    final ey = maxH - ty(a[1] + dy * g.end) + ny * off;
+
+    canvas.setStrokeColor(gutterColor);
+    canvas.setLineWidth(4.0);
+    canvas.drawLine(sx, sy, ex, ey);
+    canvas.strokePath();
+    canvas.setLineWidth(1.5);
+    canvas.drawLine(sx, sy, sx + nx * 6, sy + ny * 6);
+    canvas.strokePath();
+    canvas.drawLine(ex, ey, ex + nx * 6, ey + ny * 6);
+    canvas.strokePath();
+  }
+}
+
 void _pdfDrawScuppers(
   PdfGraphics canvas,
   List<List<double>> primaryPts,
@@ -2008,7 +2028,7 @@ void _pdfDrawScuppers(
 /// taper axis for each low point's zone.
 List<pw.Widget> _pdfDrawBandLabels(
   List<List<double>> primaryPts,
-  List<Offset> lowPoints,
+  List<LowFeature> lowPoints,
   PanelSequence panelSeq,
   double Function(double) tx,
   double Function(double) ty,
@@ -2018,28 +2038,19 @@ List<pw.Widget> _pdfDrawBandLabels(
   final vertices = primaryPts.map((p) => Offset(p[0], p[1])).toList();
 
   for (int i = 0; i < lowPoints.length; i++) {
-    final lp = lowPoints[i];
-
     // Find farthest vertex in this zone
     double farDist = 0;
-    Offset farVertex = lp;
+    Offset? farVertex;
     for (final v in vertices) {
-      int nearestIdx = 0;
-      double nearestDist = _pdfDist(v.dx, v.dy, lowPoints[0].dx, lowPoints[0].dy);
-      for (int j = 1; j < lowPoints.length; j++) {
-        final d = _pdfDist(v.dx, v.dy, lowPoints[j].dx, lowPoints[j].dy);
-        if (d < nearestDist) {
-          nearestDist = d;
-          nearestIdx = j;
-        }
-      }
+      final (nearestIdx, nearestDist) = LowFeature.nearest(lowPoints, v.dx, v.dy);
       if (nearestIdx == i && nearestDist > farDist) {
         farDist = nearestDist;
         farVertex = v;
       }
     }
 
-    if (farDist < panelWidthFt) continue;
+    if (farVertex == null || farDist < panelWidthFt) continue;
+    final lp = lowPoints[i].closestPoint(farVertex.dx, farVertex.dy);
 
     final numRows = (farDist / panelWidthFt).ceil();
     final dx = farVertex.dx - lp.dx;
@@ -2346,7 +2357,8 @@ List<pw.Widget> _boardSchedulePageContent(
         pw.Row(children: [
           _cfgCell('Attachment', d.attachmentMethod),
           _cfgCell('Drains', '${geo.drainLocations.length}'),
-          _cfgCell('Scuppers', '${geo.scupperLocations.length}'),
+          _cfgCell('Scuppers / Gutters',
+              '${geo.scupperLocations.length} / ${geo.gutterLocations.length}'),
           _cfgCell('Max Thickness', _fmtIn(schedule.maxThicknessAtRidge)),
         ]),
       ]),

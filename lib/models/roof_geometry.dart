@@ -532,6 +532,7 @@ class RoofGeometry {
   final int                outsideCorners;
   final WindZones          windZones;
   final List<ScupperLocation> scupperLocations;
+  final List<GutterLocation> gutterLocations;
   final List<DrainageZone> drainageZones;
 
   const RoofGeometry({
@@ -547,6 +548,7 @@ class RoofGeometry {
     this.outsideCorners        = 0,
     this.windZones             = const WindZones(),
     this.scupperLocations      = const [],
+    this.gutterLocations       = const [],
     this.drainageZones         = const [],
   });
 
@@ -556,6 +558,14 @@ class RoofGeometry {
   int get numberOfShapes => shapes.length;
   int get numberOfDrains => drainLocations.length;
   int get numberOfScuppers => scupperLocations.length;
+  int get numberOfGutters => gutterLocations.length;
+
+  /// True when any drain, scupper, or gutter is placed — the taper needs at
+  /// least one low point to build a board schedule.
+  bool get hasLowPoints =>
+      drainLocations.isNotEmpty ||
+      scupperLocations.isNotEmpty ||
+      gutterLocations.isNotEmpty;
 
   double get totalArea {
     if (totalAreaOverride != null) return totalAreaOverride!;
@@ -595,6 +605,7 @@ class RoofGeometry {
     int?                outsideCorners,
     WindZones?          windZones,
     List<ScupperLocation>? scupperLocations,
+    List<GutterLocation>? gutterLocations,
     List<DrainageZone>? drainageZones,
   }) => RoofGeometry(
     shapes:                 shapes                ?? List.from(this.shapes),
@@ -609,6 +620,7 @@ class RoofGeometry {
     outsideCorners:         outsideCorners         ?? this.outsideCorners,
     windZones:              windZones              ?? this.windZones,
     scupperLocations:       scupperLocations       ?? List.from(this.scupperLocations),
+    gutterLocations:        gutterLocations        ?? List.from(this.gutterLocations),
     drainageZones:          drainageZones          ?? List.from(this.drainageZones),
   );
 
@@ -630,6 +642,7 @@ class RoofGeometry {
           outsideCorners         == other.outsideCorners &&
           windZones              == other.windZones &&
           _listEquals(scupperLocations, other.scupperLocations) &&
+          _listEquals(gutterLocations, other.gutterLocations) &&
           _listEquals(drainageZones, other.drainageZones);
 
   @override
@@ -637,7 +650,8 @@ class RoofGeometry {
       Object.hashAll(shapes), buildingHeight, roofSlope, customSlope,
       Object.hashAll(drainLocations), totalPerimeterOverride, totalAreaOverride,
       perimeterCorners, insideCorners, outsideCorners, windZones,
-      Object.hashAll(scupperLocations), Object.hashAll(drainageZones));
+      Object.hashAll(scupperLocations), Object.hashAll(gutterLocations),
+      Object.hashAll(drainageZones));
 }
 
 // ─── POLYGON BUILDER (shared by left_panel.dart and roof_renderer.dart) ──────

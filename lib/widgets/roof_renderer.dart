@@ -19,6 +19,7 @@ import '../models/roof_geometry.dart';
 import '../models/drainage_zone.dart';
 import '../models/section_models.dart';
 import '../providers/estimator_providers.dart';
+import '../services/watershed_calculator.dart';
 import '../data/board_schedules.dart';
 
 // ─── EDGE TYPE COLORS ─────────────────────────────────────────────────────────
@@ -35,6 +36,8 @@ const _kPerimColor    = Color(0xFF93C5FD);
 const _kCornerColor   = Color(0xFF3B82F6);
 const _kOutlineColor  = Color(0xFF1E40AF);
 const _kDrainColor    = Color(0xFF0EA5E9);
+const _kScupperColor  = Color(0xFF8B5CF6);
+const _kGutterColor   = Color(0xFF0D9488);
 const _kSubtractColor = Color(0xFFF1F5F9);
 const _kMeasureColor  = Color(0xFF374151);
 
@@ -94,6 +97,9 @@ class _RendererBody extends ConsumerStatefulWidget {
 
 class _RendererBodyState extends ConsumerState<_RendererBody> {
   bool _showDrainHint = true;
+  /// What a tap near a roof edge places: a scupper (point) or a gutter (run
+  /// along the whole edge).
+  bool _gutterMode = false;
   final TransformationController _xfCtrl = TransformationController();
   double _zoom = 1.0;
 
@@ -164,7 +170,9 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
         const SizedBox(height: 8),
 
         // ── Zoom controls ──────────────────────────────────────────
-        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+        Row(children: [
+          _edgeModeToggle(),
+          const Spacer(),
           _zoomBtn(Icons.zoom_out,   _zoomOut,  _zoom <= 0.5),
           const SizedBox(width: 4),
           GestureDetector(
@@ -220,9 +228,10 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
                       windZones: geo.windZones,
                       drains:    geo.drainLocations,
                       scuppers:  geo.scupperLocations,
+                      gutters:   geo.gutterLocations,
+                      lowFeatures: drainageLowFeatures(
+                          geo, polygons.first.points),
                       showWatershed: showWatershed,
-                      lowPointCount: geo.drainLocations.length +
-                          geo.scupperLocations.length,
                       panelSequence: panelSequence,
                       taperMinThickness: minThickness,
                       copingWidthFt: widget.copingWidthFt,
@@ -254,20 +263,21 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
           _edgeTypeLegend(usedTypes.toList()..sort()),
         ],
 
-        if (_showDrainHint && geo.drainLocations.isEmpty && geo.scupperLocations.isEmpty)
+        if (_showDrainHint && !geo.hasLowPoints)
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Row(children: [
               Icon(Icons.touch_app, size: 13, color: AppTheme.textMuted),
               const SizedBox(width: 5),
               Expanded(child: Text(
-                'Tap inside the roof for internal drains. Tap near an edge to place a scupper.',
+                'Tap inside the roof for internal drains. Tap near an edge to place a '
+                '${_gutterMode ? 'gutter along that edge' : 'scupper'} (switch with Edge tap above).',
                 style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
               )),
             ]),
           ),
 
-        if (geo.drainLocations.isNotEmpty || geo.scupperLocations.isNotEmpty) ...[
+        if (geo.hasLowPoints) ...[
           const SizedBox(height: 8),
           _drainList(geo),
         ],
@@ -347,6 +357,19 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
       }
     }
 
+    // Gutter mode: a tap near an edge toggles a full-length gutter on it
+    if (_gutterMode && nearestEdgeIdx >= 0 && nearestEdgeDist < edgeThreshold) {
+      final existing = geo.gutterLocations
+          .indexWhere((g) => g.edgeIndex == nearestEdgeIdx);
+      if (existing >= 0) {
+        notifier.removeGutter(existing);
+      } else {
+        notifier.addGutter(GutterLocation(edgeIndex: nearestEdgeIdx));
+      }
+      setState(() => _showDrainHint = false);
+      return;
+    }
+
     // If tap is close to an edge, place a scupper there
     if (nearestEdgeIdx >= 0 && nearestEdgeDist < edgeThreshold) {
       notifier.addScupper(ScupperLocation(
@@ -376,12 +399,43 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
     return (dist, t);
   }
 
+  Widget _edgeModeToggle() {
+    Widget seg(String label, bool selected, Color color, VoidCallback onTap) =>
+        GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: selected ? color : Colors.white,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: selected ? color : AppTheme.border),
+            ),
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: selected ? Colors.white : AppTheme.textSecondary)),
+          ),
+        );
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Text('Edge tap:',
+          style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+      const SizedBox(width: 6),
+      seg('Scupper', !_gutterMode, _kScupperColor,
+          () => setState(() => _gutterMode = false)),
+      const SizedBox(width: 4),
+      seg('Gutter', _gutterMode, _kGutterColor,
+          () => setState(() => _gutterMode = true)),
+    ]);
+  }
+
   Widget _zoneLegend(RoofGeometry geo) => Wrap(spacing: 12, runSpacing: 6, children: [
     _chip('Field Zone',     _kFieldColor,  _kOutlineColor),
     _chip('Perimeter Zone', _kPerimColor,  _kOutlineColor),
     _chip('Corner Zone',    _kCornerColor, Colors.white),
     if (geo.drainLocations.isNotEmpty) _chip('Drain', _kDrainColor, Colors.white),
-    if (geo.scupperLocations.isNotEmpty) _chip('Scupper', const Color(0xFF8B5CF6), Colors.white),
+    if (geo.scupperLocations.isNotEmpty) _chip('Scupper', _kScupperColor, Colors.white),
+    if (geo.gutterLocations.isNotEmpty) _chip('Gutter', _kGutterColor, Colors.white),
   ]);
 
   Widget _chip(String label, Color fill, Color textColor) => Row(
@@ -474,6 +528,27 @@ class _RendererBodyState extends ConsumerState<_RendererBody> {
             ),
           ]),
         ),
+      for (int i = 0; i < geo.gutterLocations.length; i++)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: _kGutterColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: _kGutterColor.withValues(alpha: 0.3)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.horizontal_rule, size: 12, color: _kGutterColor),
+            const SizedBox(width: 4),
+            Text('Gutter ${i + 1} (edge ${geo.gutterLocations[i].edgeIndex + 1})',
+                style: TextStyle(fontSize: 11, color: _kGutterColor,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: () => ref.read(estimatorProvider.notifier).removeGutter(i),
+              child: Icon(Icons.close, size: 12, color: _kGutterColor),
+            ),
+          ]),
+        ),
     ],
   );
 
@@ -525,8 +600,10 @@ class _RoofPainter extends CustomPainter {
   final WindZones           windZones;
   final List<DrainLocation> drains;
   final List<ScupperLocation> scuppers;
+  final List<GutterLocation> gutters;
+  /// Drains, scuppers, then gutters — same order as the watershed zones.
+  final List<LowFeature>    lowFeatures;
   final bool                showWatershed;
-  final int                 lowPointCount;
   final PanelSequence?      panelSequence;
   final double              taperMinThickness;
   final double              copingWidthFt;
@@ -540,8 +617,9 @@ class _RoofPainter extends CustomPainter {
     required this.windZones,
     required this.drains,
     this.scuppers = const [],
+    this.gutters = const [],
+    this.lowFeatures = const [],
     this.showWatershed = false,
-    this.lowPointCount = 0,
     this.panelSequence,
     this.taperMinThickness = 1.0,
     this.copingWidthFt = 0.0,
@@ -551,39 +629,19 @@ class _RoofPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     _drawZones(canvas);
-    if (showWatershed && lowPointCount > 0) {
+    if (showWatershed && lowFeatures.isNotEmpty) {
       _drawWatershedRegions(canvas);
     }
     _drawEdges(canvas);
     if (copingActive && copingWidthFt > 0) _drawCoping(canvas);
     _drawMeasurements(canvas);
-    if (showWatershed && lowPointCount > 0) {
+    if (showWatershed && lowFeatures.isNotEmpty) {
       _drawFlowArrows(canvas);
     }
+    _drawGutters(canvas);
     _drawDrains(canvas);
     _drawScuppers(canvas);
     _drawCompass(canvas, size);
-  }
-
-  /// Resolves all low points (drains + scuppers) to world coordinates.
-  List<Offset> _lowPointsWorld() {
-    final pts = <Offset>[];
-    for (final d in drains) {
-      pts.add(Offset(d.x, d.y));
-    }
-    if (polygons.isNotEmpty) {
-      final primary = polygons.first.points;
-      for (final s in scuppers) {
-        if (s.edgeIndex >= primary.length) continue;
-        final a = primary[s.edgeIndex];
-        final b = primary[(s.edgeIndex + 1) % primary.length];
-        pts.add(Offset(
-          a.dx + (b.dx - a.dx) * s.position,
-          a.dy + (b.dy - a.dy) * s.position,
-        ));
-      }
-    }
-    return pts;
   }
 
   /// Zone base colors (used at full taper thickness — farthest point).
@@ -605,7 +663,7 @@ class _RoofPainter extends CustomPainter {
     if (polygons.isEmpty) return;
     final primary = polygons.first.points;
     if (primary.length < 3) return;
-    final lows = _lowPointsWorld();
+    final lows = lowFeatures;
     if (lows.isEmpty) return;
 
     canvas.save();
@@ -643,15 +701,7 @@ class _RoofPainter extends CustomPainter {
       for (int iy = 0; iy < gridN; iy++) {
         final cx = minX + (ix + 0.5) * stepX;
         final cy = minY + (iy + 0.5) * stepY;
-        int nearestIdx = 0;
-        double nearestDist = _dist(cx, cy, lows[0].dx, lows[0].dy);
-        for (int i = 1; i < lows.length; i++) {
-          final d = _dist(cx, cy, lows[i].dx, lows[i].dy);
-          if (d < nearestDist) {
-            nearestDist = d;
-            nearestIdx = i;
-          }
-        }
+        final (nearestIdx, nearestDist) = LowFeature.nearest(lows, cx, cy);
         final row = (nearestDist / panelWidthFt).floor();
         nearestIdxGrid[ix][iy] = nearestIdx;
         rowGrid[ix][iy] = row;
@@ -733,33 +783,27 @@ class _RoofPainter extends CustomPainter {
 
   /// Labels each panel band with its panel letter, placed along the line from
   /// the low point to the farthest polygon vertex in that zone.
-  void _drawBandLabels(Canvas canvas, List<Offset> primary, List<Offset> lows) {
+  void _drawBandLabels(
+      Canvas canvas, List<Offset> primary, List<LowFeature> lows) {
     final seq = panelSequence!;
     const panelWidthFt = 4.0;
 
     for (int i = 0; i < lows.length; i++) {
-      final lp = lows[i];
-
       // Find farthest vertex in this zone
       double farDist = 0;
-      Offset farVertex = lp;
+      Offset? farVertex;
       for (final v in primary) {
-        int nearestIdx = 0;
-        double nearestDist = _dist(v.dx, v.dy, lows[0].dx, lows[0].dy);
-        for (int j = 1; j < lows.length; j++) {
-          final d = _dist(v.dx, v.dy, lows[j].dx, lows[j].dy);
-          if (d < nearestDist) {
-            nearestDist = d;
-            nearestIdx = j;
-          }
-        }
+        final (nearestIdx, nearestDist) = LowFeature.nearest(lows, v.dx, v.dy);
         if (nearestIdx == i && nearestDist > farDist) {
           farDist = nearestDist;
           farVertex = v;
         }
       }
 
-      if (farDist < panelWidthFt) continue;
+      if (farVertex == null || farDist < panelWidthFt) continue;
+      // Labels run from the nearest point on the low feature (a gutter's
+      // foot point, or the drain itself) out to the far vertex.
+      final lp = lows[i].closestPoint(farVertex.dx, farVertex.dy);
 
       final numRows = (farDist / panelWidthFt).ceil();
       // Unit vector from low point toward farthest vertex
@@ -804,7 +848,7 @@ class _RoofPainter extends CustomPainter {
     if (polygons.isEmpty) return;
     final primary = polygons.first.points;
     if (primary.length < 3) return;
-    final lows = _lowPointsWorld();
+    final lows = lowFeatures;
     if (lows.isEmpty) return;
 
     final arrowPaint = Paint()
@@ -814,19 +858,12 @@ class _RoofPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
 
     for (final v in primary) {
-      int nearestIdx = 0;
-      double nearestDist = _dist(v.dx, v.dy, lows[0].dx, lows[0].dy);
-      for (int i = 1; i < lows.length; i++) {
-        final d = _dist(v.dx, v.dy, lows[i].dx, lows[i].dy);
-        if (d < nearestDist) {
-          nearestDist = d;
-          nearestIdx = i;
-        }
-      }
+      final (nearestIdx, _) = LowFeature.nearest(lows, v.dx, v.dy);
 
-      // Draw a short arrow from vertex-side toward the low point
+      // Draw a short arrow from vertex-side toward the low point (for a
+      // gutter: its nearest point, so arrows run perpendicular to the edge).
       // Pull start a bit inward from vertex so it doesn't overlap edge
-      final target = lows[nearestIdx];
+      final target = lows[nearestIdx].closestPoint(v.dx, v.dy);
       final dx = target.dx - v.dx;
       final dy = target.dy - v.dy;
       final len = sqrt(dx * dx + dy * dy);
@@ -855,12 +892,6 @@ class _RoofPainter extends CustomPainter {
       canvas.drawLine(e, h1, arrowPaint);
       canvas.drawLine(e, h2, arrowPaint);
     }
-  }
-
-  double _dist(double x1, double y1, double x2, double y2) {
-    final dx = x1 - x2;
-    final dy = y1 - y2;
-    return sqrt(dx * dx + dy * dy);
   }
 
   Offset _ts(double rx, double ry) => Offset(
@@ -1085,6 +1116,58 @@ class _RoofPainter extends CustomPainter {
     }
   }
 
+  /// Gutters: a thick teal band just outside the edge run, with an outward
+  /// tick at each end marking the downspout side.
+  void _drawGutters(Canvas canvas) {
+    if (polygons.isEmpty || gutters.isEmpty) return;
+    final primary = polygons.first.points;
+    final cx = primary.fold(0.0, (sum, p) => sum + p.dx) / primary.length;
+    final cy = primary.fold(0.0, (sum, p) => sum + p.dy) / primary.length;
+
+    for (int i = 0; i < gutters.length; i++) {
+      final g = gutters[i];
+      if (g.edgeIndex >= primary.length) continue;
+      final a = primary[g.edgeIndex];
+      final b = primary[(g.edgeIndex + 1) % primary.length];
+      final dx = b.dx - a.dx;
+      final dy = b.dy - a.dy;
+      final edgeLen = sqrt(dx * dx + dy * dy);
+      if (edgeLen < 1e-6) continue;
+      double nx = -dy / edgeLen;
+      double ny = dx / edgeLen;
+      final mx = (a.dx + b.dx) / 2, my = (a.dy + b.dy) / 2;
+      if (nx * (cx - mx) + ny * (cy - my) > 0) {
+        nx = -nx;
+        ny = -ny;
+      }
+
+      final s = _ts(a.dx + dx * g.start, a.dy + dy * g.start);
+      final e = _ts(a.dx + dx * g.end, a.dy + dy * g.end);
+      const off = 5.0;
+      final so = Offset(s.dx + nx * off, s.dy + ny * off);
+      final eo = Offset(e.dx + nx * off, e.dy + ny * off);
+      canvas.drawLine(
+        so,
+        eo,
+        Paint()
+          ..color = _kGutterColor
+          ..strokeWidth = 6
+          ..strokeCap = StrokeCap.butt,
+      );
+      final tickPaint = Paint()
+        ..color = _kGutterColor
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round;
+      for (final p in [so, eo]) {
+        canvas.drawLine(p, Offset(p.dx + nx * 8, p.dy + ny * 8), tickPaint);
+      }
+
+      final mid = Offset((so.dx + eo.dx) / 2 + nx * 14, (so.dy + eo.dy) / 2 + ny * 14);
+      _drawText(canvas, 'G${i + 1}', mid,
+          color: _kGutterColor, fontSize: 9, bold: true);
+    }
+  }
+
   void _drawScuppers(Canvas canvas) {
     if (polygons.isEmpty) return;
     final primary = polygons.first.points;
@@ -1220,8 +1303,9 @@ class _RoofPainter extends CustomPainter {
       windZones         != old.windZones ||
       drains            != old.drains    ||
       scuppers          != old.scuppers  ||
+      gutters           != old.gutters   ||
       showWatershed     != old.showWatershed ||
-      lowPointCount     != old.lowPointCount ||
+      lowFeatures.length != old.lowFeatures.length ||
       panelSequence     != old.panelSequence ||
       taperMinThickness != old.taperMinThickness;
 }

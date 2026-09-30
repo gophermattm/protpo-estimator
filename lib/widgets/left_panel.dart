@@ -1406,7 +1406,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       ],
 
       _sp14,
-      _toggle('Tapered Insulation', 'Slopes toward drains', _hasTapered, (v) {
+      _toggle('Tapered Insulation', 'Slopes toward drains, scuppers, or gutters', _hasTapered, (v) {
         setState(() => _hasTapered = v); n.setTaperedEnabled(v);
       }),
       if (_hasTapered) ...[
@@ -1426,7 +1426,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
               'Tapered panels are installed on top of the flat insulation layers above. '
               'The flat layers provide the base R-value; tapered panels add slope to drains. '
               'Fastener lengths are calculated for the full stack (flat + tapered + cover board). '
-              'Place drains on the roof plan to generate the board schedule.',
+              'Place drains, scuppers, or gutters on the roof plan to generate the board schedule.',
               style: TextStyle(fontSize: 11, color: const Color(0xFF92400E), height: 1.3),
             )),
           ]),
@@ -1645,7 +1645,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
         if (!hasBoardSchedule) ...[
           const SizedBox(height: 6),
-          Text('Place drains on roof plan for exact taper R-values.',
+          Text('Place drains, scuppers, or gutters on roof plan for exact taper R-values.',
               style: TextStyle(fontSize: 10, color: AppTheme.textMuted, fontStyle: FontStyle.italic)),
         ],
       ]),

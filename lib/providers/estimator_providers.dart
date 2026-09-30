@@ -223,28 +223,23 @@ final boardScheduleProvider = Provider<BoardScheduleResult?>((ref) {
   return computeBoardSchedule(geo, insulation, wasteFactor: waste);
 });
 
-/// Watershed zones for the active building — one per drain/scupper when
+/// Watershed zones for the active building — one per drain/scupper/gutter when
 /// tapered insulation is active. Used by the UI to show per-zone breakdown.
 final watershedZonesProvider = Provider<List<ZoneWatershed>>((ref) {
   final insulation = ref.watch(insulationSystemProvider);
   final geo = ref.watch(roofGeometryProvider);
 
   if (!insulation.hasTaper) return [];
-  if (geo.drainLocations.isEmpty && geo.scupperLocations.isEmpty) return [];
+  if (!geo.hasLowPoints) return [];
 
   final primaryShape = geo.shapes.isNotEmpty ? geo.shapes.first : null;
   if (primaryShape == null) return [];
   final vertices = _buildPolygonVertices(primaryShape);
   if (vertices.isEmpty) return [];
 
-  final lowPoints = <Offset>[
-    ...geo.drainLocations.map((d) => Offset(d.x, d.y)),
-    ...geo.scupperLocations.map((s) => scupperWorldPosition(s, vertices)),
-  ];
-
   return WatershedCalculator.computeZones(
     polygonVertices: vertices,
-    lowPoints: lowPoints,
+    lowFeatures: drainageLowFeatures(geo, vertices),
     totalPolygonArea: geo.totalArea,
   );
 });
@@ -465,6 +460,31 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
       _updateActive(
         (b) => b.copyWith(
             roofGeometry: b.roofGeometry.copyWith(scupperLocations: scuppers)),
+      );
+    }
+  }
+
+  /// Adds a gutter along [location]'s edge. A second gutter on the same edge
+  /// is ignored — one run per edge.
+  void addGutter(GutterLocation location) {
+    final gutters = List<GutterLocation>.from(
+        state.activeBuilding.roofGeometry.gutterLocations);
+    if (gutters.any((g) => g.edgeIndex == location.edgeIndex)) return;
+    gutters.add(location);
+    _updateActive(
+      (b) => b.copyWith(
+          roofGeometry: b.roofGeometry.copyWith(gutterLocations: gutters)),
+    );
+  }
+
+  void removeGutter(int index) {
+    final gutters = List<GutterLocation>.from(
+        state.activeBuilding.roofGeometry.gutterLocations);
+    if (index >= 0 && index < gutters.length) {
+      gutters.removeAt(index);
+      _updateActive(
+        (b) => b.copyWith(
+            roofGeometry: b.roofGeometry.copyWith(gutterLocations: gutters)),
       );
     }
   }
@@ -1381,6 +1401,37 @@ Offset scupperWorldPosition(ScupperLocation scupper, List<Offset> vertices) {
   );
 }
 
+/// Converts a GutterLocation (edge index + start/end fractions) to its world
+/// segment endpoints using the provided polygon vertices.
+(Offset, Offset) gutterWorldSegment(GutterLocation gutter, List<Offset> vertices) {
+  if (vertices.isEmpty || gutter.edgeIndex >= vertices.length) {
+    return (Offset.zero, Offset.zero);
+  }
+  final a = vertices[gutter.edgeIndex];
+  final b = vertices[(gutter.edgeIndex + 1) % vertices.length];
+  Offset at(double t) => Offset(a.dx + (b.dx - a.dx) * t, a.dy + (b.dy - a.dy) * t);
+  return (at(gutter.start), at(gutter.end));
+}
+
+/// All drainage low features for [geo] in a fixed order: drains, then
+/// scuppers, then gutters. Zone index i in watershed results maps back to
+/// this order, so UI labels and the PDF must use it too.
+List<LowFeature> drainageLowFeatures(RoofGeometry geo, List<Offset> vertices) {
+  final features = <LowFeature>[
+    ...geo.drainLocations.map((d) => LowFeature.point(Offset(d.x, d.y))),
+  ];
+  for (final s in geo.scupperLocations) {
+    if (s.edgeIndex >= vertices.length) continue;
+    features.add(LowFeature.point(scupperWorldPosition(s, vertices)));
+  }
+  for (final g in geo.gutterLocations) {
+    if (g.edgeIndex >= vertices.length) continue;
+    final (a, b) = gutterWorldSegment(g, vertices);
+    features.add(LowFeature.segment(a, b));
+  }
+  return features;
+}
+
 /// Computes a BoardScheduleResult for a given building's geometry and insulation.
 ///
 /// Uses watershed geometry: divides the roof into drainage zones around each
@@ -1396,19 +1447,16 @@ Offset scupperWorldPosition(ScupperLocation scupper, List<Offset> vertices) {
 BoardScheduleResult? computeBoardSchedule(RoofGeometry geo, InsulationSystem insulation,
     {double wasteFactor = 0.10}) {
   if (!insulation.hasTaper || insulation.taperDefaults == null) return null;
-  if (geo.drainLocations.isEmpty && geo.scupperLocations.isEmpty) return null;
+  if (!geo.hasLowPoints) return null;
 
   final primaryShape = geo.shapes.isNotEmpty ? geo.shapes.first : null;
   if (primaryShape == null) return null;
   final vertices = _buildPolygonVertices(primaryShape);
   if (vertices.isEmpty) return null;
 
-  // Combine drain and scupper world positions as low points
-  final lowPoints = <Offset>[
-    ...geo.drainLocations.map((d) => Offset(d.x, d.y)),
-    ...geo.scupperLocations.map((s) => scupperWorldPosition(s, vertices)),
-  ];
-  if (lowPoints.isEmpty) return null;
+  // Drains, scuppers, and gutters (segments) as low features
+  final lowFeatures = drainageLowFeatures(geo, vertices);
+  if (lowFeatures.isEmpty) return null;
 
   final totalArea = geo.totalArea;
   if (totalArea <= 0) return null;
@@ -1418,7 +1466,7 @@ BoardScheduleResult? computeBoardSchedule(RoofGeometry geo, InsulationSystem ins
   // Compute watershed zones
   final zones = WatershedCalculator.computeZones(
     polygonVertices: vertices,
-    lowPoints: lowPoints,
+    lowFeatures: lowFeatures,
     totalPolygonArea: totalArea,
   );
 
@@ -1426,8 +1474,10 @@ BoardScheduleResult? computeBoardSchedule(RoofGeometry geo, InsulationSystem ins
     // Fall back to single-zone worst-case
     final distance = DrainDistanceCalculator.bestTaperDistance(
       polygonVertices: vertices,
-      drainXs: lowPoints.map((p) => p.dx).toList(),
-      drainYs: lowPoints.map((p) => p.dy).toList(),
+      // Gutters use their midpoint here — conservative (longer run) for the
+      // degenerate-watershed fallback only.
+      drainXs: lowFeatures.map((f) => (f.start.dx + f.end.dx) / 2).toList(),
+      drainYs: lowFeatures.map((f) => (f.start.dy + f.end.dy) / 2).toList(),
     );
     if (distance <= 0) return null;
     final roofWidth = DrainDistanceCalculator.roofWidthPerpendicular(vertices);

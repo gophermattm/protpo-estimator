@@ -150,6 +150,7 @@ Map<String, dynamic> _roofGeometryToJson(RoofGeometry g) => {
   'outsideCorners':   g.outsideCorners,
   'windZones':        _windZonesToJson(g.windZones),
   'scupperLocations': g.scupperLocations.map(_scupperToJson).toList(),
+  'gutterLocations':  g.gutterLocations.map(_gutterToJson).toList(),
   'drainageZones':    g.drainageZones.map(_drainageZoneToJson).toList(),
 };
 
@@ -171,6 +172,9 @@ RoofGeometry _roofGeometryFromJson(Map j) => RoofGeometry(
   windZones:        _windZonesFromJson(j['windZones'] as Map? ?? {}),
   scupperLocations: (j['scupperLocations'] as List? ?? [])
       .map((s) => _scupperFromJson(s as Map<String, dynamic>))
+      .toList(),
+  gutterLocations: (j['gutterLocations'] as List? ?? [])
+      .map((g) => _gutterFromJson(g as Map<String, dynamic>))
       .toList(),
   drainageZones: (j['drainageZones'] as List? ?? [])
       .map((z) => _drainageZoneFromJson(z as Map<String, dynamic>))
@@ -235,6 +239,20 @@ Map<String, dynamic> _scupperToJson(ScupperLocation s) => {
 ScupperLocation _scupperFromJson(Map<String, dynamic> j) => ScupperLocation(
   edgeIndex: _i(j['edgeIndex'], 0),
   position: _d(j['position'], 0.5),
+);
+
+// ─── GUTTER LOCATION ─────────────────────────────────────────────────────────
+
+Map<String, dynamic> _gutterToJson(GutterLocation g) => {
+  'edgeIndex': g.edgeIndex,
+  'start': g.start,
+  'end': g.end,
+};
+
+GutterLocation _gutterFromJson(Map<String, dynamic> j) => GutterLocation(
+  edgeIndex: _i(j['edgeIndex'], 0),
+  start: _d(j['start'], 0.0),
+  end: _d(j['end'], 1.0),
 );
 
 // ─── DRAINAGE ZONE ───────────────────────────────────────────────────────────
