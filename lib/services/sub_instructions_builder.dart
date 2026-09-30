@@ -162,7 +162,7 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
     final memLen = BomCalculator.selectFastenerLenPublic(specs.deckType, stackIn);
     widgets.add(_subsection('Membrane Fastener:'));
     widgets.add(_bullet('${BomCalculator.fastenerNamePublic(specs.deckType)} $memLen (through full insulation stack ${stackIn.toStringAsFixed(1)}" to deck)'));
-    widgets.add(_bullet('3" seam stress plate at each fastener'));
+    widgets.add(_bullet('${BomCalculator.fastenerNamePublic(specs.deckType).contains('HPVX') ? '2.38" HPVX fastening plate' : '2" seam fastening plate'} at each fastener'));
     widgets.add(_bullet('All seams hot-air welded minimum 1.5" width'));
   } else if (isRB) {
     widgets.add(_body(

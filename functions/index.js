@@ -44,3 +44,55 @@ exports.searchQxoItemsGw = onCall(opts, async (request) => {
     throw toHttpsError(err);
   }
 });
+
+// ── VersiBot ──────────────────────────────────────────────────────────────────
+// askVersico2 replaces the Python askVersico (retired models). Named *2 so the
+// old function stays untouched until this one is confirmed.
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { initializeApp, getApps } = require("firebase-admin/app");
+const { GoogleAuth } = require("google-auth-library");
+const versibot = require("./versibot");
+
+const ANTHROPIC_KEY = defineSecret("ANTHROPIC_API_KEY");
+if (!getApps().length) initializeApp();
+const auth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
+
+exports.askVersico2 = onCall(
+  { region: "us-central1", secrets: [ANTHROPIC_KEY], timeoutSeconds: 60, memory: "1GiB" },
+  async (request) => {
+    const data = request.data || {};
+    const mode = data.mode;
+    if (mode === "audit" || mode === "nl" || mode === "sow") {
+      if (!data.prompt) throw new HttpsError("invalid-argument", "prompt required");
+      try {
+        const text = await versibot.claude({
+          prompt: data.prompt,
+          system: data.system || "",
+          maxTokens: mode === "audit" ? 1000 : 300,
+          apiKey: ANTHROPIC_KEY.value(),
+        });
+        return { result: { result: text } };
+      } catch (err) {
+        throw new HttpsError("internal", String((err && err.message) || err));
+      }
+    }
+
+    const question = data.question;
+    if (!question) return { answer: "Please ask a question!", sources: [] };
+    try {
+      const token = await auth.getAccessToken();
+      const vector = await versibot.embed(question, token);
+      const snap = await getFirestore().collection("versico_technical_data").findNearest({
+        vectorField: "embedding",
+        queryVector: FieldValue.vector(vector),
+        limit: 20,
+        distanceMeasure: "COSINE",
+      }).get();
+      const { contextText, sources } = versibot.shapeHits(snap.docs.map((d) => d.data()));
+      const answer = await versibot.generate(versibot.buildPrompt(contextText, question), token);
+      return { answer, sources };
+    } catch (err) {
+      console.error("VersiBot error", err);
+      return { answer: `VersiBot hit a snag: ${String((err && err.message) || err)}`, sources: [] };
+    }
+  });

@@ -414,6 +414,7 @@ class QxoPricingService {
       if (len != null) return len;
       return 'TRI-BUILT standard drill point roofing fastener';
     }
+    if (lower.contains('hpvx fastening plate')) return 'Versico HPVX Steel Fastening Plates';
     if (lower.contains('stress plate') || lower.contains('seam stress')) return 'seam plate';
     if (lower.contains('insulation plate')) return 'TRI-BUILT insulation seam steel plates';
     if (lower.contains('seam fastening plate')) return 'Versico seam fastening plate';

@@ -2843,7 +2843,7 @@ class _SowEditSheetState extends State<_SowEditSheet> {
 
     try {
       final response = await http.post(
-        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico'),
+        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico2'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'data': {
           'mode': 'sow',
@@ -3372,7 +3372,7 @@ class _SubInstructionsTabState extends ConsumerState<_SubInstructionsTab> {
       }
       final stackIn = BomCalculator.stackThicknessPublic(insul, 3);
       final memLen = BomCalculator.selectFastenerLenPublic(specs.deckType, stackIn);
-      memText += 'Membrane fastener: ${BomCalculator.fastenerNamePublic(specs.deckType)} $memLen (${stackIn.toStringAsFixed(1)}" stack to deck) with 3" stress plate. ';
+      memText += 'Membrane fastener: ${BomCalculator.fastenerNamePublic(specs.deckType)} $memLen (${stackIn.toStringAsFixed(1)}" stack to deck) with ${BomCalculator.fastenerNamePublic(specs.deckType).contains('HPVX') ? '2.38" HPVX fastening plate' : '2" seam fastening plate'}. ';
     } else if (isFA) {
       memText = 'FULLY ADHERED: Apply ${membrane.adhesiveType == 'CAV-GRIP 3V Spray' ? 'CAV-GRIP 3V spray (~2,000 SF/cyl)' : 'VersiWeld bonding adhesive (~60 SF/gal)'} to substrate and membrane back. Roll into adhesive while tacky. ';
     } else if (isRB) {
@@ -3502,7 +3502,7 @@ class _SubEditSheetState extends State<_SubEditSheet> {
 
     try {
       final response = await http.post(
-        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico'),
+        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico2'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'data': {
           'mode': 'sow',

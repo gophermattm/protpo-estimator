@@ -612,15 +612,19 @@ class BomCalculator {
         ),
       ));
 
-      // Seam stress plates — one per MA fastener
-      final plateBoxSize = kQxoSeamPlate2inPack.toDouble();
+      // Seam fastening plates — one per MA fastener. Versico pairs HPVX with
+      // 2.38" HPVX Steel Fastening Plates; HPV / MP 14-10 / CD-10 use 2" Seam
+      // Fastening Plates. (3" plates are insulation plates, not seam plates.)
+      final isHpvx       = fastenerName.contains('HPVX');
+      final plateLabel   = isHpvx ? '2.38" HPVX Fastening Plates' : '2" Seam Fastening Plates';
+      final plateBoxSize = (isHpvx ? kQxoHpvxPlatePack : kQxoSeamPlate2inPack).toDouble();
       final plateWithW   = totalFast * (1 + wAcc);
       final plateOrder   = (plateWithW / plateBoxSize).ceil().toDouble();
       items.add(BomLineItem(
         category: 'Fasteners & Plates',
-        name: '3" Seam Stress Plates',
-        skuKey: 'plate_seam_stress_3in',
-        attributes: const {},
+        name: plateLabel,
+        skuKey: 'plate_seam_stress_3in', // stable key; plate size is an attribute
+        attributes: {'plateSize': isHpvx ? '2.38"' : '2"', 'fastener': isHpvx ? 'HPVX' : 'HPV'},
         orderQty: plateOrder,
         unit: 'cartons',
         notes: '${plateBoxSize.toInt()}/carton (QXO) — one plate per MA fastener',

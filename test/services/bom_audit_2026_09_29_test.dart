@@ -76,8 +76,17 @@ void main() {
       expect(f.trace.packageSize, 1000);
       expect(f.orderQty, 2);
       final p = _item(r, 'plate_seam_stress_3in');
+      expect(p.name, '2" Seam Fastening Plates'); // HPV on wood
+      expect(p.attributes!['plateSize'], '2"');
       expect(p.trace.baseQty, closeTo(f.trace.baseQty, 0.01));
       expect(p.orderQty, 2);
+    });
+
+    test('steel deck pairs HPVX with 2.38" HPVX plates', () {
+      final r = _calc(specs: const SystemSpecs(deckType: 'Metal'));
+      final p = _item(r, 'plate_seam_stress_3in');
+      expect(p.name, '2.38" HPVX Fastening Plates');
+      expect(p.attributes!['plateSize'], '2.38"');
     });
 
     test('8" HPV uses the QXO 500/carton pack', () {

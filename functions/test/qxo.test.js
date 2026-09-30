@@ -39,3 +39,25 @@ test("gateway errors carry stage and fail without key", async () => {
   const fetchImpl = async () => ({ ok: false, status: 500, json: async () => ({ ok: false, stage: "auth", error: "expired" }) });
   await assert.rejects(callGateway("/x", {}, { apiKey: "k", fetchImpl }), /auth: expired/);
 });
+
+const vb = require("../versibot");
+
+test("versibot shapes hits into context and unique sources", () => {
+  const r = vb.shapeHits([
+    { content: "A", source_file: "Guide.pdf", page_number: 9 },
+    { content: "B", source_file: "Guide.pdf", page_number: 9 },
+    { source_file: "Detail.pdf" },
+  ]);
+  assert.strictEqual(r.contextText, "A\n---\nB\n---\nNo content available.");
+  assert.deepStrictEqual(r.sources, ["Guide.pdf (Page 9)", "Detail.pdf (Page N/A)"]);
+});
+
+test("claude call sends system prompt and returns text", async () => {
+  let sent;
+  const fetchImpl = async (url, init) => { sent = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ content: [{ type: "text", text: "OK" }] }) }; };
+  const text = await vb.claude({ prompt: "p", system: "s", maxTokens: 300, apiKey: "k", fetchImpl });
+  assert.strictEqual(text, "OK");
+  assert.strictEqual(sent.system, "s");
+  assert.strictEqual(sent.model, vb.CLAUDE_MODEL);
+});

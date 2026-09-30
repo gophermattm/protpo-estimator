@@ -258,7 +258,7 @@ class _RightPanelState extends ConsumerState<RightPanel> {
   Future<void> _sendSpecMessage(String question) async {
     try {
       final response = await http.post(
-        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico'),
+        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico2'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'data': {'question': question}}),
       ).timeout(const Duration(seconds: 45));
@@ -320,7 +320,7 @@ ${jsonEncode(snapshot)}
 
     try {
       final response = await http.post(
-        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico'),
+        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico2'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'data': {'mode': 'audit', 'prompt': prompt}}),
       ).timeout(const Duration(seconds: 55));
@@ -446,7 +446,7 @@ User request: "$userText"
 
     try {
       final response = await http.post(
-        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico'),
+        Uri.parse('https://us-central1-tpo-pro-245d1.cloudfunctions.net/askVersico2'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'data': {'mode': 'nl', 'prompt': prompt}}),
       ).timeout(const Duration(seconds: 15));

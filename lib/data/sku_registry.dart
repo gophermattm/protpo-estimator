@@ -190,8 +190,13 @@ final List<SkuRegistryEntry> kSkuRegistry = [
   ),
   SkuRegistryEntry(
     skuKey: 'plate_seam_stress_3in',
-    displayName: '3" Seam Stress Plates',
+    displayName: 'MA Seam Fastening Plates (2" HPV / 2.38" HPVX)',
     category: 'Fasteners & Plates',
+    variantAttributes: ['plateSize', 'fastener'],
+    knownVariants: [
+      {'plateSize': '2"', 'fastener': 'HPV'},
+      {'plateSize': '2.38"', 'fastener': 'HPVX'},
+    ],
   ),
   SkuRegistryEntry(
     skuKey: 'plate_rhinobond',
