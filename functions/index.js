@@ -1,6 +1,9 @@
 // ProTPO Cloud Functions. QXO access goes through the gorilla-integrations
 // gateway, which owns QXO OAuth; this layer only holds the gateway key
 // (Firebase secret GORILLA_GATEWAY_KEY) so it never ships in the web bundle.
+//
+// Named *Gw so they deploy alongside the older Python getQxoPricing /
+// searchQxoItems (source not in this repo) instead of replacing them.
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
@@ -14,7 +17,7 @@ function toHttpsError(err) {
     String((err && err.message) || err));
 }
 
-exports.getQxoPricing = onCall(opts, async (request) => {
+exports.getQxoPricingGw = onCall(opts, async (request) => {
   const skuIds = (request.data && request.data.skuIds) || [];
   if (!Array.isArray(skuIds) || skuIds.length === 0) return { prices: {} };
   try {
@@ -27,7 +30,7 @@ exports.getQxoPricing = onCall(opts, async (request) => {
   }
 });
 
-exports.searchQxoItems = onCall(opts, async (request) => {
+exports.searchQxoItemsGw = onCall(opts, async (request) => {
   const query = String((request.data && request.data.query) || "").trim();
   if (query.length < 2) return { items: [], totalCount: 0 };
   try {

@@ -2,8 +2,10 @@
 ///
 /// HTTP client for QXO/Beacon Partner Integrations API.
 ///
-/// Routes all requests through Firebase Cloud Functions which handle
-/// authentication, cookies, and secrets server-side.
+/// Routes all requests through Firebase Cloud Functions. Pricing and search
+/// use the *Gw functions (functions/index.js), which call QXO through the
+/// gorilla-integrations gateway. Quote submission still uses the older
+/// submitQxoQuote function.
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
@@ -20,7 +22,7 @@ class QxoApiService {
   /// Search QXO item catalog by text query.
   Future<QxoSearchResult> searchItems(String query) async {
     debugPrint('[QXO] Searching via Cloud Function: "$query"');
-    final result = await _functions.httpsCallable('searchQxoItems').call({
+    final result = await _functions.httpsCallable('searchQxoItemsGw').call({
       'query': query,
     });
 
@@ -51,7 +53,7 @@ class QxoApiService {
     if (itemNumbers.isEmpty) return {};
 
     debugPrint('[QXO] Fetching pricing via Cloud Function for ${itemNumbers.length} items');
-    final result = await _functions.httpsCallable('getQxoPricing').call({
+    final result = await _functions.httpsCallable('getQxoPricingGw').call({
       'skuIds': itemNumbers,
     });
 
