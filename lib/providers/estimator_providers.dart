@@ -703,6 +703,9 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
             parapetWalls: b.parapetWalls.copyWith(parapetAdhesiveType: type)),
       );
 
+  void updateHeadwallHeight(double inches) => _updateActive((b) =>
+      b.copyWith(parapetWalls: b.parapetWalls.copyWith(headwallHeight: inches)));
+
   // ── Penetrations (active building) ────────────────────────────────────────
 
   void updatePenetrations(Penetrations penetrations) =>

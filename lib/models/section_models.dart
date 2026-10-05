@@ -168,6 +168,10 @@ class ParapetWalls {
   /// Default: VersiWeld TPO Bonding Adhesive (5-gal pail).
   final String parapetAdhesiveType;
 
+  // Headwall flashing fields
+  final double headwallHeight;      // inches
+  final double headwallLF;          // linear feet
+
   const ParapetWalls({
     this.hasParapetWalls = false,
     this.parapetHeight = 0.0,
@@ -176,6 +180,8 @@ class ParapetWalls {
     this.terminationBarLFOverride,
     this.terminationType = 'Termination Bar',
     this.parapetAdhesiveType = 'VersiWeld TPO Bonding Adhesive',
+    this.headwallHeight = 0.0,
+    this.headwallLF = 0.0,
   });
 
   factory ParapetWalls.initial() => const ParapetWalls();
@@ -199,6 +205,13 @@ class ParapetWalls {
     }
   }
 
+  /// Headwall flashing is in scope only with both a height and LF.
+  bool get hasHeadwall => headwallHeight > 0 && headwallLF > 0;
+
+  /// Termination bar LF across parapet and headwall.
+  double get wallTermBarLF =>
+      (hasParapetWalls ? terminationBarLF : 0.0) + (hasHeadwall ? headwallLF : 0.0);
+
   ParapetWalls copyWith({
     bool? hasParapetWalls,
     double? parapetHeight,
@@ -207,6 +220,8 @@ class ParapetWalls {
     double? terminationBarLFOverride,
     String? terminationType,
     String? parapetAdhesiveType,
+    double? headwallHeight,
+    double? headwallLF,
   }) {
     return ParapetWalls(
       hasParapetWalls: hasParapetWalls ?? this.hasParapetWalls,
@@ -217,6 +232,8 @@ class ParapetWalls {
           terminationBarLFOverride ?? this.terminationBarLFOverride,
       terminationType: terminationType ?? this.terminationType,
       parapetAdhesiveType: parapetAdhesiveType ?? this.parapetAdhesiveType,
+      headwallHeight: headwallHeight ?? this.headwallHeight,
+      headwallLF: headwallLF ?? this.headwallLF,
     );
   }
 
@@ -229,6 +246,8 @@ class ParapetWalls {
         terminationBarLFOverride: null,
         terminationType: terminationType,
         parapetAdhesiveType: parapetAdhesiveType,
+        headwallHeight: headwallHeight,
+        headwallLF: headwallLF,
       );
 
   @override
@@ -241,13 +260,15 @@ class ParapetWalls {
           wallType == other.wallType &&
           terminationBarLFOverride == other.terminationBarLFOverride &&
           terminationType == other.terminationType &&
-          parapetAdhesiveType == other.parapetAdhesiveType;
+          parapetAdhesiveType == other.parapetAdhesiveType &&
+          headwallHeight == other.headwallHeight &&
+          headwallLF == other.headwallLF;
 
   @override
   int get hashCode => Object.hash(
         hasParapetWalls, parapetHeight, parapetTotalLF,
         wallType, terminationBarLFOverride, terminationType,
-        parapetAdhesiveType,
+        parapetAdhesiveType, headwallHeight, headwallLF,
       );
 }
 

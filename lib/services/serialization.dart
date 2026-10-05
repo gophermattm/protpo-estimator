@@ -29,6 +29,8 @@ Map<String, dynamic> roofGeometryToJson(RoofGeometry g) => _roofGeometryToJson(g
 RoofGeometry roofGeometryFromJson(Map j) => _roofGeometryFromJson(j);
 Map<String, dynamic> metalScopeToJson(MetalScope m) => _metalScopeToJson(m);
 MetalScope metalScopeFromJson(Map j) => _metalScopeFromJson(j);
+Map<String, dynamic> parapetWallsToJson(ParapetWalls p) => _parapetWallsToJson(p);
+ParapetWalls parapetWallsFromJson(Map j) => _parapetWallsFromJson(j);
 
 // ─── TOP-LEVEL ENTRY POINTS ──────────────────────────────────────────────────
 
@@ -454,6 +456,8 @@ Map<String, dynamic> _parapetWallsToJson(ParapetWalls p) => {
   'terminationBarLFOverride':p.terminationBarLFOverride,
   'terminationType':         p.terminationType,
   'parapetAdhesiveType':     p.parapetAdhesiveType,
+  'headwallHeight':          p.headwallHeight,
+  'headwallLF':              p.headwallLF,
 };
 
 ParapetWalls _parapetWallsFromJson(Map j) => ParapetWalls(
@@ -464,6 +468,8 @@ ParapetWalls _parapetWallsFromJson(Map j) => ParapetWalls(
   terminationBarLFOverride: (j['terminationBarLFOverride'] as num?)?.toDouble(),
   terminationType:          _s(j['terminationType'], 'Termination Bar'),
   parapetAdhesiveType:      _s(j['parapetAdhesiveType'], 'VersiWeld TPO Bonding Adhesive'),
+  headwallHeight:           _d(j['headwallHeight'], 0.0),
+  headwallLF:               _d(j['headwallLF'], 0.0),
 );
 
 // ─── PENETRATIONS ─────────────────────────────────────────────────────────────
