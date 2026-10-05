@@ -188,7 +188,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   bool   _hasCoverBoard    = false;
   String _cbType           = 'HD Polyiso';
   String _cbThickness      = '0.5';
-  String _cbAttachment     = 'Adhered';
+  String _cbAttachment     = 'Mechanically Attached';
 
   // ── Membrane ─────────────────────────────────────────────────────────────────
   String _memType       = 'TPO';
@@ -441,7 +441,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _hasCoverBoard   = ins.hasCoverBoard;
       _cbType          = ins.coverBoard?.type ?? 'HD Polyiso';
       _cbThickness     = (ins.coverBoard?.thickness ?? 0.5).toString();
-      _cbAttachment    = ins.coverBoard?.attachmentMethod ?? 'Adhered';
+      _cbAttachment    = ins.coverBoard?.attachmentMethod ?? 'Mechanically Attached';
       _memType         = mem.membraneType;
       _memThickness    = mem.thickness;
       _memColor        = mem.color;

@@ -171,6 +171,15 @@ class ValidationEngine {
           fix: 'Verify Versico approves Rhinobond for concrete deck at this wind rating.'));
     }
 
+    // Adhered insulation directly to steel deck — approval varies by assembly
+    if (specs.deckType == 'Metal' && insul.numberOfLayers >= 1 &&
+        insul.layer1.attachmentMethod == 'Adhered') {
+      issues.add(const ValidationIssue(severity: IssueSeverity.warning,
+          category: 'Compatibility',
+          message: 'Adhered insulation directly to steel deck.',
+          fix: 'Verify the adhesive and assembly are approved for steel deck (FM/Versico), or mechanically attach layer 1.'));
+    }
+
     // Fully adhered requires bonding adhesive — check insulation surface compatibility
     if (membrane.fieldAttachment == 'Fully Adhered' && insul.layer1.attachmentMethod == 'Mechanically Attached'
         && !insul.hasCoverBoard) {

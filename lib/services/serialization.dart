@@ -415,7 +415,7 @@ Map<String, dynamic> _coverBoardToJson(CoverBoard cb) => {
 CoverBoard _coverBoardFromJson(Map j) => CoverBoard(
   type:             _s(j['type'], 'HD Polyiso'),
   thickness:        _d(j['thickness'], 0.5),
-  attachmentMethod: _s(j['attachmentMethod'], 'Adhered'),
+  attachmentMethod: _s(j['attachmentMethod'], 'Mechanically Attached'),
 );
 
 // ─── MEMBRANE ─────────────────────────────────────────────────────────────────

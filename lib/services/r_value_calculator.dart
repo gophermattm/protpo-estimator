@@ -5,6 +5,8 @@
 /// R/inch values are mid-point of published ranges unless noted.
 /// Code compliance thresholds are IECC 2021 by climate zone.
 
+import '../models/insulation_system.dart';
+
 // ─── R/INCH LOOKUP TABLE ──────────────────────────────────────────────────────
 
 /// Returns the R-value per inch for a given insulation material.
@@ -282,8 +284,11 @@ class RValueCalculator {
     LayerRValueResult? coverBoardResult;
     double rCover = 0;
     if (coverBoard != null) {
-      final rCoverPerInch = rValuePerInch(coverBoard.materialType);
-      rCover = coverBoard.thickness * rCoverPerInch;
+      final isNailbase = coverBoard.materialType == kCoverBoardNailbase;
+      rCover = isNailbase
+          ? (kNailbaseRValues[coverBoard.thickness] ?? 0.0)
+          : coverBoard.thickness * rValuePerInch(coverBoard.materialType);
+      final rCoverPerInch = coverBoard.thickness > 0 ? rCover / coverBoard.thickness : 0.0;
       coverBoardResult = LayerRValueResult(
         materialType: coverBoard.materialType,
         thickness: coverBoard.thickness,

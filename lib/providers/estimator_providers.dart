@@ -638,7 +638,8 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
   void setCoverBoardEnabled(bool enabled) => _updateActive(
         (b) => b.copyWith(
           insulationSystem: enabled
-              ? b.insulationSystem.withCoverBoardEnabled()
+              ? b.insulationSystem.withCoverBoardEnabled(
+                  membraneAttachment: b.membraneSystem.fieldAttachment)
               : b.insulationSystem.withCoverBoardDisabled(),
         ),
       );

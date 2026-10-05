@@ -24,12 +24,23 @@ const List<String> kAttachmentMethods = [
   'Adhered',
 ];
 
+const String kCoverBoardNailbase = 'Nailbase (Polyiso + 7/16" OSB)';
+
 const List<String> kCoverBoardTypes = [
   'HD Polyiso',
   'Gypsum',
   'DensDeck',
   'DensDeck Prime',
+  kCoverBoardNailbase,
 ];
+
+/// Nailbase total thickness incl. 7/16" OSB, and LTTR R-value
+/// (Hunter H-Shield NB TDS).
+const List<double> kNailbaseThicknesses = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
+// final, not const: Dart forbids double keys in const maps.
+final Map<double, double> kNailbaseRValues = {
+  1.5: 6.3, 2.0: 9.2, 2.5: 12.0, 3.0: 15.0, 3.5: 18.0, 4.0: 21.1,
+};
 
 const List<double> kCoverBoardThicknesses = [
   0.25,  // 1/4"
@@ -37,6 +48,16 @@ const List<double> kCoverBoardThicknesses = [
   0.5,   // 1/2"
   0.625, // 5/8"
 ];
+
+List<double> coverBoardThicknessesFor(String type) =>
+    type == kCoverBoardNailbase ? kNailbaseThicknesses : kCoverBoardThicknesses;
+
+/// Default cover board attachment for the membrane system. Nailbase is
+/// always mechanically fastened.
+String coverBoardAttachmentFor(String membraneAttachment, String type) =>
+    type != kCoverBoardNailbase && membraneAttachment == 'Fully Adhered'
+        ? 'Adhered'
+        : 'Mechanically Attached';
 
 const List<String> kTaperSlopeOptions = [
   '1/8:12',
@@ -100,7 +121,7 @@ class CoverBoard {
   const CoverBoard({
     this.type = 'HD Polyiso',
     this.thickness = 0.5,
-    this.attachmentMethod = 'Adhered',
+    this.attachmentMethod = 'Mechanically Attached',
   });
 
   factory CoverBoard.initial() => const CoverBoard();
@@ -199,11 +220,16 @@ class InsulationSystem {
   InsulationSystem withTaperDisabled() =>
       copyWith(hasTaper: false);
 
-  /// Enables cover board — seeds with defaults if not yet set.
-  InsulationSystem withCoverBoardEnabled() => copyWith(
-        hasCoverBoard: true,
-        coverBoard: coverBoard ?? CoverBoard.initial(),
-      );
+  /// Enables cover board; attachment defaults to match the membrane.
+  InsulationSystem withCoverBoardEnabled(
+      {String membraneAttachment = 'Mechanically Attached'}) {
+    final cb = coverBoard ?? CoverBoard.initial();
+    return copyWith(
+      hasCoverBoard: true,
+      coverBoard: cb.copyWith(
+          attachmentMethod: coverBoardAttachmentFor(membraneAttachment, cb.type)),
+    );
+  }
 
   InsulationSystem withCoverBoardDisabled() =>
       copyWith(hasCoverBoard: false);

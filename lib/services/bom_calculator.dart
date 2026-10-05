@@ -519,7 +519,7 @@ class BomCalculator {
           items.add(BomLineItem(
             category: 'Insulation',
             name: '${cb.type} ${_ins(cb.thickness)} — Cover Board',
-            skuKey: 'iso_coverboard',
+            skuKey: cb.type == kCoverBoardNailbase ? 'insulation_nailbase' : 'iso_coverboard',
             attributes: {
               'type':        cb.type,
               'thicknessIn': cb.thickness,

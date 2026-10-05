@@ -101,6 +101,12 @@ final List<SkuRegistryEntry> kSkuRegistry = [
     variantAttributes: ['type', 'thicknessIn', 'boardSize'],
   ),
   SkuRegistryEntry(
+    skuKey: 'insulation_nailbase',
+    displayName: 'Nailbase (Polyiso + 7/16" OSB)',
+    category: 'Insulation',
+    variantAttributes: ['thicknessIn'],
+  ),
+  SkuRegistryEntry(
     skuKey: 'iso_polyiso_tapered_panel',
     displayName: 'Tapered Polyiso — Panel',
     category: 'Insulation',
