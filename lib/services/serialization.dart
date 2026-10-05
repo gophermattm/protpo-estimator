@@ -27,6 +27,8 @@ Map<String, dynamic> insulationSystemToJson(InsulationSystem ins) => _insulation
 InsulationSystem insulationSystemFromJson(Map j) => _insulationSystemFromJson(j);
 Map<String, dynamic> roofGeometryToJson(RoofGeometry g) => _roofGeometryToJson(g);
 RoofGeometry roofGeometryFromJson(Map j) => _roofGeometryFromJson(j);
+Map<String, dynamic> metalScopeToJson(MetalScope m) => _metalScopeToJson(m);
+MetalScope metalScopeFromJson(Map j) => _metalScopeFromJson(j);
 
 // ─── TOP-LEVEL ENTRY POINTS ──────────────────────────────────────────────────
 
@@ -504,29 +506,37 @@ RTUDetail _rtuDetailFromJson(Map<String, dynamic> j) => RTUDetail(
 // ─── METAL SCOPE ─────────────────────────────────────────────────────────────
 
 Map<String, dynamic> _metalScopeToJson(MetalScope m) => {
-  'copingWidth':      m.copingWidth,
-  'copingLF':         m.copingLF,
-  'wallFlashingLF':   m.wallFlashingLF,
-  'dripEdgeLF':       m.dripEdgeLF,
+  'copingWidth': m.copingWidth, 'copingLF': m.copingLF,
+  'wallFlashingLF': m.wallFlashingLF,
+  'eaveLF': m.eaveLF, 'rakeLF': m.rakeLF, 'flatDripLF': m.flatDripLF,
+  'eaveMetalType': m.eaveMetalType, 'rakeMetalType': m.rakeMetalType,
+  'flatDripMetalType': m.flatDripMetalType,
   'otherEdgeMetalLF': m.otherEdgeMetalLF,
-  'edgeMetalType':    m.edgeMetalType,
-  'gutterSize':       m.gutterSize,
-  'gutterLF':         m.gutterLF,
-  'downspoutCount':   m.downspoutCount,
+  'gutterSize': m.gutterSize, 'gutterLF': m.gutterLF, 'downspoutCount': m.downspoutCount,
+  'hasNailers': m.hasNailers, 'nailerWidth': m.nailerWidth,
 };
 
-MetalScope _metalScopeFromJson(Map j) => MetalScope(
-  copingWidth:      _s(j['copingWidth'], '12"'),
-  copingLF:         _d(j['copingLF'], 0.0),
-  // Migrate old single edgeMetalLF into dripEdgeLF if new fields absent
-  wallFlashingLF:   _d(j['wallFlashingLF'], 0.0),
-  dripEdgeLF:       _d(j['dripEdgeLF'] ?? j['edgeMetalLF'], 0.0),
-  otherEdgeMetalLF: _d(j['otherEdgeMetalLF'], 0.0),
-  edgeMetalType:    _s(j['edgeMetalType'], 'ES-1 (Low Profile)'),
-  gutterSize:       _s(j['gutterSize'], '6"'),
-  gutterLF:         _d(j['gutterLF'], 0.0),
-  downspoutCount:   _i(j['downspoutCount'], 0),
-);
+MetalScope _metalScopeFromJson(Map j) {
+  // Legacy: single dripEdgeLF (or older edgeMetalLF) + one edgeMetalType.
+  final legacyType = _s(j['edgeMetalType'], 'TPO-Coated Drip Edge');
+  return MetalScope(
+    copingWidth: _s(j['copingWidth'], '12"'),
+    copingLF: _d(j['copingLF'], 0.0),
+    wallFlashingLF: _d(j['wallFlashingLF'], 0.0),
+    eaveLF: _d(j['eaveLF'] ?? j['dripEdgeLF'] ?? j['edgeMetalLF'], 0.0),
+    rakeLF: _d(j['rakeLF'], 0.0),
+    flatDripLF: _d(j['flatDripLF'], 0.0),
+    eaveMetalType: _s(j['eaveMetalType'], legacyType),
+    rakeMetalType: _s(j['rakeMetalType'], legacyType),
+    flatDripMetalType: _s(j['flatDripMetalType'], legacyType),
+    otherEdgeMetalLF: _d(j['otherEdgeMetalLF'], 0.0),
+    gutterSize: _s(j['gutterSize'], '6"'),
+    gutterLF: _d(j['gutterLF'], 0.0),
+    downspoutCount: _i(j['downspoutCount'], 0),
+    hasNailers: j['hasNailers'] as bool? ?? false,
+    nailerWidth: _s(j['nailerWidth'], '2x6'),
+  );
+}
 
 // ─── PRIMITIVE HELPERS ────────────────────────────────────────────────────────
 

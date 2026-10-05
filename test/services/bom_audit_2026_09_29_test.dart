@@ -287,7 +287,7 @@ void main() {
 
     test('edge metal fasteners 4" o.c. on roof edges only', () {
       final r = _calc(
-          metalScope: const MetalScope(dripEdgeLF: 400, wallFlashingLF: 100));
+          metalScope: const MetalScope(eaveLF: 400, wallFlashingLF: 100));
       final f = _item(r, 'fastener_edge_metal');
       expect(f.trace.baseQty, closeTo(400 * 12 / 4, 0.01));
     });

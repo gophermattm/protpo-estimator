@@ -566,7 +566,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     _set(_cWallFlashingLF, wallFlashingLF > 0 ? wallFlashingLF.toStringAsFixed(1) : '');
     _set(_cDripEdgeLF,     dripEdgeLF > 0     ? dripEdgeLF.toStringAsFixed(1)     : '');
     n.updateWallFlashingLF(wallFlashingLF);
-    n.updateDripEdgeLF(dripEdgeLF);
+    n.updateEdgeMetalLF('Eave', dripEdgeLF);
   }void _pushShape(int i) {
     final s = _shapes[i];
     final notifier = ref.read(estimatorProvider.notifier);
@@ -1950,7 +1950,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       ]),
       _sp12,
       _dd('Edge Metal Type', _edgeMetalType, kEdgeMetalTypes, (v) {
-        setState(() => _edgeMetalType = v!); n.updateEdgeMetalType(v!); }),
+        setState(() => _edgeMetalType = v!); n.updateEdgeMetalType('Eave', v!); }),
       _sp8,
       _lbl('Wall Flashing LF'), _sp4,
       _info('Auto-filled from Parapet/Headwall/Clerestory edges in geometry.',
@@ -1966,7 +1966,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _sp4,
       _tf('Drip Edge LF', '0', _cDripEdgeLF, suffix: 'LF',
           kb: TextInputType.number,
-          onChange: (v) => n.updateDripEdgeLF(double.tryParse(v) ?? 0)),
+          onChange: (v) => n.updateEdgeMetalLF('Eave', double.tryParse(v) ?? 0)),
       _sp8,
       _tf('Other Edge Metal LF', '0', _cOtherEdgeLF, suffix: 'LF',
           kb: TextInputType.number,

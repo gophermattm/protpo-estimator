@@ -771,7 +771,7 @@ User request: "$userText"
               description: 'Coping set to $value LF.');
 
         case 'updateEdgeMetalLF':
-          n.updateEdgeMetalLF((value as num).toDouble());
+          n.updateEdgeMetalLF('Eave', (value as num).toDouble());
           return _ActionResult(success: true,
               description: 'Edge metal set to $value LF.');
 

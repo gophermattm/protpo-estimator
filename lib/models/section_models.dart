@@ -389,82 +389,103 @@ const List<String> kGutterSizes = ['5"', '6"', '7"', '8"'];
 // Drip Edge: Eave, Flat Drip Edge, Rake Edge, Hip, Valley, Ridge
 const Set<String> kWallFlashingEdgeTypes = {'Parapet', 'Headwall', 'Clerestory'};
 
+/// Roof-edge types that carry edge metal (and perimeter nailers).
+const List<String> kEdgeMetalEdgeTypes = ['Eave', 'Rake Edge', 'Flat Drip Edge'];
+const List<String> kNailerWidths = ['2x6', '2x8', '2x10'];
+
 class MetalScope {
-  // Coping
-  final String copingWidth;  // from kCopingWidths
+  final String copingWidth;
   final double copingLF;
-
-  // Edge metal — 3 separate fields
-  final double wallFlashingLF;   // Parapet/Headwall/Clerestory edges
-  final double dripEdgeLF;       // Eave/Flat Drip Edge/Rake/Hip/Valley/Ridge edges
-  final double otherEdgeMetalLF; // Manual entry for anything else
-  final String edgeMetalType;    // kept for BOM labeling (ES-1, Gravel Stop, Drip Edge)
-
-  // Gutters
-  final String gutterSize;    // from kGutterSizes
+  final double wallFlashingLF;   // Headwall + Clerestory edges
+  final double eaveLF;
+  final double rakeLF;
+  final double flatDripLF;
+  final String eaveMetalType;
+  final String rakeMetalType;
+  final String flatDripMetalType;
+  final double otherEdgeMetalLF;
+  final String gutterSize;
   final double gutterLF;
   final int downspoutCount;
+  final bool hasNailers;
+  final String nailerWidth;      // from kNailerWidths
 
-  // Convenience: total edge metal
+  /// Roof-edge metal LF (all three buckets).
+  double get dripEdgeLF => eaveLF + rakeLF + flatDripLF;
+  /// Primary edge metal type (eave) — kept for older readers.
+  String get edgeMetalType => eaveMetalType;
+  /// Perimeter nailers run along every roof edge that carries edge metal.
+  double get nailerLF => dripEdgeLF;
   double get edgeMetalLF => wallFlashingLF + dripEdgeLF + otherEdgeMetalLF;
 
   const MetalScope({
     this.copingWidth = '12"',
     this.copingLF = 0.0,
     this.wallFlashingLF = 0.0,
-    this.dripEdgeLF = 0.0,
+    this.eaveLF = 0.0,
+    this.rakeLF = 0.0,
+    this.flatDripLF = 0.0,
+    this.eaveMetalType = 'TPO-Coated Drip Edge',
+    this.rakeMetalType = 'TPO-Coated Drip Edge',
+    this.flatDripMetalType = 'TPO-Coated Drip Edge',
     this.otherEdgeMetalLF = 0.0,
-    this.edgeMetalType = 'ES-1 (Low Profile)',
     this.gutterSize = '6"',
     this.gutterLF = 0.0,
     this.downspoutCount = 0,
+    this.hasNailers = false,
+    this.nailerWidth = '2x6',
   });
 
   factory MetalScope.initial() => const MetalScope();
 
   MetalScope copyWith({
-    String? copingWidth,
-    double? copingLF,
-    double? wallFlashingLF,
-    double? dripEdgeLF,
-    double? otherEdgeMetalLF,
-    String? edgeMetalType,
-    String? gutterSize,
-    double? gutterLF,
-    int? downspoutCount,
-  }) {
-    return MetalScope(
-      copingWidth: copingWidth ?? this.copingWidth,
-      copingLF: copingLF ?? this.copingLF,
-      wallFlashingLF: wallFlashingLF ?? this.wallFlashingLF,
-      dripEdgeLF: dripEdgeLF ?? this.dripEdgeLF,
-      otherEdgeMetalLF: otherEdgeMetalLF ?? this.otherEdgeMetalLF,
-      edgeMetalType: edgeMetalType ?? this.edgeMetalType,
-      gutterSize: gutterSize ?? this.gutterSize,
-      gutterLF: gutterLF ?? this.gutterLF,
-      downspoutCount: downspoutCount ?? this.downspoutCount,
-    );
-  }
+    String? copingWidth, double? copingLF, double? wallFlashingLF,
+    double? eaveLF, double? rakeLF, double? flatDripLF,
+    String? eaveMetalType, String? rakeMetalType, String? flatDripMetalType,
+    double? otherEdgeMetalLF, String? gutterSize, double? gutterLF,
+    int? downspoutCount, bool? hasNailers, String? nailerWidth,
+  }) => MetalScope(
+        copingWidth: copingWidth ?? this.copingWidth,
+        copingLF: copingLF ?? this.copingLF,
+        wallFlashingLF: wallFlashingLF ?? this.wallFlashingLF,
+        eaveLF: eaveLF ?? this.eaveLF,
+        rakeLF: rakeLF ?? this.rakeLF,
+        flatDripLF: flatDripLF ?? this.flatDripLF,
+        eaveMetalType: eaveMetalType ?? this.eaveMetalType,
+        rakeMetalType: rakeMetalType ?? this.rakeMetalType,
+        flatDripMetalType: flatDripMetalType ?? this.flatDripMetalType,
+        otherEdgeMetalLF: otherEdgeMetalLF ?? this.otherEdgeMetalLF,
+        gutterSize: gutterSize ?? this.gutterSize,
+        gutterLF: gutterLF ?? this.gutterLF,
+        downspoutCount: downspoutCount ?? this.downspoutCount,
+        hasNailers: hasNailers ?? this.hasNailers,
+        nailerWidth: nailerWidth ?? this.nailerWidth,
+      );
+
+  /// LF and metal type for one bucket in kEdgeMetalEdgeTypes.
+  (double lf, String type) bucket(String edgeType) => switch (edgeType) {
+        'Rake Edge' => (rakeLF, rakeMetalType),
+        'Flat Drip Edge' => (flatDripLF, flatDripMetalType),
+        _ => (eaveLF, eaveMetalType),
+      };
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is MetalScope &&
-          copingWidth == other.copingWidth &&
-          copingLF == other.copingLF &&
+          copingWidth == other.copingWidth && copingLF == other.copingLF &&
           wallFlashingLF == other.wallFlashingLF &&
-          dripEdgeLF == other.dripEdgeLF &&
-          otherEdgeMetalLF == other.otherEdgeMetalLF &&
-          edgeMetalType == other.edgeMetalType &&
-          gutterSize == other.gutterSize &&
-          gutterLF == other.gutterLF &&
-          downspoutCount == other.downspoutCount;
+          eaveLF == other.eaveLF && rakeLF == other.rakeLF && flatDripLF == other.flatDripLF &&
+          eaveMetalType == other.eaveMetalType && rakeMetalType == other.rakeMetalType &&
+          flatDripMetalType == other.flatDripMetalType &&
+          otherEdgeMetalLF == other.otherEdgeMetalLF && gutterSize == other.gutterSize &&
+          gutterLF == other.gutterLF && downspoutCount == other.downspoutCount &&
+          hasNailers == other.hasNailers && nailerWidth == other.nailerWidth;
 
   @override
-  int get hashCode => Object.hash(
-        copingWidth, copingLF, wallFlashingLF, dripEdgeLF,
-        otherEdgeMetalLF, edgeMetalType, gutterSize, gutterLF, downspoutCount,
-      );
+  int get hashCode => Object.hash(copingWidth, copingLF, wallFlashingLF, eaveLF, rakeLF,
+      flatDripLF, eaveMetalType, rakeMetalType, flatDripMetalType, otherEdgeMetalLF,
+      gutterSize, gutterLF, downspoutCount, hasNailers, nailerWidth);
 }
 
 // ─── SHARED UTILITY ───────────────────────────────────────────────────────────

@@ -763,22 +763,31 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
             b.copyWith(metalScope: b.metalScope.copyWith(copingLF: lf)),
       );
 
-  void updateEdgeMetalType(String type) => _updateActive(
-        (b) => b.copyWith(
-            metalScope: b.metalScope.copyWith(edgeMetalType: type)),
-      );
-
   void updateWallFlashingLF(double lf) => _updateActive(
         (b) => b.copyWith(metalScope: b.metalScope.copyWith(wallFlashingLF: lf)));
-
-  void updateDripEdgeLF(double lf) => _updateActive(
-        (b) => b.copyWith(metalScope: b.metalScope.copyWith(dripEdgeLF: lf)));
 
   void updateOtherEdgeMetalLF(double lf) => _updateActive(
         (b) => b.copyWith(metalScope: b.metalScope.copyWith(otherEdgeMetalLF: lf)));
 
-  // Legacy — kept to avoid compile errors in any code still calling it
-  void updateEdgeMetalLF(double lf) => updateDripEdgeLF(lf);
+  void updateEdgeMetalType(String edgeType, String type) => _updateActive((b) =>
+      b.copyWith(metalScope: switch (edgeType) {
+        'Rake Edge' => b.metalScope.copyWith(rakeMetalType: type),
+        'Flat Drip Edge' => b.metalScope.copyWith(flatDripMetalType: type),
+        _ => b.metalScope.copyWith(eaveMetalType: type),
+      }));
+
+  void updateEdgeMetalLF(String edgeType, double lf) => _updateActive((b) =>
+      b.copyWith(metalScope: switch (edgeType) {
+        'Rake Edge' => b.metalScope.copyWith(rakeLF: lf),
+        'Flat Drip Edge' => b.metalScope.copyWith(flatDripLF: lf),
+        _ => b.metalScope.copyWith(eaveLF: lf),
+      }));
+
+  void setNailersEnabled(bool enabled) => _updateActive(
+      (b) => b.copyWith(metalScope: b.metalScope.copyWith(hasNailers: enabled)));
+
+  void updateNailerWidth(String width) => _updateActive(
+      (b) => b.copyWith(metalScope: b.metalScope.copyWith(nailerWidth: width)));
 
   void updateGutterSize(String size) => _updateActive(
         (b) => b.copyWith(
