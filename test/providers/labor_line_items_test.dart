@@ -55,4 +55,16 @@ void main() {
     expect(names.any((n) => n.startsWith('Install ISO Board')), isFalse);
     expect(names, contains('Install Taper System'));
   });
+
+  test('headwall emits flashing labor and term bar uses wall LF', () {
+    final c = setup();
+    c.read(estimatorProvider.notifier).updateParapetWalls(const ParapetWalls(
+        headwallHeight: 24, headwallLF: 50, terminationType: 'Termination Bar'));
+    final items = c.read(laborLineItemsProvider);
+    final hw = items.firstWhere((i) => i.name == 'Install Headwall Flashings');
+    expect(hw.unit, 'SQ');
+    expect(hw.quantity, closeTo(1.0, 0.001)); // 2' x 50 LF / 100
+    final tb = items.firstWhere((i) => i.name == 'Install Termination Bar');
+    expect(tb.quantity, closeTo(50, 0.001));
+  });
 }

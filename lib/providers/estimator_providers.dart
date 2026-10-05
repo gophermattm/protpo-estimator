@@ -1263,11 +1263,18 @@ final laborLineItemsProvider = Provider<List<LaborLineItem>>((ref) {
       rate: crew.rateFor('Install Parapet Flashings'), quantity: parapetSQ,
     ));
   }
-  if (parapet.hasParapetWalls && parapet.terminationBarLF > 0) {
+  if (parapet.hasHeadwall) {
+    final headwallSQ = ((parapet.headwallHeight / 12) * parapet.headwallLF) / 100;
+    items.add(LaborLineItem(
+      name: 'Install Headwall Flashings', unit: 'SQ',
+      rate: crew.rateFor('Install Parapet Flashings'), quantity: headwallSQ,
+    ));
+  }
+  if (parapet.wallTermBarLF > 0) {
     items.add(LaborLineItem(
       name: 'Install Termination Bar', unit: 'LF',
       rate: crew.rateFor('Install Termination Bar'),
-      quantity: parapet.terminationBarLF,
+      quantity: parapet.wallTermBarLF,
     ));
   }
 

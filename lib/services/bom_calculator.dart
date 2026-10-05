@@ -319,7 +319,7 @@ class BomCalculator {
         name: '${membrane.thickness} ${membrane.membraneType} — Flashing ($pRW×100\' roll, $pRC sf)',
         orderQty: orderQty,
         unit: 'rolls',
-        notes: "$pRW×100', $pRC sf/roll — parapet, perimeter & corner zones",
+        notes: "$pRW×100', $pRC sf/roll — wall (parapet/headwall), perimeter & corner zones",
         skuKey: 'tpo_membrane_flashing',
         attributes: {
           'membraneType': membrane.membraneType,
@@ -2040,7 +2040,7 @@ class BomCalculator {
       //   - Inside/outside corners: ~2 sf each (6"×6" area × 2 sides)
       //   - T-joint covers: ~0.25 sf each (4.5" diameter disc)
       //   - Seam tape laps at roll ends: ~0.5 sf per roll
-      //   - Parapet RUSS base strip: parapetLF × 0.5' wide = parapetLF × 0.5 sf
+      //   - Wall RUSS base strip: russLF × 0.5' wide = russLF × 0.5 sf
       final cornerCount = (geometry.insideCorners + geometry.outsideCorners).toDouble();
       final fieldRolls = (totalArea / membrane.rollCoverage).ceil();
       final tJointCount = (fieldRolls * 0.75).ceil();
@@ -2212,7 +2212,7 @@ class BomCalculator {
       final russOrder   = russWithW.ceil().toDouble();
       items.add(BomLineItem(
         category: 'Parapet & Termination',
-        name: 'VersiWeld RUSS Strip (6" wide) — Parapet Base',
+        name: 'VersiWeld RUSS Strip (6" wide) — Wall Base',
         skuKey: 'russ_strip_6in',
         attributes: const {},
         orderQty: russOrder,
