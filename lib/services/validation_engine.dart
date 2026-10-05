@@ -259,7 +259,7 @@ class ValidationEngine {
 
       if (!isTPOCoated && !hasCoverStrip) {
         missing.add(const MissingCompanionItem(
-          triggerItem: 'Drip Edge',
+          triggerItem: 'Edge Metal',
           missingItem: 'VersiWeld TPO Reinforced Overlayment Strip (6" wide) OR TPO-Coated Drip Edge',
           reason: 'Versico requires either: (a) TPO-coated drip edge for direct hot-air welding, or (b) reinforced overlayment strip to seal non-coated metal flange to membrane. Cover strip must match membrane color.',
           isCritical: true,

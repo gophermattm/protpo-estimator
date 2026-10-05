@@ -37,6 +37,7 @@ import 'platform_utils.dart';
 import 'sub_instructions_builder.dart';
 import '../models/estimator_state.dart';
 import '../models/roof_geometry.dart';
+import '../models/section_models.dart';
 import '../services/bom_calculator.dart';
 import '../services/r_value_calculator.dart';
 import '../services/qxo_pricing_service.dart';
@@ -1230,6 +1231,10 @@ pw.Widget _scopeSection(EstimatorState state) {
   final mem   = b.membraneSystem;
   final par   = b.parapetWalls;
   final met   = b.metalScope;
+  final edgeMetalText = [
+    for (final e in kEdgeMetalEdgeTypes)
+      if (met.bucket(e).$1 > 0) '${met.bucket(e).$1.toStringAsFixed(0)} LF ${met.bucket(e).$2} at $e',
+  ].join(', ');
 
   final isRecover   = specs.projectType.contains('Recover');
   final isTearOff   = specs.projectType.contains('Tear-off');
@@ -1269,7 +1274,7 @@ pw.Widget _scopeSection(EstimatorState state) {
         'All penetration flashings per Versico detail drawings.'),
     _ScopeEntry('Sheet Metal',
         '${met.copingLF > 0 ? "Install ${met.copingWidth} coping cap, ${met.copingLF.toStringAsFixed(0)} LF. " : ""}'
-        '${kEdgeMetalEdgeTypes.any((e) => met.bucket(e).$1 > 0) ? "Install edge metal: ${kEdgeMetalEdgeTypes.where((e) => met.bucket(e).$1 > 0).map((e) { final b = met.bucket(e); return "${b.$1.toStringAsFixed(0)} LF ${b.$2} at $e"; }).join(", ")}. " : ""}'
+        '${edgeMetalText.isNotEmpty ? "Install edge metal: $edgeMetalText. " : ""}'
         '${met.gutterLF > 0 ? "Install ${met.gutterSize} gutter, ${met.gutterLF.toStringAsFixed(0)} LF with ${met.downspoutCount} downspouts. " : ""}'
         'All metal 24-gauge minimum.'),
     _ScopeEntry('Warranty',
