@@ -30,6 +30,7 @@ import '../services/qxo_pricing_service.dart';
 import '../services/drain_distance_calculator.dart';
 import '../services/board_schedule_calculator.dart';
 import '../services/watershed_calculator.dart';
+import '../services/edge_totals.dart';
 import '../models/labor_models.dart';
 
 // ─── ROOT PROVIDER ────────────────────────────────────────────────────────────
@@ -531,6 +532,26 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
         (b) => b.copyWith(
             roofGeometry: b.roofGeometry.copyWith(windZones: zones)),
       );
+
+  /// Writes geometry-derived LF into the active building. No-op when no
+  /// edges are drawn, so manually entered LF is kept.
+  void applyEdgeTotals(EdgeTotals t) {
+    if (!t.hasEdges) return;
+    _updateActive((b) {
+      var parapet = b.parapetWalls.copyWith(
+          headwallLF: t.headwallLF, hasParapetWalls: t.parapetLF > 0);
+      if (parapet.parapetTotalLF != t.parapetLF) {
+        parapet = parapet.copyWith(parapetTotalLF: t.parapetLF).clearTerminationBarOverride();
+      }
+      return b.copyWith(
+        roofGeometry: b.roofGeometry.copyWith(outsideCorners: t.corners),
+        parapetWalls: parapet,
+        metalScope: b.metalScope.copyWith(
+          eaveLF: t.eaveLF, rakeLF: t.rakeLF, flatDripLF: t.flatDripLF,
+          wallFlashingLF: t.wallFlashingLF),
+      );
+    });
+  }
 
   void updateOutsideCorners(int count) => _updateActive(
         (b) => b.copyWith(
