@@ -539,7 +539,7 @@ MetalScope _metalScopeFromJson(Map j) {
     gutterSize: _s(j['gutterSize'], '6"'),
     gutterLF: _d(j['gutterLF'], 0.0),
     downspoutCount: _i(j['downspoutCount'], 0),
-    hasNailers: j['hasNailers'] as bool? ?? false,
+    hasNailers: j['hasNailers'] == true,
     nailerWidth: _s(j['nailerWidth'], '2x6'),
   );
 }

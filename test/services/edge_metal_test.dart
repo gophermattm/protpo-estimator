@@ -20,6 +20,12 @@ void main() {
     expect(lines[0].trace.baseQty, closeTo(20, 0.001));
   });
 
+  test('Flat Drip Edge label does not double "Edge"', () {
+    final r = calc(metal: const MetalScope(flatDripLF: 100, flatDripMetalType: 'Gravel Stop'));
+    final line = r.items.singleWhere((i) => i.skuKey == 'metal_drip_edge');
+    expect(line.name, 'Flat Drip Edge — Gravel Stop');
+  });
+
   ValidationResult validateMetal(MetalScope metal, {bool stripOverlayment = false}) {
     var bom = calc(metal: metal);
     if (stripOverlayment) {

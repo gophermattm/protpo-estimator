@@ -1861,8 +1861,12 @@ class BomCalculator {
     for (final edgeType in kEdgeMetalEdgeTypes) {
       final (lf, type) = metalScope.bucket(edgeType);
       if (lf <= 0) continue;
-      final label = edgeType == 'Rake Edge' ? 'Rake' : edgeType;
-      items.add(_linearItem('Metal Scope', '$label Edge Metal — $type',
+      final label = switch (edgeType) {
+        'Rake Edge' => 'Rake Edge Metal',
+        'Flat Drip Edge' => 'Flat Drip Edge',
+        _ => '$edgeType Edge Metal',
+      };
+      items.add(_linearItem('Metal Scope', '$label — $type',
           lf, wMet, "10' sections",
           skuKey: 'metal_drip_edge',
           attributes: {'edgeMetalType': type, 'edgeType': edgeType}));

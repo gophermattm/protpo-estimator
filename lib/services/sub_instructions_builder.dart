@@ -183,9 +183,15 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
     'Apply cut-edge sealant to all reinforced membrane cut edges (1/8" bead).'
   ));
 
-  // ── 5. PARAPET WALLS ──
-  if (parapet.hasParapetWalls && parapet.parapetTotalLF > 0) {
-    widgets.add(_section('5. PARAPET WALL FLASHINGS'));
+  // ── 5. PARAPET / HEADWALL FLASHINGS ──
+  final hasParapetScope = parapet.hasParapetWalls && parapet.parapetTotalLF > 0;
+  final hasWalls = hasParapetScope || parapet.hasHeadwall;
+  if (hasWalls) {
+    widgets.add(_section(hasParapetScope && parapet.hasHeadwall
+        ? '5. PARAPET & HEADWALL FLASHINGS'
+        : parapet.hasHeadwall ? '5. HEADWALL FLASHINGS' : '5. PARAPET WALL FLASHINGS'));
+  }
+  if (hasParapetScope) {
     widgets.add(_body(
       'Flash all parapet walls: ${parapet.parapetTotalLF.toStringAsFixed(0)} LF, '
       '${parapet.parapetHeight.toStringAsFixed(0)}" height, ${parapet.wallType} construction.'
@@ -207,9 +213,16 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
     widgets.add(_bullet('Apply single-ply sealant at top edge of termination bar'));
     widgets.add(_bullet('Termination bar fasteners: ${_termFastenerDesc(parapet)} at 8" O.C.'));
   }
+  if (parapet.hasHeadwall) {
+    final lines = headwallInstructionLines(parapet, isMA: isMA);
+    widgets.add(_body(_s(lines.first)));
+    for (final l in lines.skip(1)) {
+      widgets.add(_bullet(_s(l)));
+    }
+  }
 
   // ── 6. PENETRATIONS ──
-  widgets.add(_section('${parapet.hasParapetWalls ? "6" : "5"}. PENETRATION FLASHINGS'));
+  widgets.add(_section('${hasWalls ? "6" : "5"}. PENETRATION FLASHINGS'));
   if (pen.rtuDetails.isNotEmpty) {
     widgets.add(_body('RTU/Equipment Curbs: ${pen.rtuDetails.length} units, ${pen.rtuTotalLF.toStringAsFixed(0)} LF total curb perimeter.'));
     widgets.add(_bullet('Flash with 6\'x100\' TPO rolls. 4 curb wrap corners per unit.'));
@@ -223,7 +236,7 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
   if (geo.numberOfDrains > 0) widgets.add(_bullet('Roof drains: ${geo.numberOfDrains} - flash with TPO, water cut-off mastic under clamping ring'));
 
   // ── 7. METAL ──
-  final secNum = parapet.hasParapetWalls ? 7 : 6;
+  final secNum = hasWalls ? 7 : 6;
   widgets.add(_section('$secNum. SHEET METAL & EDGE DETAILS'));
   if (metal.copingLF > 0) widgets.add(_bullet('Coping: ${metal.copingLF.toStringAsFixed(0)} LF, ${metal.copingWidth} width, 10\' sections'));
   if (metal.wallFlashingLF > 0) widgets.add(_bullet('Wall flashing: ${metal.wallFlashingLF.toStringAsFixed(0)} LF, 10\' sections'));
@@ -231,8 +244,12 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
     final (lf, t) = metal.bucket(e);
     if (lf > 0) widgets.add(_bullet('$e ($t): ${lf.toStringAsFixed(0)} LF'));
   }
+  if (metal.otherEdgeMetalLF > 0) widgets.add(_bullet('Other edge metal: ${metal.otherEdgeMetalLF.toStringAsFixed(0)} LF'));
   if (metal.gutterLF > 0) widgets.add(_bullet('Gutter (${metal.gutterSize}): ${metal.gutterLF.toStringAsFixed(0)} LF with ${metal.downspoutCount} downspout(s)'));
-  widgets.add(_bullet('Edge metal fasteners: ${BomCalculator.fastenerNamePublic(specs.deckType)} at 12" O.C.'));
+  if (metal.dripEdgeLF + metal.otherEdgeMetalLF > 0) {
+    widgets.add(_bullet('Edge metal fasteners: ${BomCalculator.edgeMetalFastenerNamePublic(specs.deckType, metal.hasNailers)} '
+        'at ${BomCalculator.edgeMetalFastenerSpacingIn.toInt()}" O.C.${metal.hasNailers ? ' into wood nailer' : ''}'));
+  }
 
   // ── 8. ACCESSORIES ──
   widgets.add(_section('${secNum + 1}. ACCESSORIES & SEALANTS'));
@@ -442,6 +459,31 @@ pw.Widget _bullet(String text) => pw.Padding(
       pw.Expanded(child: pw.Text(_s(text),
           style: pw.TextStyle(fontSize: 9, color: _kSlate700, lineSpacing: 1.2))),
     ]));
+
+/// Headwall flashing instructions, worded like the parapet section. First
+/// line is the summary; the rest are steps. Adhesive follows the BOM: none
+/// on short walls per [wallAdhesiveOmitted]; RUSS base strip for MA.
+List<String> headwallInstructionLines(ParapetWalls p, {required bool isMA}) {
+  final h = p.headwallHeight.toStringAsFixed(0);
+  final term = p.terminationType.toLowerCase();
+  return [
+    'Flash all headwalls: ${p.headwallLF.toStringAsFixed(0)} LF, $h" height, ${p.wallType} construction.',
+    if (isMA) 'Install RUSS strip (6" wide) at headwall/deck transition, fasten at 12" O.C.',
+    if (wallAdhesiveOmitted(p.headwallHeight, p.terminationType))
+      'No wall flashing adhesive at $h" headwall height with $term (Versico short-wall allowance)'
+    else if (p.parapetAdhesiveType == kAdhesiveCavGrip) ...[
+      'Adhere TPO flashing to headwall face using CAV-Grip 3v spray adhesive (#40 cylinder, ~2,000 SF/cyl)',
+      'Pair with UN-TACK cleaner/remover (1:1 with CAV-Grip)',
+    ] else
+      'Adhere TPO flashing to headwall face with VersiWeld bonding adhesive (5-gal pails, ~60 SF/gal, both surfaces)',
+    'Extend flashing from field membrane (min 4" base lap, welded) up headwall to termination',
+    'Apply TPO primer before any pressure-sensitive products at base transition',
+    'Terminate with $term at $h" height',
+    'Apply water cut-off mastic under termination bar (continuous bead)',
+    'Apply single-ply sealant at top edge of termination bar',
+    'Termination bar fasteners: ${_termFastenerDesc(p)} at 8" O.C.',
+  ];
+}
 
 String _termFastenerDesc(ParapetWalls p) {
   switch (p.wallType) {

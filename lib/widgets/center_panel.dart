@@ -2747,10 +2747,15 @@ class _ScopeOfWorkTabState extends ConsumerState<_ScopeOfWorkTab> {
     return 'Install Versico TPO flashings at all penetrations including: ${parts.join(', ')}. All flashings per Versico installation specifications.';
   }
 
-  String _metalScope(metal) {
+  String _metalScope(MetalScope metal) {
     final parts = <String>[];
     if (metal.copingLF > 0) parts.add('${metal.copingLF.toStringAsFixed(0)} LF of ${metal.copingWidth} coping cap');
-    if (metal.edgeMetalLF > 0) parts.add('${metal.edgeMetalLF.toStringAsFixed(0)} LF of ${metal.edgeMetalType} edge metal');
+    if (metal.wallFlashingLF > 0) parts.add('${metal.wallFlashingLF.toStringAsFixed(0)} LF of wall flashing');
+    for (final e in kEdgeMetalEdgeTypes) {
+      final (lf, type) = metal.bucket(e);
+      if (lf > 0) parts.add('${lf.toStringAsFixed(0)} LF of $type at ${e == 'Eave' ? 'eaves' : e == 'Rake Edge' ? 'rake edges' : 'flat drip edges'}');
+    }
+    if (metal.otherEdgeMetalLF > 0) parts.add('${metal.otherEdgeMetalLF.toStringAsFixed(0)} LF of other edge metal');
     if (parts.isEmpty) return '';
     return 'Install prefinished ${parts.join(' and ')}. All sheet metal 24-gauge minimum, lapped and sealed per SMACNA standards.';
   }
@@ -3117,6 +3122,7 @@ class _SubInstructionsTabState extends ConsumerState<_SubInstructionsTab> {
     ('insulation',     'Insulation Installation'),
     ('membrane',       'Membrane Installation'),
     ('parapet',        'Parapet Wall Flashings'),
+    ('headwall',       'Headwall Flashings'),
     ('penetrations',   'Penetration Flashings'),
     ('metal',          'Sheet Metal & Edge Details'),
     ('accessories',    'Accessories & Sealants'),
@@ -3400,6 +3406,11 @@ class _SubInstructionsTabState extends ConsumerState<_SubInstructionsTab> {
           'Water cut-off mastic under bar, single-ply sealant at top edge. '
           'Term bar fasteners: ${_termFastDesc(parapet)} at 8" O.C.';
     }
+    if (parapet.hasHeadwall) {
+      map['headwall'] = headwallInstructionLines(parapet, isMA: isMA)
+          .map((l) => l.endsWith('.') ? l : '$l.')
+          .join(' ');
+    }
 
     final details = <String>[];
     if (pen.rtuDetails.isNotEmpty) details.add('RTU curbs: ${pen.rtuDetails.length} units, ${pen.rtuTotalLF.toStringAsFixed(0)} LF. Flash with 6\'x100\' TPO, 4 curb wrap corners/unit.');
@@ -3415,9 +3426,16 @@ class _SubInstructionsTabState extends ConsumerState<_SubInstructionsTab> {
     final metalParts = <String>[];
     if (metal.copingLF > 0) metalParts.add('Coping: ${metal.copingLF.toStringAsFixed(0)} LF, ${metal.copingWidth}, 10\' sections.');
     if (metal.wallFlashingLF > 0) metalParts.add('Wall flashing: ${metal.wallFlashingLF.toStringAsFixed(0)} LF.');
-    if (metal.dripEdgeLF > 0) metalParts.add('Drip edge (${metal.edgeMetalType}): ${metal.dripEdgeLF.toStringAsFixed(0)} LF.');
+    for (final e in kEdgeMetalEdgeTypes) {
+      final (lf, type) = metal.bucket(e);
+      if (lf > 0) metalParts.add('$e ($type): ${lf.toStringAsFixed(0)} LF.');
+    }
+    if (metal.otherEdgeMetalLF > 0) metalParts.add('Other edge metal: ${metal.otherEdgeMetalLF.toStringAsFixed(0)} LF.');
     if (metal.gutterLF > 0) metalParts.add('Gutter (${metal.gutterSize}): ${metal.gutterLF.toStringAsFixed(0)} LF, ${metal.downspoutCount} downspout(s).');
-    metalParts.add('Edge fasteners: ${BomCalculator.fastenerNamePublic(specs.deckType)} at 12" O.C.');
+    if (metal.dripEdgeLF + metal.otherEdgeMetalLF > 0) {
+      metalParts.add('Edge fasteners: ${BomCalculator.edgeMetalFastenerNamePublic(specs.deckType, metal.hasNailers)} '
+          'at ${BomCalculator.edgeMetalFastenerSpacingIn.toInt()}" O.C.${metal.hasNailers ? ' into wood nailer' : ''}.');
+    }
     map['metal'] = metalParts.join(' ');
 
     map['accessories'] = 'Inside corners: ${geo.insideCorners} prefab (TPO primer required). '

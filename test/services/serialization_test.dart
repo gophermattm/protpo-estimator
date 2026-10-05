@@ -131,4 +131,11 @@ void main() {
       expect(restored.drainLocations.length, 1);
     });
   });
+
+  test('hasNailers read is type-tolerant', () {
+    expect(metalScopeFromJson({'hasNailers': true}).hasNailers, isTrue);
+    expect(metalScopeFromJson({'hasNailers': 1}).hasNailers, isFalse);
+    expect(metalScopeFromJson({'hasNailers': 'true'}).hasNailers, isFalse);
+    expect(metalScopeFromJson({}).hasNailers, isFalse);
+  });
 }

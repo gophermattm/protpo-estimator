@@ -221,7 +221,7 @@ final List<SkuRegistryEntry> kSkuRegistry = [
     displayName: 'VersiWeld TPO Bonding Adhesive',
     category: 'Adhesives & Sealants',
     variantAttributes: ['voc', 'packageGal', 'application'],
-    notes: 'packageGal = 1 / 5 / 15. application = field / parapet.',
+    notes: 'packageGal = 5 (5-gal pails only). application = field / parapet / headwall.',
   ),
   SkuRegistryEntry(
     skuKey: 'adhesive_cavgrip_3v_40lb',
