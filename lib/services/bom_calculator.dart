@@ -183,7 +183,13 @@ class BomCalculator {
     final parapetStripWidthFt = parapetHeightFt + 0.33; // wall height + 4" base lap
     final parapetTpoArea = parapet.hasParapetWalls
         ? parapetStripWidthFt * parapet.parapetTotalLF : 0.0;
-    final termBarLF      = parapet.hasParapetWalls ? parapet.terminationBarLF : 0.0;
+    final headwallTpoArea = parapet.hasHeadwall
+        ? (parapet.headwallHeight / 12.0 + 0.33) * parapet.headwallLF : 0.0;
+    final wallTpoArea    = parapetTpoArea + headwallTpoArea;
+    final termBarLF      = parapet.wallTermBarLF;
+    // Total wall LF needing RUSS / primed base strip (parapet + headwall).
+    final russLF = (parapet.hasParapetWalls ? parapet.parapetTotalLF : 0.0) +
+        (parapet.hasHeadwall ? parapet.headwallLF : 0.0);
     final totalPerimeter = geometry.totalPerimeter;
     final drainCount     = geometry.numberOfDrains;
 
@@ -248,9 +254,9 @@ class BomCalculator {
     final hasPerimRoll = membrane.perimeterRollWidth != 'None';
     final fieldRollArea = hasPerimRoll
         ? effectiveFieldArea
-        : effectiveFieldArea + effectivePerimArea + effectiveCornerArea + parapetTpoArea;
+        : effectiveFieldArea + effectivePerimArea + effectiveCornerArea + wallTpoArea;
     // Flashing area = parapet + perimeter zone + corner zone (all use 6'×100' rolls)
-    final flashingArea = parapetTpoArea + effectivePerimArea + effectiveCornerArea;
+    final flashingArea = wallTpoArea + effectivePerimArea + effectiveCornerArea;
 
     // ══════════════════════════════════════════════════════════════════════════
     // 1. MEMBRANE
@@ -303,6 +309,7 @@ class BomCalculator {
       final orderQty = withW.ceil().toDouble();
       final parts = <String>[];
       if (parapetTpoArea > 0) parts.add('parapet ${_sf(parapetTpoArea)} (${parapetHeightFt.toStringAsFixed(1)}\' wall + 4" base lap)');
+      if (headwallTpoArea > 0) parts.add('headwall ${_sf(headwallTpoArea)} (${(parapet.headwallHeight / 12).toStringAsFixed(1)}\' wall + 4" base lap)');
       if (effectivePerimArea > 0)    parts.add('perimeter zone ${_sf(effectivePerimArea)}');
       if (effectiveCornerArea > 0)   parts.add('corner zone ${_sf(effectiveCornerArea)}');
       final pRW = membrane.perimeterRollWidth;
@@ -1219,108 +1226,18 @@ class BomCalculator {
       ));
     }
 
-    // ── Parapet wall adhesive & cleaner (always adhered, separate products) ──
+    // ── Wall flashing adhesive & cleaner (parapet + headwall; always adhered) ──
     if (parapetTpoArea > 0) {
-      // Versico spec: bonding adhesive is NOT required on short parapet walls when:
-      //   - Wall height ≤ 12" and membrane is terminated under metal counterflashing/drip edge
-      //   - Wall height ≤ 18" and a termination bar is used
-      final parapetHeightIn = parapet.parapetHeight; // already in inches
-      final skipParapetAdhesive =
-          (parapetHeightIn <= 12) || // ≤12" with any termination (drip edge / counterflashing)
-          (parapetHeightIn <= 18 && parapet.terminationType == 'Termination Bar');
-
-      if (skipParapetAdhesive) {
-        warnings.add('Parapet adhesive omitted — wall height ${parapetHeightIn.toInt()}" per Versico spec (no adhesive required for short walls with ${parapet.terminationType.toLowerCase()}).');
-      } else if (parapet.parapetAdhesiveType == kAdhesiveCavGrip) {
-        // CAV-GRIP 3V Low-VOC: ~2,000 sf per #40 cylinder [Unverified] — same
-        // coverage basis as the field spray line.
-        const cavGripCoverage = 2000.0;
-        final cavBase      = parapetTpoArea / cavGripCoverage;
-        final cavWithW     = cavBase * (1 + wAcc);
-        final cavOrder     = cavWithW.ceil().toDouble();
-        items.add(BomLineItem(
-          category: 'Adhesives & Sealants',
-          name: 'Versico CAV-GRIP 3V Low-VOC Adhesive/Primer$vocSuffix — #40 Cylinder',
-          skuKey: 'adhesive_cavgrip_3v_40lb',
-          attributes: {'voc': projectInfo.vocRegion, 'application': 'parapet'},
-          orderQty: cavOrder,
-          unit: 'cylinders',
-          notes: '#40 cylinder, ~${cavGripCoverage.toInt()} sf/cyl — parapet walls',
-          trace: BomTrace(
-            baseDescription: '${_sf(parapetTpoArea)} ÷ ${cavGripCoverage.toInt()} sf/cylinder',
-            baseQty: cavBase,
-            wastePercent: wAcc,
-            withWaste: cavWithW,
-            packageSize: 1,
-            orderQty: cavOrder,
-            breakdown: [
-              'Parapet TPO area: ${_sf(parapetTpoArea)}',
-              '  Wall: ${parapetHeightFt.toStringAsFixed(1)}\' + 4" base lap = ${parapetStripWidthFt.toStringAsFixed(2)}\' x ${_lf(parapet.parapetTotalLF)}',
-              'Coverage rate: ${cavGripCoverage.toInt()} sf per #40 cylinder (double-sided spray)',
-              'Base: ${cavBase.toStringAsFixed(2)} cylinders',
-              'Waste: ${_pct(wAcc)}%',
-              'ORDER QTY: ${cavOrder.toInt()} cylinders',
-            ],
-          ),
-        ));
-
-        // UN-TACK Adhesive Remover & Cleaner — 1 aerosol per CAV-Grip cylinder
-        items.add(BomLineItem(
-          category: 'Adhesives & Sealants',
-          name: 'Versico UN-TACK Adhesive Remover & Cleaner — #8 Aerosol',
-          skuKey: 'cleaner_untack_8oz_aerosol',
-          attributes: {'application': 'parapet'},
-          orderQty: cavOrder,
-          unit: 'aerosols',
-          notes: '#8 aerosol — one per CAV-GRIP 3V cylinder',
-          trace: BomTrace(
-            baseDescription: '1:1 ratio with CAV-Grip 3v cylinders',
-            baseQty: cavBase,
-            wastePercent: wAcc,
-            withWaste: cavWithW,
-            packageSize: 1,
-            orderQty: cavOrder,
-            breakdown: [
-              'One UN-TACK per CAV-GRIP 3V cylinder',
-              'ORDER QTY: ${cavOrder.toInt()} aerosols',
-            ],
-          ),
-        ));
-      } else {
-        // VersiWeld TPO Bonding Adhesive (default) — 5-gal pail, ~60 sf/gal applied
-        // to both surfaces (~30 sf/gal each). Parapet wall flashing is always adhered.
-        const coveragePerGal = 60.0;
-        const packageGal = 5.0;
-        final base    = parapetTpoArea / coveragePerGal;
-        final withW   = base * (1 + wAcc);
-        final pails   = (withW / packageGal).ceil().toDouble();
-        items.add(BomLineItem(
-          category: 'Adhesives & Sealants',
-          name: 'VersiWeld TPO Bonding Adhesive$vocSuffix — 5 Gal Pail (Parapet)',
-          skuKey: 'adhesive_versiweld_bonding',
-          attributes: {'voc': projectInfo.vocRegion, 'packageGal': 5, 'application': 'parapet'},
-          orderQty: pails,
-          unit: 'pails',
-          notes: '5-gal pail, ~60 sf/gal — parapet wall flashing',
-          trace: BomTrace(
-            baseDescription: '${_sf(parapetTpoArea)} ÷ 60 sf/gal',
-            baseQty: base,
-            wastePercent: wAcc,
-            withWaste: withW,
-            packageSize: packageGal,
-            orderQty: pails,
-            breakdown: [
-              'Parapet TPO area: ${_sf(parapetTpoArea)}',
-              '  Wall: ${parapetHeightFt.toStringAsFixed(1)}\' + 4" base lap = ${parapetStripWidthFt.toStringAsFixed(2)}\' x ${_lf(parapet.parapetTotalLF)}',
-              'Coverage rate: 60 sf/gal',
-              'Base gallons:  ${base.toStringAsFixed(1)}',
-              'Waste:         ${_pct(wAcc)}%',
-              'With waste:    ${withW.toStringAsFixed(1)} gal',
-              'ORDER QTY:     ${pails.toInt()} pails (5-gal each)',
-            ],
-          ),
-        ));
-      }
+      items.addAll(_wallAdhesiveItems(wall: 'Parapet', heightIn: parapet.parapetHeight,
+          lf: parapet.parapetTotalLF, terminationType: parapet.terminationType,
+          adhesiveType: parapet.parapetAdhesiveType, vocSuffix: vocSuffix,
+          voc: projectInfo.vocRegion, wAcc: wAcc, warnings: warnings));
+    }
+    if (headwallTpoArea > 0) {
+      items.addAll(_wallAdhesiveItems(wall: 'Headwall', heightIn: parapet.headwallHeight,
+          lf: parapet.headwallLF, terminationType: parapet.terminationType,
+          adhesiveType: parapet.parapetAdhesiveType, vocSuffix: vocSuffix,
+          voc: projectInfo.vocRegion, wAcc: wAcc, warnings: warnings));
     }
 
     // Seam length — ONE estimate shared by cut-edge sealant, seam tape and
@@ -1505,7 +1422,7 @@ class BomCalculator {
     // 5. PARAPET & TERMINATION
     // ══════════════════════════════════════════════════════════════════════════
 
-    if (parapet.hasParapetWalls) {
+    if (parapet.hasParapetWalls || parapet.hasHeadwall) {
       // Termination bar — 10' pieces
       if (termBarLF > 0) {
         const pieceLen = 10.0;
@@ -2130,7 +2047,7 @@ class BomCalculator {
       final primedArea = (cornerCount * 2.0) +
           (tJointCount * 0.25) +
           (fieldRolls * 0.5) +
-          (parapet.hasParapetWalls ? parapet.parapetTotalLF * 0.5 : 0.0);
+          russLF * 0.5;
 
       if (primedArea > 0) {
         final String primerName;
@@ -2184,8 +2101,8 @@ class BomCalculator {
               '  Corners (${cornerCount.toInt()}): ${(cornerCount * 2.0).toStringAsFixed(0)} sf',
               '  T-joints ($tJointCount): ${(tJointCount * 0.25).toStringAsFixed(1)} sf',
               '  Seam tape laps ($fieldRolls rolls): ${(fieldRolls * 0.5).toStringAsFixed(1)} sf',
-              if (parapet.hasParapetWalls)
-                '  Parapet RUSS base (${_lf(parapet.parapetTotalLF)}): ${(parapet.parapetTotalLF * 0.5).toStringAsFixed(0)} sf',
+              if (russLF > 0)
+                '  Wall RUSS base (${_lf(russLF)}): ${(russLF * 0.5).toStringAsFixed(0)} sf',
               'Total primed area: ${primedArea.toStringAsFixed(0)} sf',
               'Coverage: ${primerCov.toInt()} sf/${primerUnit == 'cylinders' ? 'cyl' : 'gal'}',
               'ORDER QTY: ${primerOrder.toInt()} $primerUnit',
@@ -2287,10 +2204,10 @@ class BomCalculator {
     // Fasteners at 12" O.C. max through RUSS into deck.
     // Per Versico spec: required at all wall-to-deck transitions for MA membrane.
 
-    if (isMA && parapet.hasParapetWalls && parapet.parapetTotalLF > 0) {
+    if (isMA && russLF > 0) {
       // RUSS comes in 100' rolls, 6" wide
       const russRollLF = 100.0;
-      final russBase    = parapet.parapetTotalLF / russRollLF;
+      final russBase    = russLF / russRollLF;
       final russWithW   = russBase * (1 + wAcc);
       final russOrder   = russWithW.ceil().toDouble();
       items.add(BomLineItem(
@@ -2302,14 +2219,14 @@ class BomCalculator {
         unit: 'rolls',
         notes: "100' rolls — MA wall/deck transition per Versico spec",
         trace: BomTrace(
-          baseDescription: '${_lf(parapet.parapetTotalLF)} ÷ 100\'/roll',
+          baseDescription: '${_lf(russLF)} ÷ 100\'/roll',
           baseQty: russBase,
           wastePercent: wAcc,
           withWaste: russWithW,
           packageSize: 1,
           orderQty: russOrder,
           breakdown: [
-            'Parapet LF: ${_lf(parapet.parapetTotalLF)}',
+            'Wall LF (parapet + headwall): ${_lf(russLF)}',
             'Roll length: 100\'',
             'Waste: ${_pct(wAcc)}%',
             'ORDER QTY: ${russOrder.toInt()} rolls',
@@ -2326,7 +2243,7 @@ class BomCalculator {
       final russStackIn  = _stackThicknessIn(insulation, 3, taperMaxThickness: taperMaxIn);
       final russFastLen  = _selectFastenerLen(systemSpecs.deckType, russStackIn);
       final russBucketSize = _fastenerPack(systemSpecs.deckType, russStackIn).toDouble();
-      final russFastBase = parapet.parapetTotalLF * 12.0 / russSpacing;
+      final russFastBase = russLF * 12.0 / russSpacing;
       final russFastWithW = russFastBase * (1 + wAcc);
       final russFastOrder = (russFastWithW / russBucketSize).ceil().toDouble();
       items.add(BomLineItem(
@@ -2350,9 +2267,9 @@ class BomCalculator {
           orderQty: russFastOrder,
           breakdown: [
             _fastenerBreakdown(systemSpecs.deckType, russStackIn, 'RUSS fastener'),
-            'Parapet LF: ${_lf(parapet.parapetTotalLF)}',
+            'Wall LF (parapet + headwall): ${_lf(russLF)}',
             'Spacing: ${russSpacing.toInt()}" o.c.${russSpacing < 12 ? " (>20-yr warranty or ≥90 mph)" : ""}',
-            '${parapet.parapetTotalLF.toStringAsFixed(0)} LF × ${(12 / russSpacing).toStringAsFixed(0)}/ft = ${russFastBase.toStringAsFixed(0)} fasteners',
+            '${russLF.toStringAsFixed(0)} LF × ${(12 / russSpacing).toStringAsFixed(0)}/ft = ${russFastBase.toStringAsFixed(0)} fasteners',
             'Waste: ${_pct(wAcc)}%',
             'Bucket size: ${russBucketSize.toInt()}/carton',
             'ORDER QTY: ${russFastOrder.toInt()} cartons',
@@ -2821,6 +2738,75 @@ class BomCalculator {
         'ORDER QTY:  ${orderQty.toInt()} boards',
       ],
     );
+  }
+
+  /// Wall flashing adhesive (parapet or headwall). TPO strip runs up the wall
+  /// face plus a 4" base lap. Versico: no adhesive on walls <= 12", or <= 18"
+  /// with a termination bar.
+  static List<BomLineItem> _wallAdhesiveItems({
+    required String wall, required double heightIn, required double lf,
+    required String terminationType, required String adhesiveType,
+    required String vocSuffix, required String voc, required double wAcc,
+    required List<String> warnings,
+  }) {
+    final stripFt = heightIn / 12.0 + 0.33;
+    final area = stripFt * lf;
+    if (area <= 0) return const [];
+    final skip = heightIn <= 12 || (heightIn <= 18 && terminationType == 'Termination Bar');
+    if (skip) {
+      warnings.add('$wall adhesive omitted — wall height ${heightIn.toInt()}" per Versico spec '
+          '(no adhesive required for short walls with ${terminationType.toLowerCase()}).');
+      return const [];
+    }
+    final areaLines = [
+      '$wall TPO area: ${_sf(area)}',
+      '  Wall: ${(heightIn / 12).toStringAsFixed(1)}\' + 4" base lap = ${stripFt.toStringAsFixed(2)}\' x ${_lf(lf)}',
+    ];
+    final appl = wall.toLowerCase();
+    if (adhesiveType == kAdhesiveCavGrip) {
+      const cov = 2000.0; // [Unverified] ~2,000 sf per #40 cylinder
+      final base = area / cov;
+      final withW = base * (1 + wAcc);
+      final order = withW.ceil().toDouble();
+      final trace = BomTrace(
+        baseDescription: '${_sf(area)} ÷ ${cov.toInt()} sf/cylinder',
+        baseQty: base, wastePercent: wAcc, withWaste: withW, packageSize: 1, orderQty: order,
+        breakdown: [...areaLines, 'Coverage rate: ${cov.toInt()} sf per #40 cylinder',
+          'Base: ${base.toStringAsFixed(2)} cylinders', 'Waste: ${_pct(wAcc)}%',
+          'ORDER QTY: ${order.toInt()} cylinders'],
+      );
+      return [
+        BomLineItem(category: 'Adhesives & Sealants',
+          name: 'Versico CAV-GRIP 3V Low-VOC Adhesive/Primer$vocSuffix — #40 Cylinder ($wall)',
+          skuKey: 'adhesive_cavgrip_3v_40lb', attributes: {'voc': voc, 'application': appl},
+          orderQty: order, unit: 'cylinders',
+          notes: '#40 cylinder, ~${cov.toInt()} sf/cyl — $appl flashing', trace: trace),
+        BomLineItem(category: 'Adhesives & Sealants',
+          name: 'Versico UN-TACK Adhesive Remover & Cleaner — #8 Aerosol ($wall)',
+          skuKey: 'cleaner_untack_8oz_aerosol', attributes: {'application': appl},
+          orderQty: order, unit: 'aerosols', notes: '#8 aerosol — one per CAV-GRIP 3V cylinder',
+          trace: trace),
+      ];
+    }
+    const cov = 60.0, pail = 5.0;
+    final base = area / cov;
+    final withW = base * (1 + wAcc);
+    final pails = (withW / pail).ceil().toDouble();
+    return [
+      BomLineItem(category: 'Adhesives & Sealants',
+        name: 'VersiWeld TPO Bonding Adhesive$vocSuffix — 5 Gal Pail ($wall)',
+        skuKey: 'adhesive_versiweld_bonding',
+        attributes: {'voc': voc, 'packageGal': 5, 'application': appl},
+        orderQty: pails, unit: 'pails', notes: '5-gal pail, ~60 sf/gal — $appl flashing',
+        trace: BomTrace(
+          baseDescription: '${_sf(area)} ÷ 60 sf/gal',
+          baseQty: base, wastePercent: wAcc, withWaste: withW, packageSize: pail, orderQty: pails,
+          breakdown: [...areaLines, 'Coverage rate: 60 sf/gal',
+            'Base gallons:  ${base.toStringAsFixed(1)}', 'Waste:         ${_pct(wAcc)}%',
+            'With waste:    ${withW.toStringAsFixed(1)} gal',
+            'ORDER QTY:     ${pails.toInt()} pails (5-gal each)'],
+        )),
+    ];
   }
 
   /// Helper for simple "each" items (penetrations, accessories).
