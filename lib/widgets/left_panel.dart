@@ -215,7 +215,6 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   final _cPitchPans     = TextEditingController();
 
   // ── Parapet ──────────────────────────────────────────────────────────────────
-  bool   _hasParapet     = false;
   final _cParapetHeight  = TextEditingController();
   final _cParapetLF      = TextEditingController();
   final _cTermBarLF      = TextEditingController();
@@ -402,7 +401,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
     // ── Parapet ─────────────────────────────────────────────────────
     _set(_cParapetHeight, _nz(par.parapetHeight));
-    _set(_cParapetLF,     _nz(par.parapetTotalLF));
+    _set(_cParapetLF,     _lf1(par.parapetTotalLF));
     final override = par.terminationBarLFOverride;
     if (override != null) {
       _set(_cTermBarLF, override.toStringAsFixed(0));
@@ -411,15 +410,15 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _set(_cTermBarLF, _nz(par.parapetTotalLF));
       _termBarOverride = false;
     }
-    _set(_cHeadwallLF,     _nz(par.headwallLF));
+    _set(_cHeadwallLF,     _lf1(par.headwallLF));
     _set(_cHeadwallHeight, _nz(par.headwallHeight));
 
     // ── Metal Scope ─────────────────────────────────────────────────
     _set(_cCopingLF,    _nz(met.copingLF));
-    _set(_cWallFlashingLF, _nz(met.wallFlashingLF));
-    _set(_cEaveLF,         _nz(met.eaveLF));
-    _set(_cRakeLF,         _nz(met.rakeLF));
-    _set(_cFlatDripLF,     _nz(met.flatDripLF));
+    _set(_cWallFlashingLF, _lf1(met.wallFlashingLF));
+    _set(_cEaveLF,         _lf1(met.eaveLF));
+    _set(_cRakeLF,         _lf1(met.rakeLF));
+    _set(_cFlatDripLF,     _lf1(met.flatDripLF));
     _set(_cOtherEdgeLF,    _nz(met.otherEdgeMetalLF));
     _set(_cGutterLF,    _nz(met.gutterLF));
     _set(_cDownspouts,  met.downspoutCount > 0 ? '${met.downspoutCount}' : '');
@@ -464,7 +463,6 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       _adhesiveType    = mem.adhesiveType;
       _primerType      = mem.primerType;
       _drainType       = pen.drainType;
-      _hasParapet      = par.hasParapetWalls;
       _parapetWallType = par.wallType;
       _terminationType = par.terminationType;
       _parapetAdhesiveType = par.parapetAdhesiveType;
@@ -481,6 +479,8 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   void _set(TextEditingController c, String v) { if (c.text != v) c.text = v; }
   String _pct(double f) => (f * 100).toStringAsFixed(0);
   String _nz(double v)  => v > 0 ? (v == v.roundToDouble() ? v.toInt().toString() : v.toString()) : '';
+  /// Edge LF to 1 decimal ('' when 0) — geometry sums carry float noise.
+  String _lf1(double v) => v > 0 ? v.toStringAsFixed(1) : '';
 
   // ─── Push zone areas to provider ─────────────────────────────────────────────
   void _pushZones(double pw) {
@@ -538,6 +538,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     if (_shapes.length <= 1) return;
     setState(() { _shapes[i].dispose(); _shapes.removeAt(i); });
     ref.read(estimatorProvider.notifier).removeShape(i);
+    _syncEdgeTypeTotals();
   }
 
   void _changeShapeType(int i, String newType) {
@@ -547,6 +548,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     });
     ref.read(estimatorProvider.notifier)
         .updateShape(i, RoofShape.initial(i + 1).withShapeType(newType));
+    _syncEdgeTypeTotals();
   }
 
   void _syncEdgeTypeTotals() {
@@ -559,14 +561,14 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
     final override = ref.read(parapetWallsProvider).terminationBarLFOverride;
     _termBarOverride = override != null;
     _set(_cCornerCount, '${t.corners}');
-    _set(_cParapetLF, _nz(t.parapetLF));
-    _set(_cTermBarLF, _termBarOverride ? override!.toStringAsFixed(0) : _nz(t.parapetLF));
-    _set(_cHeadwallLF, _nz(t.headwallLF));
-    _set(_cWallFlashingLF, _nz(t.wallFlashingLF));
-    _set(_cEaveLF, _nz(t.eaveLF));
-    _set(_cRakeLF, _nz(t.rakeLF));
-    _set(_cFlatDripLF, _nz(t.flatDripLF));
-    setState(() => _hasParapet = t.parapetLF > 0);
+    _set(_cParapetLF, _lf1(t.parapetLF));
+    _set(_cTermBarLF, _termBarOverride ? override!.toStringAsFixed(0) : _lf1(t.parapetLF));
+    _set(_cHeadwallLF, _lf1(t.headwallLF));
+    _set(_cWallFlashingLF, _lf1(t.wallFlashingLF));
+    _set(_cEaveLF, _lf1(t.eaveLF));
+    _set(_cRakeLF, _lf1(t.rakeLF));
+    _set(_cFlatDripLF, _lf1(t.flatDripLF));
+    setState(() {});
   }
 
   bool get _edgesFromGeometry => computeEdgeTotals(
@@ -1868,14 +1870,14 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
                 if (fromGeo) {
                   setState(() {});
                 } else {
-                  setState(() { _hasParapet = val > 0; });
+                  setState(() {});
                   n.setParapetEnabled(val > 0);
                 }
               }),
           fromGeo ? parapetLFFromGeo : _tf('Total LF', '0', _cParapetLF, suffix: 'LF',
               kb: TextInputType.number, onChange: (v) {
                 final val = double.tryParse(v) ?? 0;
-                setState(() { _hasParapet = val > 0; if (!_termBarOverride) _cTermBarLF.text = v; });
+                setState(() { if (!_termBarOverride) _cTermBarLF.text = v; });
                 n.updateParapetTotalLF(val);
                 n.setParapetEnabled(val > 0);
               }),
@@ -1939,9 +1941,6 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
             n.clearTerminationBarLFOverride();
           }
         }),
-        _sp12,
-        _dd('Termination Type', _terminationType, kTerminationTypes, (v) {
-          setState(() => _terminationType = v!); n.updateTerminationType(v!); }),
       ];
     }
 
@@ -1966,6 +1965,11 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       ],
       if (hasData || headwallLF > 0) ...[
         _sp12,
+        // Shared by parapet and headwall: drives term bar and the
+        // wall adhesive skip rule in the BOM.
+        _dd('Termination Type', _terminationType, kTerminationTypes, (v) {
+          setState(() => _terminationType = v!); n.updateTerminationType(v!); }),
+        _sp12,
         _dd('Wall Flashing Adhesive', _parapetAdhesiveType, kAdhesiveTypes, (v) {
           setState(() => _parapetAdhesiveType = v!); n.updateParapetAdhesiveType(v!); }),
       ],
@@ -1974,7 +1978,10 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   }
 
   /// Controller text for an LF display, '0' when empty.
-  String _lfText(TextEditingController c) => c.text.isEmpty ? '0' : c.text;
+  String _lfText(TextEditingController c) {
+    final v = double.tryParse(c.text) ?? 0;
+    return v > 0 ? v.toStringAsFixed(1) : '0';
+  }
 
   Widget _parapetBOM() {
     final flashRolls = (_parapetArea * (1 + _wMat) / 600).ceil();

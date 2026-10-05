@@ -29,6 +29,10 @@ void main() {
       expect(wallAdhesiveOmitted(18, 'Termination Bar'), isTrue);
       expect(wallAdhesiveOmitted(18, 'TPO Coated Drip Edge'), isFalse);
     });
+    test('boundaries: 13" + term bar omitted, 12.5" + drip edge required', () {
+      expect(wallAdhesiveOmitted(13, 'Termination Bar'), isTrue);
+      expect(wallAdhesiveOmitted(12.5, 'TPO Coated Drip Edge'), isFalse);
+    });
     test('required above 18"', () {
       expect(wallAdhesiveOmitted(24, 'Termination Bar'), isFalse);
     });

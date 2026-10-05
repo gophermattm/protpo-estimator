@@ -32,10 +32,30 @@ void main() {
     expect(computeEdgeTotals(const []).hasEdges, false);
   });
 
+  test('only zero-length edges (new job blank shape) → hasEdges false', () {
+    final t = computeEdgeTotals([RoofShape.initial(1)]);
+    expect(t.corners, 4);
+    expect(t.totalLF, 0);
+    expect(t.hasEdges, false);
+  });
+
   group('applyEdgeTotals', () {
     late ProviderContainer c;
     setUp(() => c = ProviderContainer());
     tearDown(() => c.dispose());
+
+    test('zero-length edges are a no-op (manual LF kept)', () {
+      final n = c.read(estimatorProvider.notifier);
+      n.updateParapetTotalLF(80);
+      n.updateEdgeMetalLF('Eave', 120);
+      final before = c.read(estimatorProvider).activeBuilding;
+      n.applyEdgeTotals(computeEdgeTotals([RoofShape.initial(1)]));
+      final after = c.read(estimatorProvider).activeBuilding;
+      expect(after.parapetWalls, before.parapetWalls);
+      expect(after.metalScope, before.metalScope);
+      expect(after.parapetWalls.parapetTotalLF, 80);
+      expect(after.metalScope.eaveLF, 120);
+    });
 
     test('Parapet edge switched back to Eave clears parapet scope', () {
       final n = c.read(estimatorProvider.notifier);
