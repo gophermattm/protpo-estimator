@@ -401,7 +401,7 @@ Available actions (return exactly one as JSON):
 { "action": "updateLayer2Type",          "value": "Polyiso" | "EPS" | "XPS" | "Mineral Wool" | "None" }
 { "action": "updateLayer2Thickness",     "value": <number> }
 { "action": "enableCoverBoard",          "value": true | false }
-{ "action": "updateCoverBoardType",      "value": "HD Polyiso" | "Gypsum" | "DensDeck" | "DensDeck Prime" }
+{ "action": "updateCoverBoardType",      "value": "HD Polyiso" | "Gypsum" | "DensDeck" | "DensDeck Prime" | "Nailbase (Polyiso + 7/16\\" OSB)" }
 { "action": "enableParapetWalls",        "value": true | false }
 { "action": "updateParapetHeight",       "value": <number in inches> }
 { "action": "updateParapetLF",           "value": <number> }
@@ -617,9 +617,14 @@ User request: "$userText"
               description: value ? 'Cover board enabled.' : 'Cover board removed.');
 
         case 'updateCoverBoardType':
-          final cur = ref.read(insulationSystemProvider).coverBoard;
-          n.updateCoverBoard((cur ?? CoverBoard.initial()).copyWith(
-              type: value as String));
+          final cur = ref.read(insulationSystemProvider).coverBoard
+              ?? CoverBoard.initial();
+          final type = value as String;
+          n.updateCoverBoard(cur.copyWith(
+              type: type,
+              thickness: snapCoverBoardThickness(type, cur.thickness),
+              attachmentMethod: type == kCoverBoardNailbase
+                  ? 'Mechanically Attached' : cur.attachmentMethod));
           return _ActionResult(success: true,
               description: 'Cover board type set to $value.');
 

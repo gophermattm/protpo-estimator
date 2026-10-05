@@ -52,6 +52,13 @@ const List<double> kCoverBoardThicknesses = [
 List<double> coverBoardThicknessesFor(String type) =>
     type == kCoverBoardNailbase ? kNailbaseThicknesses : kCoverBoardThicknesses;
 
+/// Snaps [thickness] to a value offered for cover board [type]; falls back
+/// to the first allowed thickness.
+double snapCoverBoardThickness(String type, double? thickness) {
+  final allowed = coverBoardThicknessesFor(type);
+  return allowed.contains(thickness) ? thickness! : allowed.first;
+}
+
 /// Default cover board attachment for the membrane system. Nailbase is
 /// always mechanically fastened.
 String coverBoardAttachmentFor(String membraneAttachment, String type) =>

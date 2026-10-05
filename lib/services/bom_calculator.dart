@@ -120,6 +120,11 @@ class BomResult {
   List<BomLineItem> get activeItems => items.where((i) => i.hasQuantity).toList();
 }
 
+/// Versico: no wall flashing adhesive on walls <= 12", or <= 18" with a
+/// termination bar. Shared by the BOM and the left-panel impact preview.
+bool wallAdhesiveOmitted(double heightIn, String terminationType) =>
+    heightIn <= 12 || (heightIn <= 18 && terminationType == 'Termination Bar');
+
 // ─── CALCULATOR ───────────────────────────────────────────────────────────────
 
 class BomCalculator {
@@ -2822,7 +2827,7 @@ class BomCalculator {
     final stripFt = heightIn / 12.0 + 0.33;
     final area = stripFt * lf;
     if (area <= 0) return const [];
-    final skip = heightIn <= 12 || (heightIn <= 18 && terminationType == 'Termination Bar');
+    final skip = wallAdhesiveOmitted(heightIn, terminationType);
     if (skip) {
       warnings.add('$wall adhesive omitted — wall height ${heightIn.toInt()}" per Versico spec '
           '(no adhesive required for short walls with ${terminationType.toLowerCase()}).');
