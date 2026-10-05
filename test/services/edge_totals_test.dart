@@ -44,6 +44,31 @@ void main() {
     setUp(() => c = ProviderContainer());
     tearDown(() => c.dispose());
 
+    test('force clears geometry LF when drawn edges are gone', () {
+      final n = c.read(estimatorProvider.notifier);
+      n.applyEdgeTotals(computeEdgeTotals([_shape(['Parapet', 'Headwall', 'Eave', 'Eave'])]));
+      var b = c.read(estimatorProvider).activeBuilding;
+      expect(b.parapetWalls.parapetTotalLF, 100);
+      expect(b.parapetWalls.hasParapetWalls, true);
+      expect(b.metalScope.eaveLF, 150);
+
+      n.applyEdgeTotals(computeEdgeTotals([RoofShape.initial(1)]), force: true);
+      b = c.read(estimatorProvider).activeBuilding;
+      expect(b.parapetWalls.parapetTotalLF, 0);
+      expect(b.parapetWalls.hasParapetWalls, false);
+      expect(b.parapetWalls.headwallLF, 0);
+      expect(b.metalScope.eaveLF, 0);
+      expect(b.metalScope.wallFlashingLF, 0);
+    });
+
+    test('force with no shapes leaves outside corners alone', () {
+      final n = c.read(estimatorProvider.notifier);
+      n.applyEdgeTotals(computeEdgeTotals([_shape(['Eave', 'Eave', 'Eave', 'Eave'])]));
+      n.applyEdgeTotals(computeEdgeTotals(const []), force: true);
+      expect(c.read(estimatorProvider).activeBuilding.roofGeometry.outsideCorners, 4);
+      expect(c.read(estimatorProvider).activeBuilding.metalScope.eaveLF, 0);
+    });
+
     test('zero-length edges are a no-op (manual LF kept)', () {
       final n = c.read(estimatorProvider.notifier);
       n.updateParapetTotalLF(80);

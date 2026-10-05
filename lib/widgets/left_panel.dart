@@ -536,27 +536,32 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
 
   void _removeShape(int i) {
     if (_shapes.length <= 1) return;
+    final wasGeo = _edgesFromGeometry;
     setState(() { _shapes[i].dispose(); _shapes.removeAt(i); });
     ref.read(estimatorProvider.notifier).removeShape(i);
-    _syncEdgeTypeTotals();
+    _syncEdgeTypeTotals(wasGeo: wasGeo);
   }
 
   void _changeShapeType(int i, String newType) {
+    final wasGeo = _edgesFromGeometry;
     setState(() {
       _shapes[i].dispose();
       _shapes[i] = _ShapeEntry.blank(type: newType, operation: _shapes[i].operation);
     });
     ref.read(estimatorProvider.notifier)
         .updateShape(i, RoofShape.initial(i + 1).withShapeType(newType));
-    _syncEdgeTypeTotals();
+    _syncEdgeTypeTotals(wasGeo: wasGeo);
   }
 
-  void _syncEdgeTypeTotals() {
+  /// [wasGeo]: LF was geometry-sourced before this change. If the drawn
+  /// edges are now gone, geometry LF is zeroed rather than left stale.
+  void _syncEdgeTypeTotals({bool wasGeo = false}) {
     final n = ref.read(estimatorProvider.notifier);
     final t = computeEdgeTotals(
         ref.read(estimatorProvider).activeBuilding.roofGeometry.shapes);
-    if (!t.hasEdges) return;
-    n.applyEdgeTotals(t);
+    final clear = wasGeo && !t.hasEdges;
+    if (!t.hasEdges && !clear) return;
+    n.applyEdgeTotals(t, force: clear);
     // applyEdgeTotals clears the term bar override when parapet LF changes.
     final override = ref.read(parapetWallsProvider).terminationBarLFOverride;
     _termBarOverride = override != null;
@@ -575,6 +580,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       ref.read(estimatorProvider).activeBuilding.roofGeometry.shapes).hasEdges;
 
   void _pushShape(int i) {
+    final wasGeo = _edgesFromGeometry;
     final s = _shapes[i];
     final notifier = ref.read(estimatorProvider.notifier);
     final geo = ref.read(estimatorProvider).activeBuilding.roofGeometry;
@@ -592,7 +598,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
       notifier.updateShape(i, model);
     }
     if (_perimWidth > 0) _pushZones(_perimWidth);
-    _syncEdgeTypeTotals();
+    _syncEdgeTypeTotals(wasGeo: wasGeo);
   }
 
   /// Available width from LayoutBuilder, updated each build.
@@ -1934,7 +1940,9 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
             helper: 'Defaults to Total Parapet LF — edit to override',
             suffix: 'LF', kb: TextInputType.number, onChange: (v) {
           final parsed = double.tryParse(v) ?? 0;
-          setState(() => _termBarOverride = parsed != _parapetLFval);
+          // Tolerance: the field shows parapet LF to 1 decimal.
+          final full = ref.read(parapetWallsProvider).parapetTotalLF;
+          setState(() => _termBarOverride = (parsed - full).abs() > 0.05);
           if (_termBarOverride) {
             n.overrideTerminationBarLF(parsed);
           } else {

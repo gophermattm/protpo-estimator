@@ -534,9 +534,11 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
       );
 
   /// Writes geometry-derived LF into the active building. No-op when no
-  /// edges are drawn, so manually entered LF is kept.
-  void applyEdgeTotals(EdgeTotals t) {
-    if (!t.hasEdges) return;
+  /// edges are drawn, so manually entered LF is kept. [force] skips that
+  /// guard: used when drawn geometry was cleared, so its LF must go to 0.
+  /// Outside corners are left alone when [t] has none.
+  void applyEdgeTotals(EdgeTotals t, {bool force = false}) {
+    if (!t.hasEdges && !force) return;
     _updateActive((b) {
       var parapet = b.parapetWalls.copyWith(
           headwallLF: t.headwallLF, hasParapetWalls: t.parapetLF > 0);
@@ -544,7 +546,9 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
         parapet = parapet.copyWith(parapetTotalLF: t.parapetLF).clearTerminationBarOverride();
       }
       return b.copyWith(
-        roofGeometry: b.roofGeometry.copyWith(outsideCorners: t.corners),
+        roofGeometry: t.corners > 0
+            ? b.roofGeometry.copyWith(outsideCorners: t.corners)
+            : b.roofGeometry,
         parapetWalls: parapet,
         metalScope: b.metalScope.copyWith(
           eaveLF: t.eaveLF, rakeLF: t.rakeLF, flatDripLF: t.flatDripLF,
