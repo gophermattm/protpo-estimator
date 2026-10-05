@@ -1599,7 +1599,7 @@ class BomCalculator {
       final orderQty      = (withW / edgeBucketSize).ceil().toDouble();
       items.add(BomLineItem(
         category: 'Parapet & Termination',
-        name: '$edgeFastName $edgeFastLen — Edge Metal (${metalScope.edgeMetalType})',
+        name: '$edgeFastName $edgeFastLen — Edge Metal',
         skuKey: 'fastener_edge_metal',
         attributes: {
           'fastenerName': edgeFastName,
@@ -1844,11 +1844,14 @@ class BomCalculator {
           metalScope.wallFlashingLF, wMet, "10' sections",
           skuKey: 'metal_wall_flashing'));
     }
-    if (metalScope.dripEdgeLF > 0) {
-      items.add(_linearItem('Metal Scope', 'Drip Edge — ${metalScope.edgeMetalType}',
-          metalScope.dripEdgeLF, wMet, "10' sections",
+    for (final edgeType in kEdgeMetalEdgeTypes) {
+      final (lf, type) = metalScope.bucket(edgeType);
+      if (lf <= 0) continue;
+      final label = edgeType == 'Rake Edge' ? 'Rake' : edgeType;
+      items.add(_linearItem('Metal Scope', '$label Edge Metal — $type',
+          lf, wMet, "10' sections",
           skuKey: 'metal_drip_edge',
-          attributes: {'edgeMetalType': metalScope.edgeMetalType}));
+          attributes: {'edgeMetalType': type, 'edgeType': edgeType}));
     }
     if (metalScope.otherEdgeMetalLF > 0) {
       items.add(_linearItem('Metal Scope', 'Other Edge Metal',
@@ -1895,7 +1898,7 @@ class BomCalculator {
           packageSize: 1,
           orderQty: stripOrder,
           breakdown: [
-            'Drip edge: ${_lf(metalScope.dripEdgeLF)}',
+            'Roof edges (eave/rake/flat drip): ${_lf(metalScope.dripEdgeLF)}',
             'Coping: ${_lf(metalScope.copingLF)}',
             'Wall flashing: ${_lf(metalScope.wallFlashingLF)}',
             'Other: ${_lf(metalScope.otherEdgeMetalLF)}',

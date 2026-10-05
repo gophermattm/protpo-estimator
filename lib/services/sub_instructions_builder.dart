@@ -227,7 +227,10 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
   widgets.add(_section('$secNum. SHEET METAL & EDGE DETAILS'));
   if (metal.copingLF > 0) widgets.add(_bullet('Coping: ${metal.copingLF.toStringAsFixed(0)} LF, ${metal.copingWidth} width, 10\' sections'));
   if (metal.wallFlashingLF > 0) widgets.add(_bullet('Wall flashing: ${metal.wallFlashingLF.toStringAsFixed(0)} LF, 10\' sections'));
-  if (metal.dripEdgeLF > 0) widgets.add(_bullet('Drip edge (${metal.edgeMetalType}): ${metal.dripEdgeLF.toStringAsFixed(0)} LF'));
+  for (final e in kEdgeMetalEdgeTypes) {
+    final (lf, t) = metal.bucket(e);
+    if (lf > 0) widgets.add(_bullet('$e ($t): ${lf.toStringAsFixed(0)} LF'));
+  }
   if (metal.gutterLF > 0) widgets.add(_bullet('Gutter (${metal.gutterSize}): ${metal.gutterLF.toStringAsFixed(0)} LF with ${metal.downspoutCount} downspout(s)'));
   widgets.add(_bullet('Edge metal fasteners: ${BomCalculator.fastenerNamePublic(specs.deckType)} at 12" O.C.'));
 
@@ -378,7 +381,10 @@ List<pw.Widget> buildEnhancedScope(EstimatorState state, BomResult bom, {RValueR
     final metalParts = <String>[];
     if (metal.copingLF > 0) metalParts.add('${metal.copingLF.toStringAsFixed(0)} LF ${metal.copingWidth} coping');
     if (metal.wallFlashingLF > 0) metalParts.add('${metal.wallFlashingLF.toStringAsFixed(0)} LF wall flashing');
-    if (metal.dripEdgeLF > 0) metalParts.add('${metal.dripEdgeLF.toStringAsFixed(0)} LF ${metal.edgeMetalType} drip edge');
+    for (final e in kEdgeMetalEdgeTypes) {
+      final (lf, t) = metal.bucket(e);
+      if (lf > 0) metalParts.add('${lf.toStringAsFixed(0)} LF $t at $e');
+    }
     if (metal.gutterLF > 0) metalParts.add('${metal.gutterLF.toStringAsFixed(0)} LF ${metal.gutterSize} gutter with ${metal.downspoutCount} downspout(s)');
     widgets.add(_body('Install: ${metalParts.join("; ")}. All sheet metal factory-finished or primed, '
         'installed per SMACNA standards with appropriate fasteners.'));

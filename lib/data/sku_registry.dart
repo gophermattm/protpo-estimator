@@ -402,7 +402,7 @@ final List<SkuRegistryEntry> kSkuRegistry = [
   ),
   SkuRegistryEntry(
     skuKey: 'metal_drip_edge',
-    displayName: 'Drip Edge',
+    displayName: 'Edge Metal (Eave / Rake / Flat Drip)',
     category: 'Metal Scope',
     variantAttributes: ['edgeMetalType'],
   ),

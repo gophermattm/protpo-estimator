@@ -1269,7 +1269,7 @@ pw.Widget _scopeSection(EstimatorState state) {
         'All penetration flashings per Versico detail drawings.'),
     _ScopeEntry('Sheet Metal',
         '${met.copingLF > 0 ? "Install ${met.copingWidth} coping cap, ${met.copingLF.toStringAsFixed(0)} LF. " : ""}'
-        '${met.edgeMetalLF > 0 ? "Install ${met.edgeMetalType} edge metal, ${met.edgeMetalLF.toStringAsFixed(0)} LF. " : ""}'
+        '${kEdgeMetalEdgeTypes.any((e) => met.bucket(e).$1 > 0) ? "Install edge metal: ${kEdgeMetalEdgeTypes.where((e) => met.bucket(e).$1 > 0).map((e) { final b = met.bucket(e); return "${b.$1.toStringAsFixed(0)} LF ${b.$2} at $e"; }).join(", ")}. " : ""}'
         '${met.gutterLF > 0 ? "Install ${met.gutterSize} gutter, ${met.gutterLF.toStringAsFixed(0)} LF with ${met.downspoutCount} downspouts. " : ""}'
         'All metal 24-gauge minimum.'),
     _ScopeEntry('Warranty',

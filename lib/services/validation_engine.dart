@@ -250,7 +250,12 @@ class ValidationEngine {
     if (metal.dripEdgeLF > 0) {
       final hasCoverStrip = bomNames.any((n) =>
           n.contains('cover tape') || n.contains('cover strip') || n.contains('overlayment'));
-      final isTPOCoated = metal.edgeMetalType.toLowerCase().contains('tpo');
+      final nonCoated = kEdgeMetalEdgeTypes
+          .map(metal.bucket)
+          .where((b) => b.$1 > 0 && !b.$2.toLowerCase().contains('tpo'))
+          .map((b) => b.$2)
+          .toSet();
+      final isTPOCoated = nonCoated.isEmpty;
 
       if (!isTPOCoated && !hasCoverStrip) {
         missing.add(const MissingCompanionItem(
@@ -262,7 +267,7 @@ class ValidationEngine {
       }
       if (!isTPOCoated) {
         missing.add(MissingCompanionItem(
-          triggerItem: 'Drip Edge (${metal.edgeMetalType})',
+          triggerItem: 'Edge Metal (${nonCoated.join(', ')})',
           missingItem: 'Consider VersiTrim TPO-Coated Drip Edge',
           reason: 'TPO-coated metal (24GA with .035" TPO coating) allows direct hot-air welding, eliminating separate cover strips. Available in white, gray, tan, and custom colors.',
           isCritical: false,
