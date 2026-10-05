@@ -682,6 +682,7 @@ class _BomCategoryCard extends ConsumerWidget {
     'Parapet & Termination':  Icons.vertical_align_top,
     'Details & Accessories':  Icons.plumbing,
     'Metal Scope':            Icons.view_day,
+    'Wood Nailers':           Icons.carpenter,
     'Consumables':            Icons.construction,
     'Vapor Retarder':         Icons.water_drop,
   };

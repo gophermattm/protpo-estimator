@@ -1853,6 +1853,73 @@ class BomCalculator {
           skuKey: 'metal_drip_edge',
           attributes: {'edgeMetalType': type, 'edgeType': edgeType}));
     }
+
+    // ── Perimeter wood nailers ──
+    // FM DS 1-49: min 2x6 nominal; two staggered rows into steel deck.
+    // Versico/Carlisle: nailer top flush with insulation; salt-preservative
+    // treated lumber only.
+    if (metalScope.hasNailers && metalScope.nailerLF > 0) {
+      final lf = metalScope.nailerLF;
+      final heightIn = _stackThicknessIn(insulation, 3); // flat stack, no taper
+      final plies = heightIn <= 0 ? 1 : (heightIn / 1.5).ceil();
+      const boardLF = 16.0;
+      final lumBase = lf * plies / boardLF;
+      final lumWithW = lumBase * (1 + wMat);
+      final lumOrder = lumWithW.ceil().toDouble();
+      items.add(BomLineItem(
+        category: 'Wood Nailers',
+        name: 'Pressure-Treated Lumber ${metalScope.nailerWidth} × 16\' — Perimeter Nailer',
+        skuKey: 'lumber_nailer',
+        attributes: {'width': metalScope.nailerWidth, 'length': "16'"},
+        orderQty: lumOrder,
+        unit: 'boards',
+        notes: 'Salt-based preservative treatment only; creosote, penta and copper naphthenate damage the membrane (Carlisle)',
+        trace: BomTrace(
+          baseDescription: '${_lf(lf)} × $plies plies ÷ 16\'',
+          baseQty: lumBase, wastePercent: wMat, withWaste: lumWithW,
+          packageSize: 1, orderQty: lumOrder,
+          breakdown: [
+            'Nailer LF (eave + rake + flat drip): ${_lf(lf)}',
+            'Insulation stack: ${_fmtIn(heightIn)} → Plies: $plies (1.5" each)',
+            'Base: ${lumBase.toStringAsFixed(1)} boards',
+            'Waste: ${_pct(wMat)}%',
+            'ORDER QTY: ${lumOrder.toInt()} boards',
+          ],
+        ),
+      ));
+
+      const rows = 2, spacingIn = 12.0;
+      final fBase = lf * rows * (12 / spacingIn) * plies;
+      final fWithW = fBase * (1 + wAcc);
+      final fName = _fastenerName(systemSpecs.deckType);
+      final sel = _selectFastener(systemSpecs.deckType, plies * 1.5);
+      final pack = qxoFastenerPack(fName, sel.lengthIn);
+      final fOrder = (fWithW / pack).ceil().toDouble();
+      items.add(BomLineItem(
+        category: 'Wood Nailers',
+        name: '$fName ${sel.label} — Nailer Fasteners',
+        skuKey: 'fastener_nailer',
+        attributes: {'fastener': fName, 'length': sel.label},
+        orderQty: fOrder,
+        unit: 'cartons',
+        notes: '2 staggered rows @ 12" o.c. per ply — Needs Validation for nailer fastener spacing (FM 1-49 Table 2.2.2.3.4-1 by wind zone)',
+        trace: BomTrace(
+          baseDescription: '${_lf(lf)} × $rows rows × $plies plies',
+          baseQty: fBase, wastePercent: wAcc, withWaste: fWithW,
+          packageSize: pack.toDouble(), orderQty: fOrder,
+          breakdown: [
+            '${_lf(lf)} × $rows rows @ ${spacingIn.toInt()}" o.c. × $plies plies = ${fBase.toStringAsFixed(0)}',
+            _fastenerBreakdown(systemSpecs.deckType, plies * 1.5, 'Nailer fastener'),
+            'Waste: ${_pct(wAcc)}%',
+            'ORDER QTY: ${fOrder.toInt()} cartons ($pack/carton)',
+          ],
+        ),
+      ));
+
+      if (insulation.hasTaper) {
+        warnings.add('Needs Validation for nailer height at tapered high edges — nailers sized to the flat stack (${_fmtIn(heightIn)}).');
+      }
+    }
     if (metalScope.otherEdgeMetalLF > 0) {
       items.add(_linearItem('Metal Scope', 'Other Edge Metal',
           metalScope.otherEdgeMetalLF, wMet, "10' sections",

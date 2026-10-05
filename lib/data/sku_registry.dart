@@ -436,6 +436,20 @@ final List<SkuRegistryEntry> kSkuRegistry = [
     category: 'Vapor Retarder',
     variantAttributes: ['type'],
   ),
+
+  // ─── WOOD NAILERS ─────────────────────────────────────────────────────────
+  SkuRegistryEntry(
+    skuKey: 'lumber_nailer',
+    displayName: 'Pressure-Treated Lumber — Perimeter Nailer',
+    category: 'Wood Nailers',
+    variantAttributes: ['width', 'length'],
+  ),
+  SkuRegistryEntry(
+    skuKey: 'fastener_nailer',
+    displayName: 'Nailer Fasteners',
+    category: 'Wood Nailers',
+    variantAttributes: ['fastener', 'length'],
+  ),
 ];
 
 /// Lookup by skuKey. Returns null if not registered.
