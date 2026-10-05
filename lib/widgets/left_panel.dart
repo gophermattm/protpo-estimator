@@ -650,6 +650,18 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
         }
       },
     );
+    // Cover board attachment follows the membrane attachment (left or right
+    // panel dropdown) → refresh the local copy so pushCB() never writes back
+    // a stale value.
+    ref.listen<String?>(
+      estimatorProvider.select(
+          (s) => s.activeBuilding.insulationSystem.coverBoard?.attachmentMethod),
+      (prev, next) {
+        if (next != null && next != _cbAttachment) {
+          setState(() => _cbAttachment = next);
+        }
+      },
+    );
     // Detect project load (new building id even at same index) → resync
     ref.listen<String>(
       estimatorProvider.select((s) => s.activeBuilding.id),

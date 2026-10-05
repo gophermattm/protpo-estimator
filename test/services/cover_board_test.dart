@@ -68,4 +68,34 @@ void main() {
     );
     expect(v.issues.any((i) => i.message.contains('steel deck')), true);
   });
+
+  group('adhered cover board under MA/Rhinobond membrane warns', () {
+    const msg = 'Cover board adhered under mechanically attached membrane — adds insulation adhesive (OlyBond).';
+    ValidationResult validate(String membrane, String cbAttach, {bool hasCb = true}) {
+      final ins = InsulationSystem(hasCoverBoard: hasCb,
+          coverBoard: CoverBoard(attachmentMethod: cbAttach));
+      final m = MembraneSystem(fieldAttachment: membrane);
+      return ValidationEngine.validate(
+        projectInfo: ProjectInfo.initial(), geometry: geo100(),
+        systemSpecs: const SystemSpecs(deckType: 'Metal'), insulation: ins,
+        membrane: m, parapet: const ParapetWalls(),
+        penetrations: const Penetrations(), metalScope: const MetalScope(),
+        bom: calc(insulation: ins, membrane: m));
+    }
+    bool warned(ValidationResult v) => v.issues.any((i) =>
+        i.severity == IssueSeverity.warning && i.message == msg &&
+        i.fix == 'Set cover board attachment to Mechanically Attached unless adhered cover board is specified.');
+
+    test('MA membrane + adhered cover board', () {
+      expect(warned(validate('Mechanically Attached', 'Adhered')), isTrue);
+    });
+    test('Rhinobond membrane + adhered cover board', () {
+      expect(warned(validate('Rhinobond (Induction Welded)', 'Adhered')), isTrue);
+    });
+    test('no warning: FA membrane, MA cover board, or cover board off', () {
+      expect(warned(validate('Fully Adhered', 'Adhered')), isFalse);
+      expect(warned(validate('Mechanically Attached', 'Mechanically Attached')), isFalse);
+      expect(warned(validate('Mechanically Attached', 'Adhered', hasCb: false)), isFalse);
+    });
+  });
 }

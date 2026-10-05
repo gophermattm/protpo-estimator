@@ -1586,21 +1586,26 @@ class BomCalculator {
       }
     }
 
-    // ── Edge metal fasteners (eave / rake termination into deck) ─────────────
+    // ── Edge metal fasteners (eave / rake termination into deck or nailer) ───
     // Edge metal (gravel stop, drip edge, ES-1) is fastened to the deck nailer
     // or directly into the deck at the roof edge — no insulation in the flange.
-    // Spacing: 4" o.c. (roof-edge flanges are fastened 3–4" o.c.; 12" was
-    // far too sparse). Roof edges only — wall flashing/counterflashing is
-    // fastened into the wall, not the roof-edge nailer.
+    // With perimeter wood nailers the fastener goes into the nailer: Versico
+    // requires HPV/HPVX to secure drip edge / VersiTrim fascia to wood
+    // nailers, so the fastener is selected as for a wood deck (HPV).
+    // Spacing: [edgeMetalFastenerSpacingIn] o.c. (roof-edge flanges are
+    // fastened 3–4" o.c.; 12" was far too sparse). Roof edges only — wall
+    // flashing/counterflashing is fastened into the wall, not the roof edge.
     final edgeMetalLF = metalScope.dripEdgeLF + metalScope.otherEdgeMetalLF;
     if (edgeMetalLF > 0 && hasDeckType) {
-      const edgeSpacingIn = 4.0;
+      const edgeSpacingIn = edgeMetalFastenerSpacingIn;
+      final intoNailer    = metalScope.hasNailers;
+      final edgeDeck      = edgeMetalFastenerDeck(systemSpecs.deckType, intoNailer);
       // Edge metal fastener goes through metal flange only (~0" insulation at edge)
-      final edgeFastLen   = _selectFastenerLen(systemSpecs.deckType, 0);
-      final edgeFastName  = _fastenerName(systemSpecs.deckType);
+      final edgeFastLen   = _selectFastenerLen(edgeDeck, 0);
+      final edgeFastName  = _fastenerName(edgeDeck);
       final base          = edgeMetalLF * 12.0 / edgeSpacingIn;
       final withW         = base * (1 + wAcc);
-      final edgeBucketSize = _fastenerPack(systemSpecs.deckType, 0).toDouble();
+      final edgeBucketSize = _fastenerPack(edgeDeck, 0).toDouble();
       final orderQty      = (withW / edgeBucketSize).ceil().toDouble();
       items.add(BomLineItem(
         category: 'Parapet & Termination',
@@ -1609,11 +1614,13 @@ class BomCalculator {
         attributes: {
           'fastenerName': edgeFastName,
           'length':       edgeFastLen,
-          'deckType':     systemSpecs.deckType,
+          // Fastener variant key: the substrate the fastener goes into.
+          'deckType':     edgeDeck,
         },
         orderQty: orderQty,
         unit: 'cartons',
-        notes: '${edgeBucketSize.toInt()}/carton — ${edgeSpacingIn.toInt()}" o.c. eave/rake edge attachment',
+        notes: '${edgeBucketSize.toInt()}/carton — ${edgeSpacingIn.toInt()}" o.c. eave/rake edge attachment'
+            '${intoNailer ? ' into wood nailer' : ''}',
         trace: BomTrace(
           baseDescription: '${base.toStringAsFixed(0)} fasteners ÷ ${edgeBucketSize.toInt()}/carton',
           baseQty: base,
@@ -1622,7 +1629,9 @@ class BomCalculator {
           packageSize: edgeBucketSize,
           orderQty: orderQty,
           breakdown: [
-            'Deck type:  ${systemSpecs.deckType} → $edgeFastName $edgeFastLen',
+            intoNailer
+                ? 'Substrate:  into wood nailer (${systemSpecs.deckType} deck) → $edgeFastName $edgeFastLen'
+                : 'Deck type:  ${systemSpecs.deckType} → $edgeFastName $edgeFastLen',
             'Location:   eave/rake (no insulation in flange)',
             'Roof-edge LF: drip edge ${_lf(metalScope.dripEdgeLF)} + other ${_lf(metalScope.otherEdgeMetalLF)}',
             'Spacing:    ${edgeSpacingIn.toInt()}" o.c.',
@@ -2638,7 +2647,19 @@ class BomCalculator {
     }
   }
 
-    static String _fastenerName(String deckType) {
+  /// Edge metal fastener spacing (inches o.c.), shared with the installer text.
+  static const double edgeMetalFastenerSpacingIn = 4.0;
+
+  /// Substrate used to pick the edge metal fastener: a wood nailer when
+  /// nailers are in scope, otherwise the deck.
+  static String edgeMetalFastenerDeck(String deckType, bool hasNailers) =>
+      hasNailers ? 'Wood' : deckType;
+
+  /// Edge metal fastener name as ordered on the BOM.
+  static String edgeMetalFastenerNamePublic(String deckType, bool hasNailers) =>
+      _fastenerName(edgeMetalFastenerDeck(deckType, hasNailers));
+
+  static String _fastenerName(String deckType) {
     switch (deckType) {
       case 'Metal':       return 'Versico HPVX';
       case 'Concrete':    return 'Versico MP 14-10';

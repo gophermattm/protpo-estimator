@@ -180,6 +180,17 @@ class ValidationEngine {
           fix: 'Verify the adhesive and assembly are approved for steel deck (FM/Versico), or mechanically attach layer 1.'));
     }
 
+    // Adhered cover board under an MA/Rhinobond membrane — orders OlyBond
+    // the membrane system doesn't call for.
+    if ((membrane.fieldAttachment == 'Mechanically Attached' ||
+            membrane.fieldAttachment == 'Rhinobond (Induction Welded)') &&
+        insul.hasCoverBoard && insul.coverBoard?.attachmentMethod == 'Adhered') {
+      issues.add(const ValidationIssue(severity: IssueSeverity.warning,
+          category: 'Compatibility',
+          message: 'Cover board adhered under mechanically attached membrane — adds insulation adhesive (OlyBond).',
+          fix: 'Set cover board attachment to Mechanically Attached unless adhered cover board is specified.'));
+    }
+
     // Fully adhered requires bonding adhesive — check insulation surface compatibility
     if (membrane.fieldAttachment == 'Fully Adhered' && insul.layer1.attachmentMethod == 'Mechanically Attached'
         && !insul.hasCoverBoard) {

@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:protpo_app/models/insulation_system.dart';
 import 'package:protpo_app/models/section_models.dart';
+import 'package:protpo_app/services/bom_calculator.dart';
 import 'bom_test_helpers.dart';
 
 void main() {
@@ -29,5 +30,28 @@ void main() {
 
   test('off by default', () {
     expect(calc(metal: const MetalScope(eaveLF: 400)).items.any((i) => i.skuKey == 'lumber_nailer'), false);
+  });
+
+  group('edge metal fasteners', () {
+    BomLineItem edgeFast(MetalScope m) =>
+        calc(metal: m).items.singleWhere((i) => i.skuKey == 'fastener_edge_metal');
+
+    test('metal deck + nailers → HPV into the wood nailer', () {
+      final f = edgeFast(metal);
+      expect(f.name, contains('HPV'));
+      expect(f.name, isNot(contains('HPVX')));
+      expect(f.attributes!['fastenerName'], 'Versico HPV');
+      expect(f.notes, contains('into wood nailer'));
+      expect(f.trace.breakdown.any((b) => b.contains('into wood nailer')), isTrue);
+      // Quantity logic unchanged: 400 LF × 12 ÷ 4" o.c.
+      expect(f.trace.baseQty, closeTo(1200, 0.001));
+    });
+
+    test('metal deck without nailers stays HPVX', () {
+      final f = edgeFast(const MetalScope(eaveLF: 400));
+      expect(f.name, contains('HPVX'));
+      expect(f.notes, isNot(contains('into wood nailer')));
+      expect(f.trace.baseQty, closeTo(1200, 0.001));
+    });
   });
 }

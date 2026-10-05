@@ -303,9 +303,12 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
   }
 
   /// Switches the active building tab.
+  /// The newly active building's LF is re-derived from its drawn geometry.
   void setActiveBuilding(int index) {
     if (index >= 0 && index < state.buildings.length) {
-      state = state.copyWith(activeBuildingIndex: index);
+      final buildings = List<BuildingState>.from(state.buildings);
+      buildings[index] = _syncedFromGeometry(buildings[index]);
+      state = state.copyWith(buildings: buildings, activeBuildingIndex: index);
     }
   }
 
@@ -539,22 +542,31 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
   /// Outside corners are left alone when [t] has none.
   void applyEdgeTotals(EdgeTotals t, {bool force = false}) {
     if (!t.hasEdges && !force) return;
-    _updateActive((b) {
-      var parapet = b.parapetWalls.copyWith(
-          headwallLF: t.headwallLF, hasParapetWalls: t.parapetLF > 0);
-      if (parapet.parapetTotalLF != t.parapetLF) {
-        parapet = parapet.copyWith(parapetTotalLF: t.parapetLF).clearTerminationBarOverride();
-      }
-      return b.copyWith(
-        roofGeometry: t.corners > 0
-            ? b.roofGeometry.copyWith(outsideCorners: t.corners)
-            : b.roofGeometry,
-        parapetWalls: parapet,
-        metalScope: b.metalScope.copyWith(
-          eaveLF: t.eaveLF, rakeLF: t.rakeLF, flatDripLF: t.flatDripLF,
-          wallFlashingLF: t.wallFlashingLF),
-      );
-    });
+    _updateActive((b) => _withEdgeTotals(b, t));
+  }
+
+  /// [b] with LF re-derived from its own drawn geometry. Unchanged when no
+  /// edge length is drawn (manual-entry job).
+  static BuildingState _syncedFromGeometry(BuildingState b) {
+    final t = computeEdgeTotals(b.roofGeometry.shapes);
+    return t.hasEdges ? _withEdgeTotals(b, t) : b;
+  }
+
+  static BuildingState _withEdgeTotals(BuildingState b, EdgeTotals t) {
+    var parapet = b.parapetWalls.copyWith(
+        headwallLF: t.headwallLF, hasParapetWalls: t.parapetLF > 0);
+    if (parapet.parapetTotalLF != t.parapetLF) {
+      parapet = parapet.copyWith(parapetTotalLF: t.parapetLF).clearTerminationBarOverride();
+    }
+    return b.copyWith(
+      roofGeometry: t.corners > 0
+          ? b.roofGeometry.copyWith(outsideCorners: t.corners)
+          : b.roofGeometry,
+      parapetWalls: parapet,
+      metalScope: b.metalScope.copyWith(
+        eaveLF: t.eaveLF, rakeLF: t.rakeLF, flatDripLF: t.flatDripLF,
+        wallFlashingLF: t.wallFlashingLF),
+    );
   }
 
   void updateOutsideCorners(int count) => _updateActive(
@@ -659,11 +671,19 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
   void updateMembraneSystem(MembraneSystem membrane) =>
       _updateActive((b) => b.copyWith(membraneSystem: membrane));
 
-  void updateFieldAttachment(String method) => _updateActive(
-        (b) => b.copyWith(
-            membraneSystem:
-                b.membraneSystem.copyWith(fieldAttachment: method)),
-      );
+  /// The cover board attachment follows the membrane (adhered only under a
+  /// fully adhered membrane), so an MA job never orders cover board OlyBond.
+  void updateFieldAttachment(String method) => _updateActive((b) {
+        final ins = b.insulationSystem;
+        final cb = ins.coverBoard;
+        return b.copyWith(
+          membraneSystem: b.membraneSystem.copyWith(fieldAttachment: method),
+          insulationSystem: ins.hasCoverBoard && cb != null
+              ? ins.copyWith(coverBoard: cb.copyWith(
+                  attachmentMethod: coverBoardAttachmentFor(method, cb.type)))
+              : ins,
+        );
+      });
 
   void updateRollWidth(String width) => _updateActive(
         (b) => b.copyWith(
@@ -866,8 +886,12 @@ class EstimatorNotifier extends StateNotifier<EstimatorState> {
   // ── Firebase persistence ───────────────────────────────────────────────────
 
   /// Replaces the entire estimator state with [loaded].
-  /// Used after loading a project from Firestore.
-  void loadState(EstimatorState loaded) => state = loaded;
+  /// Used after loading a project from Firestore. Every building's LF is
+  /// re-derived from its drawn geometry, so a job saved with stale manual
+  /// LF (e.g. parapet) no longer orders that scope. Manual-entry buildings
+  /// (no drawn edge length) are kept as saved.
+  void loadState(EstimatorState loaded) => state = loaded.copyWith(
+      buildings: [for (final b in loaded.buildings) _syncedFromGeometry(b)]);
 }
 
 // ─── BOM PROVIDER ─────────────────────────────────────────────────────────────
