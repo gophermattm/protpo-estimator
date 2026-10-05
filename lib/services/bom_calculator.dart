@@ -1098,7 +1098,7 @@ class BomCalculator {
 
     // ── Membrane bonding adhesive (membrane-to-substrate only) ────────────────
     if (adheredMembraneArea > 0) {
-      final isSprayAdhesive = membrane.adhesiveType == 'CAV-GRIP 3V Spray';
+      final isSprayAdhesive = membrane.adhesiveType == kAdhesiveCavGrip;
 
       if (isSprayAdhesive) {
         // CAV-GRIP 3V spray: ~2,000 sf per #40 cylinder. [Unverified] Midpoint
@@ -1151,69 +1151,31 @@ class BomCalculator {
           ),
         ));
       } else {
-        // VersiWeld TPO Bonding Adhesive: ~60 sf per gallon — auto-select package by area
+        // VersiWeld bonding adhesive: 60 sf/gal, ordered in 5-gal pails.
         const coveragePerGal = 60.0;
+        const packageGal = 5.0;
         final base  = adheredMembraneArea / coveragePerGal;
         final withW = base * (1 + wAcc);
-
-        // Smart package sizing:
-        //   < 120 sf (< 2 gal)  → 1-gallon cans
-        //   120–600 sf (2-10 gal) → 5-gallon pails
-        //   600+ sf (10+ gal)   → 15-gallon cylinders (spray)
-        final String productName;
-        final String unit;
-        final String notes;
-        final double packageGal;
-        final forcePails = membrane.adhesiveType == kAdhesiveVersiWeldPails;
-        if (forcePails) {
-          // User chose 5-gal pails (brush/roller) instead of cylinders.
-          productName = 'VersiWeld TPO Bonding Adhesive$vocSuffix — 5 Gal Pail';
-          unit = 'pails';
-          notes = '5-gal pail, ~60 sf/gal — field membrane only';
-          packageGal = 5.0;
-        } else if (adheredMembraneArea < 120) {
-          productName = 'VersiWeld TPO Bonding Adhesive$vocSuffix — 1 Gal';
-          unit = 'cans';
-          notes = '1-gal, ~60 sf/gal — small area brush/roller application';
-          packageGal = 1.0;
-        } else if (adheredMembraneArea < 600) {
-          productName = 'VersiWeld TPO Bonding Adhesive$vocSuffix — 5 Gal Pail';
-          unit = 'pails';
-          notes = '5-gal pail, ~60 sf/gal — field membrane only';
-          packageGal = 5.0;
-        } else {
-          productName = 'VersiWeld TPO Bonding Adhesive$vocSuffix — 15 Gal';
-          unit = 'cylinders';
-          notes = '15-gal, ~60 sf/gal — large area application';
-          packageGal = 15.0;
-        }
         final orderQty = (withW / packageGal).ceil().toDouble();
-
         items.add(BomLineItem(
           category: 'Adhesives & Sealants',
-          name: productName,
+          name: 'VersiWeld TPO Bonding Adhesive$vocSuffix — 5 Gal Pail',
           skuKey: 'adhesive_versiweld_bonding',
-          attributes: {'voc': projectInfo.vocRegion, 'packageGal': packageGal.toInt(), 'application': 'field'},
+          attributes: {'voc': projectInfo.vocRegion, 'packageGal': 5, 'application': 'field'},
           orderQty: orderQty,
-          unit: unit,
-          notes: notes,
+          unit: 'pails',
+          notes: '5-gal pail, ~60 sf/gal — field membrane only',
           trace: BomTrace(
             baseDescription: '${_sf(adheredMembraneArea)} ÷ 60 sf/gal',
-            baseQty: base,
-            wastePercent: wAcc,
-            withWaste: withW,
-            packageSize: packageGal,
-            orderQty: orderQty,
+            baseQty: base, wastePercent: wAcc, withWaste: withW,
+            packageSize: packageGal, orderQty: orderQty,
             breakdown: [
               'FA membrane area: ${_sf(adheredMembraneArea)}',
               'Coverage rate: 60 sf/gal',
               'Base gallons:  ${base.toStringAsFixed(1)}',
               'Waste:         ${_pct(wAcc)}%',
               'With waste:    ${withW.toStringAsFixed(1)} gal',
-              forcePails
-                  ? 'Package: 5-gal pails (selected)'
-                  : 'Auto-selected: ${packageGal.toInt()}-gal $unit (${_sf(adheredMembraneArea)} adhered membrane)',
-              'ORDER QTY:     ${orderQty.toInt()} $unit',
+              'ORDER QTY:     ${orderQty.toInt()} pails (5-gal each)',
             ],
           ),
         ));
@@ -1269,7 +1231,7 @@ class BomCalculator {
 
       if (skipParapetAdhesive) {
         warnings.add('Parapet adhesive omitted — wall height ${parapetHeightIn.toInt()}" per Versico spec (no adhesive required for short walls with ${parapet.terminationType.toLowerCase()}).');
-      } else if (parapet.parapetAdhesiveType == 'CAV-GRIP 3V Spray') {
+      } else if (parapet.parapetAdhesiveType == kAdhesiveCavGrip) {
         // CAV-GRIP 3V Low-VOC: ~2,000 sf per #40 cylinder [Unverified] — same
         // coverage basis as the field spray line.
         const cavGripCoverage = 2000.0;

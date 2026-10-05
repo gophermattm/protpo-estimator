@@ -442,7 +442,7 @@ MembraneSystem _membraneSystemFromJson(Map j) => MembraneSystem(
   rollWidth:          _s(j['rollWidth'], "10'"),
   perimeterRollWidth: _s(j['perimeterRollWidth'], "6'"),
   seamType:           _s(j['seamType'], 'Hot Air Welded'),
-  adhesiveType:       _s(j['adhesiveType'], 'VersiWeld TPO Bonding Adhesive'),
+  adhesiveType:       normalizeAdhesiveType(j['adhesiveType']),
   primerType:         _s(j['primerType'], 'Low-VOC EPDM/TPO Primer (700 sf/gal)'),
 );
 
@@ -467,7 +467,7 @@ ParapetWalls _parapetWallsFromJson(Map j) => ParapetWalls(
   wallType:                 _s(j['wallType'], 'Concrete Block'),
   terminationBarLFOverride: (j['terminationBarLFOverride'] as num?)?.toDouble(),
   terminationType:          _s(j['terminationType'], 'Termination Bar'),
-  parapetAdhesiveType:      _s(j['parapetAdhesiveType'], 'VersiWeld TPO Bonding Adhesive'),
+  parapetAdhesiveType:      normalizeAdhesiveType(j['parapetAdhesiveType']),
   headwallHeight:           _d(j['headwallHeight'], 0.0),
   headwallLF:               _d(j['headwallLF'], 0.0),
 );

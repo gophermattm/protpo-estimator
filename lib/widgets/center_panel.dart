@@ -3379,7 +3379,7 @@ class _SubInstructionsTabState extends ConsumerState<_SubInstructionsTab> {
       final memLen = BomCalculator.selectFastenerLenPublic(specs.deckType, stackIn);
       memText += 'Membrane fastener: ${BomCalculator.fastenerNamePublic(specs.deckType)} $memLen (${stackIn.toStringAsFixed(1)}" stack to deck) with ${BomCalculator.fastenerNamePublic(specs.deckType).contains('HPVX') ? '2.38" HPVX fastening plate' : '2" seam fastening plate'}. ';
     } else if (isFA) {
-      memText = 'FULLY ADHERED: Apply ${membrane.adhesiveType == 'CAV-GRIP 3V Spray' ? 'CAV-GRIP 3V spray (~2,000 SF/cyl)' : 'VersiWeld bonding adhesive (~60 SF/gal)'} to substrate and membrane back. Roll into adhesive while tacky. ';
+      memText = 'FULLY ADHERED: Apply ${membrane.adhesiveType == kAdhesiveCavGrip ? 'CAV-GRIP 3V spray (~2,000 SF/cyl)' : 'VersiWeld bonding adhesive (~60 SF/gal)'} to substrate and membrane back. Roll into adhesive while tacky. ';
     } else if (isRB) {
       memText = 'RHINOBOND: Install induction weld plates at specified density. Lay membrane and weld with induction equipment. No through-membrane fasteners. ';
     }
@@ -3392,7 +3392,7 @@ class _SubInstructionsTabState extends ConsumerState<_SubInstructionsTab> {
       map['parapet'] = '${parapet.parapetTotalLF.toStringAsFixed(0)} LF parapet walls, '
           '${parapet.parapetHeight.toStringAsFixed(0)}" height, ${parapet.wallType} construction. '
           '${isMA ? "Install RUSS strip (6\" wide) at wall/deck transition, fasten 12\" O.C. " : ""}'
-          '${parapet.parapetAdhesiveType == 'CAV-GRIP 3V Spray' ? 'Adhere TPO flashing with CAV-Grip 3v spray (#40 cyl, ~2,000 SF/cyl). Pair with UN-TACK cleaner (1:1). ' : 'Adhere TPO flashing with VersiWeld bonding adhesive (5-gal pails, ~60 SF/gal, both surfaces). '}'
+          '${parapet.parapetAdhesiveType == kAdhesiveCavGrip ? 'Adhere TPO flashing with CAV-Grip 3v spray (#40 cyl, ~2,000 SF/cyl). Pair with UN-TACK cleaner (1:1). ' : 'Adhere TPO flashing with VersiWeld bonding adhesive (5-gal pails, ~60 SF/gal, both surfaces). '}'
           'Extend from field membrane (min 4\" lap, welded) up wall to termination. '
           'Apply TPO primer at all pressure-sensitive transitions. '
           'Terminate with ${parapet.terminationType.toLowerCase()} at ${parapet.parapetHeight.toStringAsFixed(0)}" height. '

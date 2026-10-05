@@ -27,15 +27,17 @@ const String kPerimeterRollWidth = "6'";
 
 const List<String> kSeamTypes = ['Hot Air Welded', 'Tape'];
 
-/// VersiWeld bonding adhesive ordered only in 5-gal pails (no 15-gal
-/// cylinders) — the pail alternative to CAV-GRIP spray.
+/// VersiWeld bonding adhesive, ordered in 5-gal pails (brush/roller).
 const String kAdhesiveVersiWeldPails = 'VersiWeld TPO Bonding Adhesive — 5 Gal Pails';
+const String kAdhesiveCavGrip = 'CAV-GRIP 3V Spray';
 
-const List<String> kAdhesiveTypes = [
-  'VersiWeld TPO Bonding Adhesive',
-  kAdhesiveVersiWeldPails,
-  'CAV-GRIP 3V Spray',
-];
+/// Adhesive choices wherever adhesive is called for (field FA, parapet, headwall).
+const List<String> kAdhesiveTypes = [kAdhesiveVersiWeldPails, kAdhesiveCavGrip];
+
+/// Maps stored values (including the retired auto-package VersiWeld option)
+/// onto [kAdhesiveTypes].
+String normalizeAdhesiveType(Object? v) =>
+    v == kAdhesiveCavGrip ? kAdhesiveCavGrip : kAdhesiveVersiWeldPails;
 const List<String> kPrimerTypes = [
   'Low-VOC EPDM/TPO Primer (700 sf/gal)',
   'TPO Primer (225 sf/gal)',
@@ -71,7 +73,7 @@ class MembraneSystem {
     this.rollWidth = "10'",
     this.perimeterRollWidth = "6'",
     this.seamType = 'Hot Air Welded',
-    this.adhesiveType = 'VersiWeld TPO Bonding Adhesive',
+    this.adhesiveType = kAdhesiveVersiWeldPails,
     this.primerType = 'Low-VOC EPDM/TPO Primer (700 sf/gal)',
   });
 
@@ -179,7 +181,7 @@ class ParapetWalls {
     this.wallType = 'Concrete Block',
     this.terminationBarLFOverride,
     this.terminationType = 'Termination Bar',
-    this.parapetAdhesiveType = 'VersiWeld TPO Bonding Adhesive',
+    this.parapetAdhesiveType = kAdhesiveVersiWeldPails,
     this.headwallHeight = 0.0,
     this.headwallLF = 0.0,
   });

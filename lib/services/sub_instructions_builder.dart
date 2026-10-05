@@ -171,7 +171,7 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
     ));
   } else if (isFA) {
     widgets.add(_body(
-      'FULLY ADHERED: Apply bonding adhesive (${membrane.adhesiveType == 'CAV-GRIP 3V Spray' ? 'CAV-GRIP 3V spray, ~2,000 SF/cylinder' : 'VersiWeld, ~60 SF/gallon'}) to both deck/insulation surface '
+      'FULLY ADHERED: Apply bonding adhesive (${membrane.adhesiveType == kAdhesiveCavGrip ? 'CAV-GRIP 3V spray, ~2,000 SF/cylinder' : 'VersiWeld, ~60 SF/gallon'}) to both deck/insulation surface '
       'and membrane back. Roll membrane into adhesive '
       'while tacky. All field seams hot-air welded minimum 1.5" width.'
     ));
@@ -194,7 +194,7 @@ List<pw.Widget> buildSubInstructions(EstimatorState state, BomResult bom, {RValu
     if (isMA) {
       widgets.add(_bullet('Install RUSS strip (6" wide) at wall/deck transition, fasten at 12" O.C.'));
     }
-    if (parapet.parapetAdhesiveType == 'CAV-GRIP 3V Spray') {
+    if (parapet.parapetAdhesiveType == kAdhesiveCavGrip) {
       widgets.add(_bullet('Adhere TPO flashing to wall face using CAV-Grip 3v spray adhesive (#40 cylinder, ~2,000 SF/cyl)'));
       widgets.add(_bullet('Pair with UN-TACK cleaner/remover (1:1 with CAV-Grip)'));
     } else {

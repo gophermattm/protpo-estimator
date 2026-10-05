@@ -197,7 +197,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   String _fieldAttach   = 'Mechanically Attached';
   String _rollWidth     = "10'";
   String _seamType      = 'Hot Air Welded';
-  String _adhesiveType  = 'VersiWeld TPO Bonding Adhesive';
+  String _adhesiveType  = kAdhesiveVersiWeldPails;
   String _primerType    = 'Low-VOC EPDM/TPO Primer (700 sf/gal)';
   String _perimRollWidth = "6'";
 
@@ -221,7 +221,7 @@ class _LeftPanelState extends ConsumerState<LeftPanel> {
   final _cTermBarLF      = TextEditingController();
   String _parapetWallType = 'Concrete Block';
   String _terminationType = 'Termination Bar';
-  String _parapetAdhesiveType = 'VersiWeld TPO Bonding Adhesive';
+  String _parapetAdhesiveType = kAdhesiveVersiWeldPails;
   bool   _termBarOverride = false;
 
   // ── Metal Scope ──────────────────────────────────────────────────────────────
